@@ -45,9 +45,22 @@ impl FeedWindow {
     /// even when the matcher kept none of the page. An empty page still
     /// moves the scan bounds: an empty answer is a real answer.
     pub fn land(&mut self, req: &PageReq, rows: Vec<FeedItem>, scan_floor: Option<String>) -> Land {
+        let raw_len = rows.len();
+        self.land_scanned(req, rows, scan_floor, raw_len)
+    }
+
+    /// [`Self::land`] for a client-matched page: `raw_len` is the page's
+    /// length BEFORE the matcher kept `rows`. History ends only when the RAW
+    /// page was short; a page of three matches out of 200 rows is not the end.
+    pub fn land_scanned(
+        &mut self,
+        req: &PageReq,
+        rows: Vec<FeedItem>,
+        scan_floor: Option<String>,
+        raw_len: usize,
+    ) -> Land {
         let raw_newest = rows.last().map(|r| r.cursor.clone());
         let floor = scan_floor.or_else(|| rows.first().map(|r| r.cursor.clone()));
-        let raw_len = rows.len();
         let mut land = Land::default();
         match req {
             PageReq::Head => {
@@ -157,6 +170,10 @@ pub(crate) mod tests {
         let mut w3 = FeedWindow::default();
         w3.land(&PageReq::Head, page(400, 10), None);
         assert!(w3.at_oldest, "a short head page is history's end");
+        // AC3: three matches kept from a full raw page are not the end.
+        let mut w4 = FeedWindow::default();
+        w4.land_scanned(&PageReq::Head, page(400, 3), None, FEED_PAGE);
+        assert!(!w4.at_oldest, "a full raw page has history below it");
         _older_case();
         _newer_case();
         _live_case();

@@ -807,10 +807,9 @@ pub(crate) struct View {
     /// Pending escape bytes in answer-overlay mode (same split-arrow safety as
     /// [`View::sel_esc`]).
     ans_esc: Vec<u8>,
-    /// The activity feed panel on the right edge, `e`
-    /// toggle; the fold's rows newest first. `None` closed. The panel's
-    /// width/drag/hover state and behavior live in `feed_view`.
+    /// The activity feed panel (`feed_view`), `None` closed; a close parks it.
     feed: Option<feed_view::FeedOverlay>,
+    feed_parked: Option<feed_view::FeedOverlay>,
     /// The client-local input owner among the visible regions. Written by
     /// explicit clicks and focus gestures (region_focus), read normalized
     /// through `input_owner`.
@@ -1569,6 +1568,7 @@ impl View {
             answers: None,
             ans_esc: Vec::new(),
             feed: None,
+            feed_parked: None,
             region_owner: region_focus::RegionOwner::Pane,
             feed_detail: None,
             viewer: Default::default(),

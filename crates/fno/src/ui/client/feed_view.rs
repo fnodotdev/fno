@@ -1,7 +1,7 @@
 //! The activity feed panel : questions, decisions and node
 //! lifecycle, newest first, one deep link per row. The render moved-module
 //! idiom matches `needs_view.rs`; the data comes from
-//! [`crate::feed_overlay::feed_now`], which shells the `fno-agent feed`
+//! [`crate::feed_overlay::fetch_page`], which shells the `fno agent fleet feed`
 //! projection off the UI loop and renders a typed reason when it fails
 //!, never one generic sentence for five causes.
 //!
@@ -195,7 +195,7 @@ fn display_slots_grouped(items: &[FeedItem]) -> Vec<Slot> {
     let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
     let mut other: Vec<usize> = Vec::new();
     for (i, item) in items.iter().enumerate() {
-        if in_teams_band(&item.kind, &item.role) {
+        if in_teams_band(&item.kind, &item.team) {
             teams.push(i);
             continue;
         }
@@ -266,7 +266,7 @@ pub(crate) fn display_kind(kind: &str) -> &str {
 fn bold_kind(item: &FeedItem) -> bool {
     item.kind == "question_asked"
         || item.kind == "team_vacated"
-        || (item.kind == "session_reaped" && item.role.is_some())
+        || (item.kind == "session_reaped" && item.team.is_some())
 }
 
 /// The panel body: one header line, up to `visible_rows - 2` item rows, then
@@ -332,11 +332,7 @@ pub(crate) fn feed_panel_rows(
         o.win
             .items
             .iter()
-            .filter_map(|i| {
-                i.session_id
-                    .as_deref()
-                    .map(|s| s.chars().rev().take(8).collect::<String>())
-            })
+            .filter_map(|i| i.session_id.as_deref().map(session_tail))
             .map(|s| dw(&s))
             .collect(),
     );
@@ -417,7 +413,7 @@ pub(crate) fn feed_panel_rows(
         push_col(&mut header, "lead", lead_w, true, false);
     }
     rows.push(header);
-    let visible = visible_rows.saturating_sub(3); // header, column header, footer
+    let visible = feed_body_rows(visible_rows);
     let slots = display_slots(&o.win.items, o.order);
     for d in offset..offset + visible {
         match slots.get(d) {
@@ -469,7 +465,7 @@ pub(crate) fn feed_panel_rows(
                     let sid = item
                         .session_id
                         .as_deref()
-                        .map(|s| fit_cell(&s.chars().rev().take(8).collect::<String>(), session_w))
+                        .map(|s| fit_cell(&session_tail(s), session_w))
                         .unwrap_or_else(|| "-".to_string());
                     push_col(&mut row, &sid, session_w, false, false);
                 }
@@ -484,8 +480,9 @@ pub(crate) fn feed_panel_rows(
                 pad_to_spans(&mut row, w);
                 rows.push(row);
             }
-            // Short list: the rows below the last item render blank.
-            None => rows.push(vec![Span::plain("")]),
+            // Short list: the rows below the last item paint the panel's
+            // ground across the full width, so no pane cell shows through.
+            None => rows.push(vec![Span::plain(pad_to("", w))]),
         }
     }
     // The empty notice only when the fold has SETTLED empty: "no activity"
@@ -699,9 +696,24 @@ fn short_ts(ts: &str, with_date: bool) -> String {
     short_ts_in(ts, &chrono::Local, with_date)
 }
 
+/// The session id's last eight characters, in order. Measured unique across
+/// every session the feed names (6,553 ids, 6,553 tails).
+pub(crate) fn session_tail(s: &str) -> String {
+    let n = s.chars().count();
+    s.chars().skip(n.saturating_sub(8)).collect()
+}
+
 /// The feed panel's width until the operator drags its border once; persisted
 /// thereafter, like the sideline's.
 pub(crate) const FEED_DEFAULT_W: u16 = 40;
+
+/// The slot rows a panel of `rows` terminal rows paints: the title, the
+/// column header and the footer take three. Paint, hit test, wheel, follow,
+/// page keys and the land clamp all read this one value, so the last slot
+/// always lands above the footer.
+pub(crate) fn feed_body_rows(rows: usize) -> usize {
+    rows.saturating_sub(3)
+}
 
 /// How long a settled fold stays fresh before the next run-loop tick refolds
 /// the panel on its own.
@@ -810,7 +822,7 @@ impl View {
         let Some(f) = self.feed.as_mut() else {
             return;
         };
-        let visible = (self.term.0 as usize).saturating_sub(2); // header + footer
+        let visible = feed_body_rows(self.term.0 as usize);
         let slot_len = display_slots(&f.win.items, f.order).len();
         let max_off = slot_len.saturating_sub(visible);
         let next = if max_off == 0 {
@@ -821,25 +833,25 @@ impl View {
             self.feed_offset.saturating_sub(1)
         };
         self.feed_offset = next;
-        if next > 0 {
-            f.scan_pages = 0;
-        }
-        Self::arm_feed_page(f, down, next == 0, max_off, 5);
+        Self::arm_feed_page(f, down, next == 0, next == max_off, 5);
     }
 
-    /// The page-arm policy, shared by the wheel and the arrow keys: a
-    /// gesture reaching the top edge reads history, one reaching the bottom
-    /// of a detached head reads forward, and a client-matched scan may spend
-    /// at most `scan_cap` pages per gesture before the footer names how far
-    /// back it reached.
+    /// The page-arm policy, shared by the wheel and the arrow keys. Rows
+    /// paint newest first, so a gesture DOWN at the bottom edge reads older
+    /// history, and one UP at the top edge of a detached head reads forward.
+    /// A client-matched scan may spend at most `scan_cap` pages per gesture;
+    /// leaving the bottom edge gives the next gesture a fresh budget.
     pub(super) fn arm_feed_page(
         f: &mut FeedOverlay,
         down: bool,
         at_top: bool,
-        max_off: usize,
+        at_bottom: bool,
         scan_cap: u32,
     ) {
-        if !down && at_top && !f.win.at_oldest && !f.win.scan_cursor.is_empty() {
+        if !at_bottom {
+            f.scan_pages = 0;
+        }
+        if down && at_bottom && !f.win.at_oldest && !f.win.scan_cursor.is_empty() {
             if f.scan_pages >= scan_cap {
                 return;
             }
@@ -848,7 +860,7 @@ impl View {
                 f.win.scan_cursor.clone(),
             ));
             f.want = true;
-        } else if down && max_off > 0 && !f.win.head_attached {
+        } else if !down && at_top && !f.win.head_attached {
             if let Some(c) = f.win.items.last().map(|i| i.cursor.clone()) {
                 f.want_page = Some(crate::feed_overlay::PageReq::Newer(c));
                 f.want = true;
@@ -904,7 +916,7 @@ impl View {
         let Some(f) = &self.feed else {
             return 0;
         };
-        let visible = (self.term.0 as usize).saturating_sub(2); // header + footer
+        let visible = feed_body_rows(self.term.0 as usize);
         let slot_len = display_slots(&f.win.items, f.order).len();
         if slot_len <= visible {
             return 0;
@@ -1102,32 +1114,28 @@ impl View {
     /// Keep the selected row inside the window after a keyboard move. The
     /// offset is re-clamped against the CURRENT viewport first, exactly as
     /// [`Self::scroll_feed`] does, so a shrunken terminal cannot leave the
-    /// window parked past the last row.
-    pub(super) fn follow_feed_selection(&mut self) {
-        let visible = (self.term.0 as usize).saturating_sub(2);
+    /// window parked past the last row. `down` is the key's own direction:
+    /// read after the clamp, the selection always sits inside the window.
+    pub(super) fn follow_feed_selection(&mut self, down: bool) {
+        let visible = feed_body_rows(self.term.0 as usize);
         let Some(f) = self.feed.as_mut() else {
             return;
         };
         if visible == 0 {
             return;
         }
-        let max_off = display_slots(&f.win.items, f.order)
-            .len()
-            .saturating_sub(visible);
+        let slot_len = display_slots(&f.win.items, f.order).len();
+        let max_off = slot_len.saturating_sub(visible);
         let sel = f.sel;
         let mut off = self.feed_offset.min(max_off);
-        let was_top = off == 0;
         if sel < off {
             off = sel;
         } else if sel >= off + visible {
             off = sel + 1 - visible;
         }
         self.feed_offset = off.min(max_off);
-        if off > 0 {
-            f.scan_pages = 0;
-        }
-        let down = sel >= off + visible;
-        Self::arm_feed_page(f, down, off == 0 && was_top, max_off, 5);
+        let at_top = sel <= first_item_slot(&f.win.items, f.order);
+        Self::arm_feed_page(f, down, at_top, sel + 1 >= slot_len, 5);
     }
 
     /// Open the provenance view for the selected row, copying the item OUT of
@@ -1163,30 +1171,31 @@ impl View {
         self.feed_detail = Some(feed_detail::modal(self, item));
     }
 
-    /// The hover marker follows the pointer inside the panel; anything else
-    /// parks it on the newest row. Marker only - a hover never deep-links.
+    /// The hover marker follows the pointer onto a row while the panel is
+    /// unfocused. Off the rows it stays where it was, and a focused panel's
+    /// cursor belongs to the keys alone. Marker only - a hover never
+    /// deep-links.
     pub(super) fn hover_feed_marker(&mut self, row: u16, col: u16) {
-        if self.feed.is_none() {
+        let Some(f) = &self.feed else {
+            return;
+        };
+        if self.input_owner() == super::region_focus::RegionOwner::Feed {
             return;
         }
         let feed_w = self.feed_panel_w();
-        let d = if feed_w > 0 && col > self.term.1 - feed_w {
-            let items = &self.feed.as_ref().unwrap().win.items;
-            // The resolver answers in STORAGE indexes; `sel` is a SLOT index.
-            let order = self.feed.as_ref().map(|f| f.order).unwrap_or_default();
-            feed_row_item(
-                items,
-                row as usize,
-                self.term.0 as usize,
-                self.feed_offset_clamped(),
-                order,
-            )
-            .map(|storage| slot_of(items, storage, order))
-            .unwrap_or(0)
-        } else {
-            0
-        };
-        if let Some(f) = self.feed.as_mut() {
+        if feed_w == 0 || col <= self.term.1 - feed_w {
+            return;
+        }
+        // The resolver answers in STORAGE indexes; `sel` is a SLOT index.
+        let hit = feed_row_item(
+            &f.win.items,
+            row as usize,
+            self.term.0 as usize,
+            self.feed_offset_clamped(),
+            f.order,
+        )
+        .map(|storage| slot_of(&f.win.items, storage, f.order));
+        if let (Some(d), Some(f)) = (hit, self.feed.as_mut()) {
             f.sel = d;
         }
     }
@@ -1241,7 +1250,7 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &FoldTx) {
 /// leave the window parked past the last item (a blank panel).
 pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay::FoldResult) {
     let top_slot = view.feed_offset_clamped();
-    let visible = (view.term.0 as usize).saturating_sub(2);
+    let visible = feed_body_rows(view.term.0 as usize);
     let Some(f) = view.feed.as_mut() else {
         return;
     };
@@ -1277,6 +1286,7 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
             });
             let (req, raw) = (page.req, page.items);
             let scan_floor = raw.first().map(|i| i.cursor.clone());
+            let raw_len = raw.len();
             // Under a query the projection flags cannot express, the client
             // matcher filters each landed page before it enters the window.
             let rows = match (&f.parsed, f.pushed) {
@@ -1291,8 +1301,7 @@ pub(crate) fn apply_fold(view: &mut View, gen: u64, outcome: crate::feed_overlay
                 }
                 _ => raw,
             };
-            let land = f.win.land(&req, rows, scan_floor);
-            let _ = land;
+            f.win.land_scanned(&req, rows, scan_floor, raw_len);
             // Re-anchor. The top anchor wins for the offset, the selection
             // anchor for the marker; a row the land dropped reads its slot
             // as absent and the clamp below keeps both in range.
@@ -1357,19 +1366,18 @@ pub(crate) async fn toggle(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
-    let gen = view
-        .feed
-        .as_ref()
-        .map(|f| f.gen.wrapping_add(1))
-        .unwrap_or(0);
     if view.feed.is_none() {
-        view.feed = Some(open_overlay(view.feed.take(), gen));
+        // The parked rows and query paint at once while the refold runs. A
+        // new generation drops any fold that was in flight at the close.
+        let prior = view.feed_parked.take();
+        let gen = prior.as_ref().map_or(0, |f| f.gen.wrapping_add(1));
+        view.feed = Some(open_overlay(prior, gen));
     } else {
         // Closing releases the keyboard with the panel, so a later reopen
         // never starts already holding it. The owner field is reset too:
         // `input_owner` normalizes a closed panel to Pane, but the stored
         // choice would silently RE-focus a reopened panel.
-        view.feed = None;
+        view.feed_parked = view.feed.take();
         view.feed_detail = None;
         view.region_owner = super::region_focus::RegionOwner::Pane;
         // A half-read escape sequence must not survive the close: carried
@@ -1600,14 +1608,14 @@ pub(crate) async fn feed_keys(
                     .rev()
                     .find(|s| matches!(slots.get(*s), Some(Slot::Item(_))))
                     .unwrap_or(f.sel);
-                view.follow_feed_selection();
+                view.follow_feed_selection(false);
             }
             ModalKey::Down => {
                 let slots = display_slots(&f.win.items, f.order);
                 f.sel = (f.sel + 1..slots.len())
                     .find(|s| matches!(slots.get(*s), Some(Slot::Item(_))))
                     .unwrap_or(f.sel);
-                view.follow_feed_selection();
+                view.follow_feed_selection(true);
             }
             // Panning moves the TITLE only; the stamp, kind and node stay
             // anchored, so a panned row is still the row you selected.
@@ -1623,14 +1631,14 @@ pub(crate) async fn feed_keys(
             // same swallow the raw sequence got before it was folded.
             ModalKey::ShiftArrow(_) => {}
             ModalKey::PageUp => {
-                let page = (view.term.0 as usize).saturating_sub(2).max(1);
+                let page = feed_body_rows(view.term.0 as usize).max(1);
                 f.sel = f.sel.saturating_sub(page);
-                view.follow_feed_selection();
+                view.follow_feed_selection(false);
             }
             ModalKey::PageDown => {
-                let page = (view.term.0 as usize).saturating_sub(2).max(1);
+                let page = feed_body_rows(view.term.0 as usize).max(1);
                 f.sel = (f.sel + page).min(len.saturating_sub(1));
-                view.follow_feed_selection();
+                view.follow_feed_selection(true);
             }
             ModalKey::Enter => view.open_feed_detail(),
             // Jump to the top (or arm a Head when the head is detached),
@@ -1646,13 +1654,13 @@ pub(crate) async fn feed_keys(
                 }
             }
             ModalKey::Byte(b'G') => {
-                let visible = (view.term.0 as usize).saturating_sub(2).max(1);
+                let visible = feed_body_rows(view.term.0 as usize).max(1);
                 let slot_len = display_slots(&f.win.items, f.order).len();
                 let max_off = slot_len.saturating_sub(visible);
                 view.feed_offset = max_off;
                 let sel = display_slots(&f.win.items, f.order).len().saturating_sub(1);
                 f.sel = sel;
-                View::arm_feed_page(f, true, false, max_off, 5);
+                View::arm_feed_page(f, true, false, true, 5);
             }
             ModalKey::Byte(b'?') => {
                 f.keys_open = !f.keys_open;

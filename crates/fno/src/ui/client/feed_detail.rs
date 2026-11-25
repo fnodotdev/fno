@@ -388,7 +388,7 @@ pub(crate) fn build(
         ),
         None => a.role_title.clone(),
     });
-    match (lead.or_else(|| item.role.clone()), exact_row(&dest)) {
+    match (lead.or_else(|| item.team.clone()), exact_row(&dest)) {
         (Some(text), Some(a)) => {
             p.entry(
                 "lead",
@@ -401,7 +401,7 @@ pub(crate) fn build(
         (None, _) => {}
     }
     p.field("reason", item.reason.clone());
-    p.field("role", item.role.clone());
+    p.field("team", item.team.clone());
     // owner: the lead AT EVENT TIME, focusable to its holder when the roster
     // still holds that person and the name answers for exactly one live row
     // (the fleet's fail-closed name rule: an ambiguous name is no target).

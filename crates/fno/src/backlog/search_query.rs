@@ -122,13 +122,13 @@ pub static SORT_KEYS: &[(&str, &str)] = &[
     ("lead", "lead"),
 ];
 
-/// One derived area: the `ar:` value, answered on both surfaces from this
-/// one table. A row matching no rule carries none, and `ar:` never keeps it.
+/// One derived node area: the `ar:` value on the node surface. A node
+/// matching no rule carries none, and `ar:` never keeps it. An event row's
+/// area is the feed projection's own stamp (`area_of` in fno-agent), so the
+/// two surfaces share these names and never a second kind table.
 #[derive(Debug)]
 pub struct Area {
     pub name: &'static str,
-    /// Event kinds that carry the area.
-    pub kinds: &'static [&'static str],
     /// Node title whole-word hits.
     pub title_terms: &'static [&'static str],
     /// A substring of a `/`-holding whitespace token in the title or details.
@@ -137,12 +137,10 @@ pub struct Area {
     pub projects: &'static [&'static str],
 }
 
-/// The spec's Areas table. Event kinds the feed does not emit yet name their
-/// area now, so adding the kind adds its area.
+/// The spec's Areas table.
 pub static AREAS: &[Area] = &[
     Area {
         name: "mux",
-        kinds: &[],
         title_terms: &["mux", "sideline", "pane", "portal", "tui"],
         path_terms: &[
             "crates/fno/src/ui/client",
@@ -153,42 +151,24 @@ pub static AREAS: &[Area] = &[
     },
     Area {
         name: "backlog",
-        kinds: &[
-            "node_created",
-            "node_started",
-            "node_ended",
-            "decision_recorded",
-        ],
         title_terms: &["backlog", "board", "kanban", "triage", "groom", "epic"],
         path_terms: &["backlog", "crates/fno-agent/src/backlog"],
         projects: &[],
     },
     Area {
         name: "ship",
-        kinds: &["node_shipped", "pr_merged"],
         title_terms: &["ship", "pr", "merge", "review"],
         path_terms: &["skills/ship", "skills/review"],
         projects: &[],
     },
     Area {
         name: "ci",
-        kinds: &["ci_red", "ci_green"],
         title_terms: &["ci", "workflow", "flaky"],
         path_terms: &[".github/workflows", "scripts/ci"],
         projects: &[],
     },
     Area {
         name: "agents",
-        kinds: &[
-            "session_spawned",
-            "session_reaped",
-            "role_granted",
-            "role_vacated",
-            "worker_died",
-            "worker_stalled",
-            "help_emitted",
-            "spawn_refused",
-        ],
         title_terms: &[
             "agent", "agents", "spawn", "worker", "session", "reap", "role", "lead", "lead",
             "harness",
@@ -198,28 +178,17 @@ pub static AREAS: &[Area] = &[
     },
     Area {
         name: "fleet",
-        kinds: &["update_started", "update_finished", "daemon_restarted"],
         title_terms: &["fleet", "daemon", "update", "watchdog", "footprint"],
         path_terms: &["daemon", "fleet"],
         projects: &[],
     },
     Area {
         name: "mail",
-        kinds: &["question_asked", "question_closed", "mail_to_user"],
         title_terms: &["mail", "inbox", "question", "notify"],
         path_terms: &["mail", "inbox"],
         projects: &[],
     },
 ];
-
-/// The areas one event kind maps to.
-pub fn areas_for_kind(kind: &str) -> Vec<&'static str> {
-    AREAS
-        .iter()
-        .filter(|a| a.kinds.contains(&kind))
-        .map(|a| a.name)
-        .collect()
-}
 
 /// The areas one node maps to: a title term hits on a whole lowercase word
 /// of the title, a path term hits when it is a substring of a whitespace
@@ -904,11 +873,13 @@ pub(crate) fn stamp_epoch(s: &str) -> Option<i64> {
     None
 }
 
-/// The keys a feed query can push into the projection's flat flags; every
-/// other key is matched client-side only.
-pub const PUSHABLE_KEYS: &[&str] = &[
-    "id", "session", "kind", "area", "harness", "agent", "lead", "ts",
-];
+/// The keys a feed query can push into the projection's flat flags, each
+/// where the flag matches exactly as [`Pred::holds`] does: `kind`, `area`
+/// and `harness` as a case-blind prefix, `id` as an exact id only. Every
+/// other key or shape is matched client-side. `session`, `agent` and `lead`
+/// stay client-side: the grammar reads their values from fields the
+/// projection's flags never see.
+pub const PUSHABLE_KEYS: &[&str] = &["kind", "area", "harness", "ts"];
 
 /// What one pushable query hands the feed projection: one (key, OR-values)
 /// pair per term, plus the ts bounds when a term gave them. A query this
@@ -938,14 +909,21 @@ impl Parsed {
             let mut term_ts: Option<(Option<i64>, Option<i64>)> = None;
             for p in &t.alts {
                 match p {
-                    Pred::Val { key, val, .. } if PUSHABLE_KEYS.contains(key) => {
-                        match &mut term_vals {
-                            Some((k, v)) if k == key => v.push(val.clone()),
-                            Some(_) => return None,
-                            None => term_vals = Some((key, vec![val.clone()])),
-                        }
-                    }
-                    Pred::IdExact { val } => match &mut term_vals {
+                    Pred::Val {
+                        key,
+                        val,
+                        exact: false,
+                    } if PUSHABLE_KEYS.contains(key) => match &mut term_vals {
+                        Some((k, v)) if k == key => v.push(val.clone()),
+                        Some(_) => return None,
+                        None => term_vals = Some((key, vec![val.clone()])),
+                    },
+                    Pred::IdExact { val }
+                    | Pred::Val {
+                        key: "id",
+                        val,
+                        exact: true,
+                    } => match &mut term_vals {
                         Some((k, v)) if *k == "id" => v.push(val.clone()),
                         Some(_) => return None,
                         None => term_vals = Some(("id", vec![val.clone()])),

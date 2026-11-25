@@ -1089,14 +1089,6 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
         crate::search_query::areas_for_node("flake hunt", "the .github/workflows matrix", None),
         ["ci"]
     );
-    assert_eq!(
-        crate::search_query::areas_for_kind("session_reaped"),
-        ["agents"]
-    );
-    assert_eq!(
-        crate::search_query::areas_for_kind("day_boundary"),
-        Vec::<&str>::new()
-    );
     // Spec rule 10: the module renders its own help; each surface's keys
     // answer, the other surface's do not.
     let node_help = crate::search_query::help_text(crate::search_query::Surface::Node);

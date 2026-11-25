@@ -1,5 +1,5 @@
 //! The activity-feed shell-out leg : a bounded, fail-open shell-out to
-//! `fno agent feed --json`, in the same shape as [`crate::org_overlay`]'s
+//! `fno agent fleet feed --json`, in the same shape as [`crate::org_overlay`]'s
 //! fold (: the 800ms cap it first copied was half the projection's
 //! measured runtime, so the feed could never render).
 //!
@@ -21,7 +21,7 @@ use std::time::Duration;
 /// `kill_on_drop` reaps the child on the timeout.
 const SHELLOUT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One feed row, as emitted by `fno agent feed --json`. `session_id` is what
+/// One feed row, as emitted by `fno agent fleet feed --json`. `session_id` is what
 /// the deep link resolves through the sideline's own attach path.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct FeedItem {
@@ -67,7 +67,7 @@ pub struct FeedItem {
     pub reason: Option<String>,
     /// `L{level} {scope}` for the team kinds and a teamed removal.
     #[serde(default)]
-    pub role: Option<String>,
+    pub team: Option<String>,
     /// The promoted worker's name on the role kinds; the feed search
     /// answers `l:` through it.
     #[serde(default)]
@@ -162,35 +162,20 @@ pub type FoldResult = Result<FeedPage, FeedError>;
 pub const FEED_PAGE: usize = 200;
 
 /// The flat prefilter flags a one-group positive query pushes: every field
-/// ANDs, and the values inside one field are comma-OR. The projection owns
-/// the match semantics; this only spells the argv.
+/// ANDs, and the values inside one field are comma-OR. Only keys the
+/// projection matches exactly as the grammar does push
+/// (`search_query::PUSHABLE_KEYS`); this only spells the argv.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct FeedFilter {
     pub node: Option<String>,
     pub kind: Option<String>,
     pub area: Option<String>,
-    pub session: Option<String>,
-    pub agent: Option<String>,
     pub harness: Option<String>,
-    pub lead: Option<String>,
     pub since: Option<u64>,
     pub until: Option<u64>,
 }
 
 impl FeedFilter {
-    /// True when nothing is set, so the argv carries no filter at all.
-    pub fn is_empty(&self) -> bool {
-        self.node.is_none()
-            && self.kind.is_none()
-            && self.area.is_none()
-            && self.session.is_none()
-            && self.agent.is_none()
-            && self.harness.is_none()
-            && self.lead.is_none()
-            && self.since.is_none()
-            && self.until.is_none()
-    }
-
     /// The argv spelling: flag then value, in a stable order the tests pin.
     pub fn to_args(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -203,10 +188,7 @@ impl FeedFilter {
         pair(&mut out, "--node", &self.node);
         pair(&mut out, "--kind", &self.kind);
         pair(&mut out, "--area", &self.area);
-        pair(&mut out, "--session", &self.session);
-        pair(&mut out, "--agent", &self.agent);
         pair(&mut out, "--harness", &self.harness);
-        pair(&mut out, "--lead", &self.lead);
         if let Some(s) = self.since {
             out.push("--since-epoch".into());
             out.push(s.to_string());
@@ -248,11 +230,13 @@ pub struct FeedPage {
     pub items: Vec<FeedItem>,
 }
 
-/// The argv one page request spells, `Err` carrying the bad cursor's own
-/// line when the request carries one the projection would refuse.
+/// The argv one page request spells. An empty cursor (a refresh before any
+/// row landed, or a query that matched nothing) reads the head page: the
+/// projection refuses `--after ''` with exit 2.
 pub fn page_argv(req: &PageReq, filter: Option<&FeedFilter>) -> Vec<String> {
     let mut argv = vec![
-        "agents".to_string(),
+        "agent".to_string(),
+        "fleet".to_string(),
         "feed".to_string(),
         "--json".to_string(),
         "--limit".to_string(),
@@ -260,6 +244,7 @@ pub fn page_argv(req: &PageReq, filter: Option<&FeedFilter>) -> Vec<String> {
     ];
     match req {
         PageReq::Head => {}
+        PageReq::Older(c) | PageReq::Newer(c) | PageReq::Live(c) if c.is_empty() => {}
         PageReq::Older(c) | PageReq::Newer(c) | PageReq::Live(c) => {
             let flag = if matches!(req, PageReq::Older(_)) {
                 "--before"
@@ -424,10 +409,7 @@ pub fn event_fields(item: &FeedItem, ctx: &EventCtx) -> crate::search_query::Fie
     push(&mut f, "lead", item.lead.clone().or_else(|| holder.clone()));
     push(&mut f, "agent", holder.clone());
     push(&mut f, "ts", Some(item.ts.clone()));
-    let area = crate::search_query::areas_for_kind(&item.kind);
-    for a in area {
-        push(&mut f, "area", Some(a.to_string()));
-    }
+    // One answer for a row's area: the projection's stamp (`area_of`).
     push(
         &mut f,
         "area",
@@ -486,6 +468,23 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("malformed JSON"));
         assert!(rendered.contains("skipped 3 malformed question lines"));
+    }
+
+    // AC5 and premise 12: the current command spelling, and an empty
+    // cursor never reaches the projection, which exits 2 on `--after ''`.
+    #[test]
+    fn page_argv_spells_the_current_command_and_never_an_empty_cursor() {
+        let head = page_argv(&PageReq::Head, None);
+        assert_eq!(head[..3], ["agent", "fleet", "feed"]);
+        for req in [
+            PageReq::Live(String::new()),
+            PageReq::Older(String::new()),
+            PageReq::Newer(String::new()),
+        ] {
+            assert_eq!(page_argv(&req, None), head, "{req:?} reads the head");
+        }
+        let live = page_argv(&PageReq::Live("[\"c\"]".into()), None);
+        assert_eq!(live[live.len() - 2..], ["--after", "[\"c\"]"]);
     }
 
     // regression: the timeout names itself and its duration, so the

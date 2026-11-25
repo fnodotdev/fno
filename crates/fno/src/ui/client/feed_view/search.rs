@@ -19,10 +19,7 @@ pub(crate) fn prefilter(q: &crate::search_query::Parsed) -> Option<FeedFilter> {
             "id" => f.node = Some(joined),
             "kind" => f.kind = Some(joined),
             "area" => f.area = Some(joined),
-            "session" => f.session = Some(joined),
-            "agent" => f.agent = Some(joined),
             "harness" => f.harness = Some(joined),
-            "lead" => f.lead = Some(joined),
             // A key with no projection flag is not pushable; pushdown
             // already refuses it, so this is the belt under the belt.
             _ => return None,
@@ -216,5 +213,13 @@ pub(crate) mod tests {
         // A bare node id pushes --node.
         let f = pf("n-1234").expect("an id-shaped bare word pushes");
         assert_eq!(f.node.as_deref(), Some("n-1234"));
+        // AC7: only shapes the projection matches as the grammar does push.
+        // `--node` is exact, so an id prefix stays client-side; session,
+        // agent and lead read fields the flags never see.
+        for q in ["id:n-12", "sid:abc", "a:rowan", "l:lara"] {
+            assert!(pf(q).is_none(), "{q} is matched client-side");
+        }
+        let f = pf("ar:ma h:Cod").expect("area and harness prefixes push");
+        assert_eq!(f.area.as_deref(), Some("ma"));
     }
 }

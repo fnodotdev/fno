@@ -32,7 +32,7 @@ fn feed_item(node: Option<&str>, sid: Option<&str>) -> crate::feed_overlay::Feed
         phase: None,
         detail: None,
         reason: None,
-        role: None,
+        team: None,
         holder: None,
         owner: None,
         parent: None,
@@ -61,7 +61,7 @@ fn reaped_item(sid: &str, resume: &str) -> crate::feed_overlay::FeedItem {
         phase: None,
         detail: Some(resume.into()),
         reason: None,
-        role: None,
+        team: None,
         holder: None,
         owner: None,
         parent: None,
@@ -294,7 +294,7 @@ fn column_grid_rows() {
         ("harness", "claude"),
         ("kind", "daemon_restarted"),
         ("node", "x-a1b2c"),
-        ("session", "09876543"),
+        ("session", "34567890"),
         ("lead", "team-alpha"),
     ] {
         assert_eq!(
@@ -823,7 +823,7 @@ fn detail_field_rows() {
     stamped.model = Some("glm-5.3-flash".into());
     stamped.effort = Some("high".into());
     stamped.parent = Some("s-parent".into());
-    stamped.role = Some("L2 e-0001".into());
+    stamped.team = Some("L2 e-0001".into());
     let (popup, _, _) = feed_detail::build(&[], 0, &stamped);
     let by = |label: &str| -> String {
         popup_rows(&popup)
@@ -835,7 +835,7 @@ fn detail_field_rows() {
     assert_eq!(by("model"), "glm-5.3-flash");
     assert_eq!(by("effort"), "high");
     assert_eq!(by("parent"), "s-parent");
-    assert_eq!(by("role"), "L2 e-0001");
+    assert_eq!(by("team"), "L2 e-0001");
 
     let item = feed_item(Some("x-a"), Some("s-1"));
     let mut child = joined_row("jn-t-x-1", None, None);
@@ -1301,3 +1301,77 @@ async fn a_stale_fold_refolds_and_keeps_the_selection() {
 // (x-182e) The owner line resolves its holder against the live roster: a
 // dead team's handle says it is gone, a live one keeps the line, and a
 // line with no parenthesized holder passes through untouched.
+
+/// The shipped panel's reach: the last slot paints above the footer under
+/// the cursor (AC1), moving down at the oldest loaded row reads older
+/// history while moving up at the newest reads none (AC2), a hover off the
+/// rows leaves the cursor on its row (AC24), and a close then reopen in one
+/// client paints the same rows and query at once (AC23).
+#[tokio::test]
+async fn last_row_paging_edge_hover_and_reopen() {
+    let items: Vec<_> = (0..40)
+        .map(|i| {
+            let mut it = feed_item(Some("x-n"), Some("s-n"));
+            it.title = format!("event {i:02}");
+            it.ts = format!("2026-09-02T10:{i:02}:00Z");
+            it.cursor = format!("c{i:02}");
+            it
+        })
+        .collect();
+    let mut v = view_with_rows(vec![]);
+    let mut o = overlay_in(items, feed_view::FeedOrder::Recent);
+    o.win.scan_cursor = "c00".into();
+    o.win.head_attached = true;
+    v.feed = Some(o);
+    v.region_owner = crate::client::region_focus::RegionOwner::Feed;
+    let (mut writer, _reader) = tokio::io::duplex(4096);
+    let rows = v.term.0 as usize;
+
+    feed_view::feed_keys(&mut v, b"\x1b[A", &mut writer)
+        .await
+        .unwrap();
+    assert!(
+        v.feed.as_ref().unwrap().want_page.is_none(),
+        "up at the newest row reads no history"
+    );
+
+    feed_view::feed_keys(&mut v, b"G", &mut writer)
+        .await
+        .unwrap();
+    let off = v.feed_offset_clamped();
+    let f = v.feed.as_ref().unwrap();
+    let lines = feed_panel_lines(f, true, W, rows, off);
+    assert!(
+        lines[rows - 2].contains("event 00"),
+        "the oldest row paints on the last slot: {}",
+        lines[rows - 2]
+    );
+    assert_eq!(
+        2 + f.sel - off,
+        rows - 2,
+        "the cursor sits on it, not the footer"
+    );
+    assert!(
+        matches!(&f.want_page, Some(crate::feed_overlay::PageReq::Older(c)) if c == "c00"),
+        "down at the oldest loaded row reads older history: {:?}",
+        f.want_page
+    );
+
+    v.region_owner = crate::client::region_focus::RegionOwner::Pane;
+    let col = v.term.1 - 2;
+    v.hover_feed_marker(0, col);
+    assert_eq!(
+        v.feed.as_ref().unwrap().sel,
+        39,
+        "a hover on the title row keeps the cursor on its row"
+    );
+
+    v.feed.as_mut().unwrap().query_text = "k:node".into();
+    feed_view::toggle(&mut v, &mut writer).await.unwrap();
+    assert!(v.feed.is_none(), "the first toggle closes");
+    feed_view::toggle(&mut v, &mut writer).await.unwrap();
+    let f = v.feed.as_ref().unwrap();
+    assert_eq!(f.win.items.len(), 40, "the parked rows paint at once");
+    assert_eq!(f.query_text, "k:node", "the query survives the close");
+    assert_eq!(f.gen, 1, "a fold from before the close cannot land");
+}
