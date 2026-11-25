@@ -181,7 +181,7 @@ world_up() {
   export FNO_CONFIG="$ROOT/config.toml"
   export FNO_AGENT_HOME="$ROOT/agents"
   local reg
-  reg="$("$FNO_BIN" config doctor 2>&1 | awk '$1=="OPERATOR" && $2=="registry.json" {print $3; exit}')"
+  reg="$("$FNO_BIN" config doctor 2>&1 | awk '$1=="OPERATOR" && $2=="registry.json" {print $3; exit}' || true)"
   case "$reg" in
     "$ROOT"/*) ;;
     *) die "registry resolves to '${reg:-none}', outside the bench root $ROOT: refusing to run";;
