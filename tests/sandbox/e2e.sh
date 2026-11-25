@@ -416,8 +416,8 @@ node="$(cd "$repo" && "$BIN/fno" backlog idea "sandbox loop e2e" --audience inte
 required "the loop node files" test -n "$node"
 loop_out="$WORK/loop.out"
 loop_err="$WORK/loop.err"
-"$BIN/fno-agent" spawn --name e2e-loop --harness claude --once --node "$node" \
-  --cwd "$repo" "loop journey" > "$loop_out" 2> "$loop_err"
+(cd "$repo" && "$BIN/fno-agent" spawn --name e2e-loop --harness claude --once --node "$node" \
+  --cwd "$repo" "loop journey" ) > "$loop_out" 2> "$loop_err"
 cat "$loop_err" >&2
 while read -r _ kind name verdict; do
   case "$kind" in
