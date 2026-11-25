@@ -442,8 +442,35 @@ fn paint_frame(
         let solid = focused && window.is_window_active();
         paint_cursor(frame, solid, m, p, origin, window, cx);
     }
+    paint_block_gutter(frame, m, p, origin, window);
     if frame.scroll_offset > 0 {
         paint_scroll_badge(frame, m, p, origin, window, cx);
+    }
+}
+
+/// One thin bar per visible command block at the pane's left edge, the width
+/// of the click target in `mouse::gutter_hit`. The selected block takes the
+/// accent, a failed one the error hue, and the rest sit quiet.
+fn paint_block_gutter(
+    frame: &Frame,
+    m: &Metrics,
+    p: &Palette,
+    origin: Point<Pixels>,
+    window: &mut Window,
+) {
+    let width = m.cell.width * crate::mouse::GUTTER;
+    for b in &frame.blocks {
+        let hue = match (b.selected, b.exit) {
+            (true, _) => p.accent,
+            (false, Some(code)) if code != 0 => p.error,
+            _ => p.faint,
+        };
+        let rows = (b.bottom.saturating_sub(b.top) + 1) as f32;
+        let at = point(origin.x, origin.y + m.cell.height * b.top as f32);
+        window.paint_quad(fill(
+            Bounds::new(at, size(width, m.cell.height * rows)),
+            color(hue, false),
+        ));
     }
 }
 
