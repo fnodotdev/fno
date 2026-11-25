@@ -92,10 +92,8 @@ struct Args {
     #[arg(long = "shot-first-run", value_enum, hide = true)]
     shot_first_run: Option<ShotFirstRun>,
     /// Let --shot drive the session: its attach births a workspace with a
-    /// shell, and its keystrokes and scrolls reach that shell. Only for a
-    /// world the caller built and tears it down. Without it the shot is an
-    /// observer, and the session it photographs keeps its workspaces and
-    /// its rows.
+    /// shell, and its keystrokes reach it. Only for a world the caller built
+    /// and tears down; any other shot is an observer.
     #[arg(long = "shot-own-world", hide = true)]
     shot_own_world: bool,
 }

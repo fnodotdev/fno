@@ -290,8 +290,7 @@ EOF
   # fno-app: cold offscreen shot; the wall time is start to first painted
   # frame plus one png encode (labeled in the report). The shot is an
   # app-surface call: it runs under the temp HOME like open and close.
-  # --shot-own-world keeps the shot on the seat a launched app takes (the
-  # bench server is this script's own): a plain shot only observes.
+  # --shot-own-world: the bench server is this script's own world, so the shot drives it.
   local t0 t1 png
   png="$ROOT/app-launch.png"
   for i in $(seq 1 "$RUNS"); do

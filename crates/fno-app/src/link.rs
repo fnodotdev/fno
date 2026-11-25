@@ -268,12 +268,10 @@ pub struct WarmedLink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Seat {
     /// The server births no squad for an observer, spawns it no shell, and
-    /// drops every message of its that would touch a pane. A shot that
-    /// photographs a session it does not own leaves nothing there.
+    /// drops every message of its that would touch a pane.
     Observer,
-    /// The world's one driving client. Its attach births the world's squad,
-    /// and its keystrokes and scrolls reach that shell, which the overlay
-    /// shots type into.
+    /// The world's one driving client: its attach births the world's squad
+    /// with a shell, which the overlay shots type into.
     Driver,
 }
 
@@ -455,8 +453,7 @@ mod seat_tests {
     #[test]
     fn a_shot_drives_only_the_world_its_caller_built() {
         // The server births a squad and a shell for every attach but an
-        // observer's, so these dims decide whether a shot leaves a
-        // workspace and a row in the session it photographs.
+        // observer's, so these dims decide what a shot leaves behind.
         assert_eq!(Seat::for_shot(false), Seat::Observer);
         assert_eq!(Seat::Observer.dims(), (0, 0));
         assert_eq!(Seat::for_shot(true), Seat::Driver);

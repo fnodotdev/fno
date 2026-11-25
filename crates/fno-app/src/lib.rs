@@ -75,9 +75,8 @@ pub struct ShotOptions {
     /// and a shot never falls back to the user's default session.
     pub session: Option<String>,
     /// The caller built the world the session runs in and tears it down
-    /// after, so the shot may drive it: its attach births the world's
-    /// workspace and its keystrokes reach that shell. Any other shot
-    /// attaches as an observer and adds no workspace and no row.
+    /// after, so the shot may drive it. Any other shot attaches as an
+    /// observer and adds no workspace and no row.
     pub own_world: bool,
     /// A claude session id, or `newest`: what --shot-mode chat renders.
     pub chat: Option<String>,
