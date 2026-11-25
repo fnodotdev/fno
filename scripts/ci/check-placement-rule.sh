@@ -366,6 +366,13 @@ scripts/ops/sandbox-leak-probe.sh
 # shim's session records, the seeded daemon roster and the trust store all
 # land inside the world and nothing writes into a real .claude dir.
 scripts/ops/mux-demo-snapshot.sh
+# read-count-hook.sh and retire-unread-pass.sh derive the project memory
+# dir under $CLAUDE_CONFIG_DIR (or $HOME/.claude) the same way
+# decision_reach.rs writes auto memory there: the memory dir is Claude
+# Code's own per-project store that the harness itself reads, not
+# footnote state. The sidecar and the .archived/ dir live inside it.
+scripts/memory/read-count-hook.sh
+scripts/memory/retire-unread-pass.sh
 # install-journey.sh builds CLAUDE_CONFIG_DIR under a throwaway run home and
 # reads the plugin cache there to prove the wiring; it writes no fno state
 # into any real .claude dir.
