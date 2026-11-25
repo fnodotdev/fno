@@ -923,12 +923,15 @@ WHERE machine_id = ? AND question_id = ? AND seq = ?",
 /// any more.
 fn drop_copy_files(me: &Host, copy: &str) {
     let prefix = format!("{copy}-");
-    for entry in crate::state_layout::list_dir_children(&me.root, "screens") {
-        let named = entry
-            .file_name()
-            .map(|n| n.to_string_lossy().starts_with(&prefix));
-        if named == Some(true) {
-            let _ = std::fs::remove_file(&entry);
+    let placed = crate::state_layout::place_dir(&me.root, "screens");
+    for dir in placed.into_iter().chain([me.root.join("screens")]) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
 }
