@@ -217,10 +217,9 @@ world_up() {
   done
   [ "$got" -ge "$PANE_COUNT_EXPECTED" ] || die "world never reached $PANE_COUNT_EXPECTED panes (got $got)"
 
-  # Baseline the operator view on sleeper A; clients open onto it. `pane focus`
-  # takes a pane id; `mux view` resolves registry names and would match the
-  # real fleet's agents, not this throwaway server's bare-number pane ids.
-  "$FNO_BIN" mux pane focus "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
+  # View moves go through `mux pane focus <pane id>` inside each attach:
+  # it moves only attached clients, and `mux view` resolves registry names,
+  # which are not this throwaway server's bare-number pane ids.
 }
 
 wake_busy() {
@@ -329,7 +328,8 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-sleep 0.3
+exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)
+sleep 0.5
 set t0 [clock milliseconds]
 send "\x02"
 after 50
@@ -358,11 +358,8 @@ if {$ms < 0} { set ms 0 }
 puts "RESULT $ms"
 EOF
   local i out
-  "$FNO_BIN" mux pane focus "$LONG_ID" --server "$SESSION" >/dev/null
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux pane focus "$LONG_ID" --server "$SESSION" >/dev/null 2>&1 || true
-    sleep 0.2
-    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
+    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" BENCH_LONG_ID="$LONG_ID" \
       BENCH_PAGES="$SCROLL_PAGES" BENCH_SETTLE_TICKS="$SCROLL_SETTLE_TICKS" run_tui_expect "$tpl")"
     case "$out" in
       FAIL*|"") record scroll tui "$i" "${out:-FAIL no_result}";;
@@ -486,11 +483,9 @@ set t1 [clock milliseconds]
 catch {exec kill -9 [exp_pid]}
 puts "RESULT [expr {$t1 - $t0}]"
 EOF
-  # Return the view to sleeper A between runs so every run starts cold.
+  # Each run is a fresh attach, so it starts on the server's default view.
   local i out
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux pane focus "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
-    sleep 0.3
     out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
       BENCH_BUSY_ID="$BUSY_ID" run_tui_expect "$tpl")"
     case "$out" in
@@ -513,7 +508,8 @@ expect {
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-sleep 0.3
+exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+sleep 0.5
 set marker "kpz[clock clicks]"
 set t0 [clock milliseconds]
 send -- "$marker\r"
@@ -527,9 +523,8 @@ catch {exec kill -9 [exp_pid]}
 puts "RESULT [expr {$t1 - $t0}]"
 EOF
   local i out
-  "$FNO_BIN" mux pane focus "$BUSY_ID" --server "$SESSION" >/dev/null 2>&1 || true
   for i in $(seq 1 "$RUNS"); do
-    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" run_tui_expect "$tpl")"
+    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" BENCH_BUSY_ID="$BUSY_ID" run_tui_expect "$tpl")"
     case "$out" in
       FAIL*|"") record keypaint tui "$i" "${out:-FAIL no_result}";;
       *) record keypaint tui "$i" "$out";;
