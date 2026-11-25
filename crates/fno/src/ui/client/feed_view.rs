@@ -264,6 +264,8 @@ pub(crate) fn feed_panel_rows(
     let show_date = w >= 48;
     // The first row of each day carries its date at any width, so a day
     // boundary never reads as time running backward (00:57 above 20:06).
+    // A narrow panel shows the date in place of the time on that row, so
+    // the time column keeps its width and node keeps its place.
     let window = o.slots.get(offset..).unwrap_or_default();
     let window = window
         .get(..feed_body_rows(visible_rows).min(window.len()))
@@ -276,11 +278,7 @@ pub(crate) fn feed_panel_rows(
         })
         .collect();
     let day_marks = day_marks_in(&stamps, &chrono::Local);
-    let ts_w = if show_date || day_marks.iter().any(|m| *m) {
-        11
-    } else {
-        5
-    };
+    let ts_w = if show_date { 11 } else { 5 };
     let dw = |s: &str| unicode_width::UnicodeWidthStr::width(s);
     // Each title carries its marks: an arrow on the sort column, a dot and
     // the value count on a filtered one, so color is never the only signal.
@@ -415,7 +413,7 @@ pub(crate) fn feed_panel_rows(
                 });
                 let day_mark = day_marks.get(d - offset).copied().unwrap_or(false);
                 let ts = if day_mark {
-                    dated_ts(&item.ts)
+                    dated_ts(&item.ts, show_date)
                 } else {
                     short_ts(&item.ts, show_date)
                 };
@@ -719,12 +717,10 @@ fn short_ts(ts: &str, with_date: bool) -> String {
     short_ts_in(ts, &chrono::Local, with_date)
 }
 
-fn dated_ts(ts: &str) -> String {
+fn dated_ts(ts: &str, with_time: bool) -> String {
+    let fmt = if with_time { "%m-%d %H:%M" } else { "%m-%d" };
     match chrono::DateTime::parse_from_rfc3339(ts) {
-        Ok(t) => t
-            .with_timezone(&chrono::Local)
-            .format("%m-%d %H:%M")
-            .to_string(),
+        Ok(t) => t.with_timezone(&chrono::Local).format(fmt).to_string(),
         Err(_) => ts.to_string(),
     }
 }
@@ -732,7 +728,8 @@ fn dated_ts(ts: &str) -> String {
 /// Which painted rows open a day, given each row's stamp in paint order
 /// (`None` is a group header). A row opens a day when its local day differs
 /// from the row above it, or it is the first row under the top or a header
-/// and its day is not today. Such a row shows its date at any width.
+/// and its day is not today. Such a row shows its date at any width: with
+/// its time on a wide panel, in place of it on a narrow one.
 pub(crate) fn day_marks_in<Tz: chrono::TimeZone>(stamps: &[Option<&str>], tz: &Tz) -> Vec<bool> {
     let today = chrono::Utc::now().with_timezone(tz).date_naive();
     let mut prev = None;

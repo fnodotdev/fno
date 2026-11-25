@@ -149,7 +149,6 @@ fn render_rows() {
         b.ts = "2026-09-02T17:27:06Z".into();
         let mut c = feed_item(Some("x-c"), Some("s-3"));
         c.ts = "2026-09-02T18:27:06Z".into();
-        c.title = "newest".into();
         overlay(vec![a, b, c])
     };
     let lines = feed_panel_lines(&o, false, W, ROWS, 0);
@@ -168,10 +167,8 @@ fn render_rows() {
         "group header first: {}",
         lines[2]
     );
-    // The summary is the one column that never drops; node gives way first
-    // when the day mark widens the time column.
     assert!(
-        lines[3].contains("newest"),
+        lines[3].contains("x-c"),
         "top row shows the newest: {}",
         lines[3]
     );
@@ -396,7 +393,6 @@ fn click_rows() {
     b.ts = "2026-09-02T17:27:06Z".into();
     let mut c = feed_item(Some("x-c"), Some("s-3"));
     c.ts = "2026-09-02T18:27:06Z".into();
-    c.title = "newest".into();
     v.feed = Some(overlay(vec![a, b, c]));
     let w = v.feed_panel_w() as u16;
     assert!(w > 0, "the panel must render at the 100-col view");
@@ -407,7 +403,7 @@ fn click_rows() {
     let f = v.feed.as_ref().unwrap();
     let lines = feed_panel_lines(f, false, w as usize - 1, v.term.0 as usize, 0);
     assert!(
-        lines[3].contains("newest"),
+        lines[3].contains("x-c"),
         "top ITEM row is the newest: {}",
         lines[3]
     );
