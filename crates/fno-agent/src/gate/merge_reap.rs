@@ -1410,8 +1410,10 @@ mod tests {
         // the fold keeps the union, the first non-empty worktree and the
         // earliest merged_at, instead of the last envelope winning.
         let home = temp_home("fold-dup");
+        // One stamp: two clock reads can straddle a second and differ by one.
+        let earliest = minutes_ago(120);
         let merge_mint = json!({
-            "ts": minutes_ago(120),
+            "ts": earliest,
             "type": "merge_cleanup_requested",
             "source": "python",
             "data": {
@@ -1421,7 +1423,7 @@ mod tests {
                 "branch": "feature/x",
                 "worktree": "/repo/wt",
                 "node_ids": [],
-                "merged_at": minutes_ago(120),
+                "merged_at": earliest,
             }
         })
         .to_string();
@@ -1448,7 +1450,7 @@ mod tests {
         assert_eq!(request.node_ids, vec!["x-1".to_string()]);
         assert_eq!(
             request.merged_at,
-            crate::tick_ledger::parse_rfc3339_unix(&minutes_ago(120)).map(|v| v as i64)
+            crate::tick_ledger::parse_rfc3339_unix(&earliest).map(|v| v as i64)
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
