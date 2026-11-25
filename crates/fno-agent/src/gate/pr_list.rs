@@ -336,7 +336,19 @@ pub(crate) fn origin_slug(cwd: &Path, git_ceiling: Option<&Path>) -> Result<Stri
         });
     }
     let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // `get-url` applies `insteadOf`, so a mirror rewrite of a GitHub remote
+    // reads as the mirror. The configured URL still names the repository.
     parse_origin_slug(&url)
+        .or_else(|| {
+            let mut raw = Command::new("git");
+            raw.args(["config", "--get", "remote.origin.url"])
+                .current_dir(cwd);
+            if let Some(ceiling) = git_ceiling {
+                raw.env("GIT_CEILING_DIRECTORIES", ceiling);
+            }
+            let run = crate::gate_probes::run_probe(raw).filter(|r| r.ok)?;
+            parse_origin_slug(run.stdout.trim())
+        })
         .ok_or_else(|| format!("origin is not a github remote: {}", redact_userinfo(&url)))
 }
 

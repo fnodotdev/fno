@@ -1953,6 +1953,11 @@ fn main() {
     fno::legacy_env::adopt();
     fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
+    // Under the sandbox pin no store exists to open: the loop's commands
+    // forward as typed ops and the rest refuse, before any door runs.
+    if let Some(code) = fno::sandbox_door::run(&args) {
+        std::process::exit(code);
+    }
     fno::cli_usage::start(&args);
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();

@@ -3193,6 +3193,18 @@
     "SandboxBlock": {
       "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
       "properties": {
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
         "image": {
           "anyOf": [
             {
