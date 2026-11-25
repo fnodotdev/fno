@@ -556,8 +556,11 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                     .unwrap_or(0),
                 "system": system_row,
             });
-            if let Some(number) = l.id.as_deref().and_then(crate::numbers::mail_token_held) {
-                row["number"] = json!(number);
+            if let (Some(number), Some(obj)) = (
+                l.id.as_deref().and_then(crate::numbers::mail_token_held),
+                row.as_object_mut(),
+            ) {
+                obj.insert("number".into(), json!(number));
             }
             match l.kind.as_deref() {
                 Some("announce") => {
@@ -1003,8 +1006,11 @@ pub(crate) fn fold_fleet_rows(
             "system": false,
             "origin": origin,
         });
-        if let Some(number) = crate::numbers::mail_token_held(&r.msg_id) {
-            row["number"] = json!(number);
+        if let (Some(number), Some(obj)) = (
+            crate::numbers::mail_token_held(&r.msg_id),
+            row.as_object_mut(),
+        ) {
+            obj.insert("number".into(), json!(number));
         }
         let pair = if from_key <= to_key {
             (from_key, to_key)
