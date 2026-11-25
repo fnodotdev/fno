@@ -168,6 +168,12 @@ pub(crate) fn reslot(f: &mut FeedOverlay) {
 /// optional columns drop.
 const SUMMARY_MIN: usize = 12;
 
+/// The summary floor where taking it is the only way to keep node.
+const SUMMARY_TIGHT: usize = 10;
+
+/// The narrowest the kind column gets; a longer kind ellipsizes.
+const KIND_MIN: usize = 6;
+
 /// The widest value, in display columns, of each column that has a cap,
 /// already capped: area and harness 8, kind 16, node 12, session tail 8,
 /// lead 12. One pass over the rows per re-slot, so a paint reads them free.
@@ -254,8 +260,8 @@ pub(crate) fn feed_panel_rows(
 ) -> Vec<Vec<Span>> {
     // Columns, in the operator's order: time, area, harness, kind, node,
     // session (tail 8), lead, summary. The narrowest panel keeps time, kind
-    // and at least SUMMARY_MIN of summary; a wider one adds node, then lead,
-    // harness, area and session, in that order (AC11).
+    // and summary; a wider one adds node, then lead, harness, area and
+    // session, in that order (AC11).
     //
     // Header and rows draw through ONE grid: each column's width is
     // the widest value the table shows (display columns), capped, and a
@@ -291,7 +297,7 @@ pub(crate) fn feed_panel_rows(
     let ts_w = ts_w.max(dw(&t_time));
     let area_w = col_w(&t_area, vw.area);
     let harness_w = col_w(&t_harness, vw.harness);
-    let kind_w = col_w(&t_kind, vw.kind);
+    let kind_full = col_w(&t_kind, vw.kind);
     let node_w = col_w(&t_node, vw.node);
     let session_w = col_w(&t_session, vw.session);
     let lead_w = col_w(&t_lead, vw.lead);
@@ -315,9 +321,21 @@ pub(crate) fn feed_panel_rows(
         out
     };
 
-    // The summary is the column a reader reads, so it keeps SUMMARY_MIN
-    // before any optional column claims width; node is the first optional.
-    let mut used = 3 + ts_w + 1 + kind_w + 1 + SUMMARY_MIN;
+    // A short panel gives width in one order: kind narrows to KIND_MIN,
+    // then the summary floor drops to SUMMARY_TIGHT, then node goes. The
+    // summary is the column a reader reads, and node is the deep-link key.
+    let fixed = 3 + ts_w + 1 + 1;
+    let kind_min = kind_full.min(KIND_MIN);
+    let kind_room = |floor: usize| w.saturating_sub(fixed + node_w + 1 + floor);
+    let (kind_w, summary_floor, show_node) = if kind_room(SUMMARY_MIN) >= kind_min {
+        (kind_full.min(kind_room(SUMMARY_MIN)), SUMMARY_MIN, true)
+    } else if kind_room(SUMMARY_TIGHT) >= kind_min {
+        (kind_full.min(kind_room(SUMMARY_TIGHT)), SUMMARY_TIGHT, true)
+    } else {
+        let room = w.saturating_sub(fixed + SUMMARY_MIN);
+        (kind_full.min(room).max(kind_min), SUMMARY_MIN, false)
+    };
+    let mut used = fixed + kind_w + summary_floor + if show_node { node_w + 1 } else { 0 };
     let fits = |needed: usize, used: &mut usize| {
         if *used + needed <= w {
             *used += needed;
@@ -326,7 +344,6 @@ pub(crate) fn feed_panel_rows(
             false
         }
     };
-    let show_node = fits(node_w + 1, &mut used);
     let show_lead = fits(lead_w + 1, &mut used);
     let show_harness = fits(harness_w + 1, &mut used);
     let show_area = fits(area_w + 1, &mut used);
@@ -356,7 +373,7 @@ pub(crate) fn feed_panel_rows(
     if show_harness {
         push_col(&mut header, &t_harness, harness_w, true, false);
     }
-    push_col(&mut header, &t_kind, kind_w, true, false);
+    push_col(&mut header, &fit_cell(&t_kind, kind_w), kind_w, true, false);
     if show_node {
         push_col(&mut header, &t_node, node_w, true, false);
     }

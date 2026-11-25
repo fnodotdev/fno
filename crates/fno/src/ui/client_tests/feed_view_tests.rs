@@ -407,6 +407,12 @@ fn click_rows() {
         "top ITEM row is the newest: {}",
         lines[3]
     );
+    // At this 31-wide panel kind narrows and the summary floor gives to 10,
+    // so node and the summary both show.
+    assert!(
+        lines.get(3).is_some_and(|l| l.contains("PR 1395")),
+        "the summary shows beside node: {lines:?}"
+    );
     // The header rows never deep-link; the item row under them does.
     // The column header's marker gutter is inert; a title sorts by its
     // column; the group header folds its group. None of them deep-links.
