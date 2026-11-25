@@ -447,6 +447,13 @@ pub const STEPS: &[Step] = &[
         effect: "writes review.github_apps only when this repo wants bot reviews",
     },
     Step {
+        id: "merge-queue",
+        layer: Layer::Project,
+        kind: Kind::Approve,
+        question: "Queue this repo's merged PRs through a merge queue?",
+        effect: "writes the gate workflow fno's own queue dispatches when the repo runs it, and names the ruleset command that turns GitHub's queue on where auto or provider=github picks it",
+    },
+    Step {
         id: "backlog-prefix",
         layer: Layer::Project,
         kind: Kind::Act,
@@ -997,6 +1004,84 @@ fn step_guardrails(exe: &Path, rep: &mut Report) {
             rep.needs_human.push(message);
         }
     }
+}
+
+/// The merge-queue step. The queue is opt-in (`merge_queue.enabled = true`);
+/// with it on, the step writes the gate workflow fno's own queue dispatches
+/// and names the ruleset command that turns GitHub's queue on where auto or
+/// `provider = "github"` picks it. The file lands only when missing: a
+/// project's own gate workflow is its own choice, setup never overwrites.
+fn step_merge_queue(_exe: &Path, root: &Path, rep: &mut Report) {
+    let global = crate::model_catalog::state_dir().join("config.toml");
+    let project = root.join(".fno").join("config.toml");
+    let value =
+        |key: &str| crate::config_defaults::lookup_value(Some(&global), Some(&project), key);
+    if value("merge_queue.enabled").and_then(|v| v.as_bool()) != Some(true) {
+        rep.skipped.push(
+            "merge-queue: off (set merge_queue.enabled = true to queue this repo's PRs)".into(),
+        );
+        return;
+    }
+    let gate = value("merge_queue.gate_workflow")
+        .and_then(|v| v.as_str())
+        .unwrap_or("merge-queue-gate.yml")
+        .to_string();
+    let provider = value("merge_queue.provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("auto");
+    if provider == "github" {
+        // GitHub's queue needs repo-admin ruleset work fno cannot do
+        // without the scope: the exact command is the deliverable. Setup
+        // never probes more than the config it already read.
+        rep.needs_human.push(
+            "merge-queue: enabling GitHub's merge queue is a repo-admin \
+ruleset change; the exact command lives in docs/architecture/authorized-merge.md"
+                .into(),
+        );
+        return;
+    }
+    let path = root.join(".github").join("workflows").join(&gate);
+    if path.exists() {
+        rep.skipped.push(format!(
+            "merge-queue: {gate} exists; setup never overwrites it"
+        ));
+        return;
+    }
+    match std::fs::create_dir_all(path.parent().unwrap_or(root)) {
+        Ok(_) => match std::fs::write(&path, merge_queue_gate_template()) {
+            Ok(_) => {
+                rep.done.push(format!("merge-queue: wrote {gate}"));
+                rep.paths.push(path.to_string_lossy().into_owned());
+            }
+            Err(e) => rep
+                .needs_human
+                .push(format!("merge-queue: {gate} not written: {e}")),
+        },
+        Err(e) => rep
+            .needs_human
+            .push(format!("merge-queue: {gate} not written: {e}")),
+    }
+}
+
+/// The gate workflow a repo without GitHub's queue runs per batch. fno
+/// dispatches it on the batch ref `fno-merge-queue/main/<batch>`; a project
+/// replaces the placeholder step with the checks its protection requires.
+fn merge_queue_gate_template() -> String {
+    r#"name: merge queue gate
+on:
+  workflow_dispatch: {}
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # fno's merge queue dispatches this workflow once per batch on the
+      # ref fno-merge-queue/main/<batch>, which carries main plus every
+      # queued PR. Replace this placeholder with the checks branch
+      # protection requires, then set merge_queue.enabled = true.
+      - run: echo "Add this project's required checks here."
+"#
+    .to_string()
 }
 
 /// The proposal half of the backlog-prefix step: the fixed scheme (the
@@ -2998,6 +3083,7 @@ pub fn run(tail: &[OsString]) -> i32 {
                 "review-bots: review.github_apps left empty (no bot reviews requested)".into(),
             ),
             (Layer::Project, "backlog-prefix") => step_backlog_prefix(&exe, &root, &mut rep),
+            (Layer::Project, "merge-queue") => step_merge_queue(&exe, &root, &mut rep),
             (Layer::Contributor, "cargo-toolchain") => {
                 let v = std::process::Command::new("cargo")
                     .arg("--version")
