@@ -2184,7 +2184,7 @@ pub fn user_hours_or_default(cwd: &Path) -> UserHours {
             eprintln!("fno-agent: {refusal}");
             if let Some(store) = &store {
                 let text = format!(
-                    "Config refused: {refusal}. Until it is fixed the user reads as never away, so no prompt is denied for being away."
+                    "Config refused: {refusal}. Until it is fixed the user reads as never away. A parked prompt is denied after 30 minutes, not at once while the user is away."
                 );
                 let _ = crate::fleet_task::file_once(store, LANE, KEY, "", &text, None, None);
             }
