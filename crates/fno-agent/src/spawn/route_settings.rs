@@ -378,31 +378,9 @@ pub fn write_composed(
     cwd: &Path,
 ) -> Result<Option<String>, String> {
     let rules = crate::spawn::auto_approve::rules_for(cwd);
-    write_with_rules(route_env, account_env, sandbox, alias, session, cwd, rules)
-}
-
-/// `write_composed` with the rules given, so a test needs no global config.
-fn write_with_rules(
-    route_env: &Map<String, Value>,
-    account_env: &Map<String, Value>,
-    sandbox: Option<Value>,
-    alias: Option<&str>,
-    session: Option<&str>,
-    cwd: &Path,
-    rules: crate::spawn::auto_approve::Rules,
-) -> Result<Option<String>, String> {
-    let plain = route_env.is_empty() && account_env.is_empty() && sandbox.is_none();
-    if plain && rules.is_empty() {
+    let Some(env) = env_for_write(route_env, account_env, sandbox.is_some(), !rules.is_empty())
+    else {
         return Ok(None);
-    }
-    // Rules alone owe no scrub floor: a plain lane keeps its own auth env.
-    let env = if plain {
-        Map::new()
-    } else {
-        let spawn_env: Map<String, Value> = std::env::vars()
-            .map(|(k, v)| (k, Value::String(v)))
-            .collect();
-        compose_env(route_env, account_env, &spawn_env)
     };
     let receipt = write(
         &WriteAsk {
@@ -416,6 +394,24 @@ fn write_with_rules(
     )
     .map_err(|e| format!("lane settings: {e}"))?;
     Ok(Some(receipt.path.to_string_lossy().into_owned()))
+}
+
+/// The env a composed settings file carries, or `None` when the ask owes no
+/// file. Rules alone owe no scrub floor: a plain lane keeps its own auth env.
+fn env_for_write(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    has_sandbox: bool,
+    has_rules: bool,
+) -> Option<Map<String, Value>> {
+    let plain = route_env.is_empty() && account_env.is_empty() && !has_sandbox;
+    if plain {
+        return has_rules.then(Map::new);
+    }
+    let spawn_env: Map<String, Value> = std::env::vars()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    Some(compose_env(route_env, account_env, &spawn_env))
 }
 
 /// The write kind behind the spawn-overlay action (law d-fe66560a allows no
@@ -549,17 +545,28 @@ mod tests {
         let doc: Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(doc["permissions"]["allow"], json!(["Read(//w/**)"]));
         assert_eq!(doc["permissions"]["ask"], json!(["Edit(//w/**/.git)"]));
+        let none = Map::new();
+        let env = env_for_write(&none, &none, false, true).expect("rules alone owe a file");
+        assert!(env.is_empty(), "no scrub floor on a plain lane");
+        assert!(
+            env_for_write(&none, &none, false, false).is_none(),
+            "nothing to write"
+        );
+        let route = env_of(&[("ANTHROPIC_MODEL", "glm-5.2")]);
+        assert!(env_for_write(&route, &none, false, false).is_some());
         let root = tempfile::tempdir().unwrap();
         let (guard, saved) = state_pin(root.path());
-        let none = Map::new();
-        let path = write_with_rules(&none, &none, None, None, None, root.path(), rules)
-            .unwrap()
-            .expect("rules alone write a file");
+        let ask = WriteAsk {
+            env,
+            sandbox: None,
+            alias: None,
+            session: None,
+            rules,
+        };
+        let path = write(&ask, root.path()).unwrap().path;
         let doc: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        assert_eq!(doc["env"], json!({}), "no scrub floor on a plain lane");
-        let empty = crate::spawn::auto_approve::Rules::default();
-        let skipped = write_with_rules(&none, &none, None, None, None, root.path(), empty);
-        assert_eq!(skipped.unwrap(), None, "no overlay and no rules, no file");
+        assert_eq!(doc["env"], json!({}));
+        assert_eq!(doc["permissions"]["ask"], json!(["Edit(//w/**/.git)"]));
         state_restore(saved);
         drop(guard);
     }
