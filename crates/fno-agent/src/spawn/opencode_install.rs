@@ -575,7 +575,7 @@ fn write_manifest(conf: &Path, manifest: &Manifest) -> Result<(), String> {
     let text = serde_json::to_string_pretty(manifest).unwrap_or_default() + "\n";
     std::fs::write(&path, text).map_err(|e| format!("opencode install: {e}"))?;
     // The new copy now carries every record the legacy one held.
-    let _ = std::fs::remove_file(legacy_manifest_path(conf));
+    std::fs::remove_file(legacy_manifest_path(conf)).ok();
     Ok(())
 }
 
@@ -724,7 +724,7 @@ pub fn uninstall() -> Result<UninstallReceipt, String> {
         prune_empty_parents(&dest, &conf);
     }
     // The manifest is removed last so an interrupted uninstall is resumable.
-    let _ = std::fs::remove_file(legacy_manifest_path(&conf));
+    std::fs::remove_file(legacy_manifest_path(&conf)).ok();
     std::fs::remove_file(manifest_path(&conf))
         .or_else(|e| match e.kind() {
             std::io::ErrorKind::NotFound => Ok(()),
