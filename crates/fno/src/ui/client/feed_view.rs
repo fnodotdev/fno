@@ -394,7 +394,11 @@ pub(crate) fn feed_panel_rows(
                         bold: true,
                         brand: false,
                     },
-                    Span::plain(format!("{}{count} ", " ".repeat(gap))),
+                    Span {
+                        text: format!("{}{count} ", " ".repeat(gap)),
+                        bold: true,
+                        brand: false,
+                    },
                 ]);
             }
             Some(Slot::Item(i)) => {
