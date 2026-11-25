@@ -866,8 +866,11 @@ mod tests {
         let body = std::fs::read_to_string(&file).unwrap();
         std::fs::remove_dir_all(&root).ok();
         let last: serde_json::Value = serde_json::from_str(body.lines().last().unwrap()).unwrap();
-        assert_eq!(last["type"], "user");
-        let text = last["message"]["content"].as_str().unwrap();
+        assert_eq!(last.get("type"), Some(&serde_json::json!("user")));
+        let text = last
+            .pointer("/message/content")
+            .and_then(|v| v.as_str())
+            .unwrap();
         assert!(text.starts_with("<task-notification>"), "{text}");
         assert!(text.contains("<summary>"), "{text}");
     }
