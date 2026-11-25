@@ -1299,29 +1299,29 @@ mod tests {
     fn a_first_turn_mention_never_outranks_the_worktree_or_ledger_binding() {
         let some = |n: &str| Some(n.to_string());
         assert_eq!(
-            resolve_row_node(some("x-42d6"), true, || None, || some("x-8e15")),
-            some("x-8e15")
+            resolve_row_node(some("x-aaaa"), true, || None, || some("x-bbbb")),
+            some("x-bbbb")
         );
         assert_eq!(
-            resolve_row_node(some("x-42d6"), true, || some("x-1111"), || some("x-8e15")),
-            some("x-1111")
+            resolve_row_node(some("x-aaaa"), true, || some("x-cccc"), || some("x-bbbb")),
+            some("x-cccc")
         );
         assert_eq!(
-            resolve_row_node(some("x-42d6"), true, || None, || None),
-            some("x-42d6")
+            resolve_row_node(some("x-aaaa"), true, || None, || None),
+            some("x-aaaa")
         );
         assert_eq!(
             resolve_row_node(
-                some("x-42d6"),
+                some("x-aaaa"),
                 false,
                 || panic!("worktree read"),
                 || panic!("ledger read")
             ),
-            some("x-42d6")
+            some("x-aaaa")
         );
         assert_eq!(
-            resolve_row_node(None, false, || None, || some("x-8e15")),
-            some("x-8e15")
+            resolve_row_node(None, false, || None, || some("x-bbbb")),
+            some("x-bbbb")
         );
     }
 
