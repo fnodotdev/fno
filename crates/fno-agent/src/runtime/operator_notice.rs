@@ -22,6 +22,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::org_board::s_str;
+
 // ---------------------------------------------------------------------------
 // The chokepoint: the dispatch, in-process
 // ---------------------------------------------------------------------------
@@ -352,7 +354,8 @@ pub fn run_notify_watch(
                     notes.push(format!("{key}:clear"));
                     continue;
                 }
-                let token = rows_token(queue.get("rows").and_then(Value::as_array));
+                let rows = queue.get("rows").and_then(Value::as_array);
+                let token = rows_token(rows);
                 let body = format!("{count} {label}. {pointer}");
                 let verdict = verdict_label(notify_signal_via(
                     &path,
@@ -379,7 +382,7 @@ pub fn run_notify_watch(
                         &path,
                         now,
                         min_interval_s,
-                        queue,
+                        rows,
                         &mut acted,
                         &mut notes,
                         &mut |t, m| notify_operator_confirmed(t, m, Some("fno inbox outstanding")),
@@ -488,11 +491,11 @@ fn rows_token(rows: Option<&Vec<Value>>) -> String {
 fn due_rows(rows: &[Value], now: i64) -> Vec<(String, u64, String)> {
     let mut due: Vec<(String, u64, String)> = rows
         .iter()
-        .filter(|r| r.get("quiet").map(Value::is_null).unwrap_or(true))
+        .filter(|r| s_str(r, "quiet").is_none())
         .filter_map(|r| {
-            let id = r.get("id")?.as_str()?.to_string();
-            let ts = r.get("ts")?.as_str()?.to_string();
-            let question = r.get("question")?.as_str()?.to_string();
+            let id = s_str(r, "id")?.to_string();
+            let ts = s_str(r, "ts")?.to_string();
+            let question = s_str(r, "question")?.to_string();
             match crate::attention::quiet_from(&ts, None, None, now) {
                 crate::attention::Quiet::Due { epoch } => Some((id, epoch, question)),
                 _ => None,
@@ -535,30 +538,31 @@ fn due_body(due: &[(String, u64, String)]) -> String {
     body
 }
 
+/// The signal-store key of the due lane, at module scope so the tests can
+/// assert the forget without naming the string twice.
+const DUE_KEY: &str = "operator_question_due";
+
 /// The due re-delivery leg of the board lane. A question past its deadline
 /// sits silent in the row-set lane above (its rows never change), which is
 /// how filed asks vanished for days with no ruling. One notice per
 /// 24h window past the deadline, through the same dedupe state machine as
 /// every lane - the window count in the token is the whole cadence. An
-/// empty due set forgets the key like any cleared lane.
+/// empty due set (or an unreadable one) forgets the key like any cleared
+/// lane. The rows arrive read: the caller already lifted them off the
+/// queue for the row-set token.
 fn due_pass(
     path: &Path,
     now: u64,
     min_interval_s: u64,
-    queue: &Value,
+    rows: Option<&Vec<Value>>,
     acted: &mut u64,
     notes: &mut Vec<String>,
     send: &mut dyn FnMut(&str, &str) -> bool,
 ) {
-    const KEY: &str = "operator_question_due";
-    let Some(rows) = queue.get("rows").and_then(Value::as_array) else {
-        notes.push(format!("{KEY}:rows_absent"));
-        return;
-    };
-    let due = due_rows(rows, now as i64);
+    let due = rows.map(|r| due_rows(r, now as i64)).unwrap_or_default();
     if due.is_empty() {
-        forget_at(path, KEY);
-        notes.push(format!("{KEY}:clear"));
+        forget_at(path, DUE_KEY);
+        notes.push(format!("{DUE_KEY}:clear"));
         return;
     }
     let token = due_token(&due);
@@ -569,7 +573,7 @@ fn due_pass(
         path,
         now,
         min_interval_s,
-        KEY,
+        DUE_KEY,
         &token,
         TITLE,
         &body,
@@ -577,7 +581,7 @@ fn due_pass(
         || send(TITLE, &body),
     ));
     *acted += u64::from(verdict == "sent");
-    notes.push(format!("{KEY}:{verdict}"));
+    notes.push(format!("{DUE_KEY}:{verdict}"));
 }
 
 /// Fold the shared reader's classified main-CI conclusion into
@@ -1065,12 +1069,11 @@ mod tests {
     }
 
     #[test]
-    fn due_pass_sends_once_dedupes_then_refires_per_window() {
+    fn due_pass_sends_three_phase_contract() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let path = temp_path("due-pass");
-        let now = 1_000_000;
-        let row = || json!({"id": "D3634", "ts": ts_rfc3339(now - 3 * 86_400), "question": "vanished ask"});
-        let queue_with = |rows: Value| json!({"name": "operator_question", "rows": rows});
+        let now = 1_000_000u64;
+        let row = || json!({"id": "D3634", "ts": ts_rfc3339(now as i64 - 3 * 86_400), "question": "vanished ask"});
         let mut sends: u32 = 0;
         let mut send = |_: &str, _: &str| {
             sends += 1;
@@ -1078,74 +1081,62 @@ mod tests {
         };
         let mut acted = 0u64;
         let mut notes: Vec<String> = Vec::new();
+        let rows = vec![row()];
+        let empty: Vec<Value> = Vec::new();
 
         // Day one: the first overdue window sends.
         due_pass(
             &path,
             now,
             0,
-            &queue_with(json!(vec![row()])),
+            Some(&rows),
             &mut acted,
             &mut notes,
             &mut send,
         );
         assert_eq!(sends, 1, "first window sends");
-        assert!(
-            notes.contains(&"operator_question_due:sent".to_string()),
-            "{notes:?}"
-        );
+        assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
 
         // A re-read of the same state stays quiet.
         due_pass(
             &path,
             now,
             0,
-            &queue_with(json!(vec![row()])),
+            Some(&rows),
             &mut acted,
             &mut notes,
             &mut send,
         );
         assert_eq!(sends, 1, "same state dedupes");
-        assert!(
-            notes.contains(&"operator_question_due:deduped".to_string()),
-            "{notes:?}"
-        );
+        assert!(notes.contains(&format!("{DUE_KEY}:deduped")), "{notes:?}");
 
         // The next window is new state: it re-fires. This is the ladder.
         due_pass(
             &path,
             now + 86_400,
             0,
-            &queue_with(json!(vec![row()])),
+            Some(&rows),
             &mut acted,
             &mut notes,
             &mut send,
         );
         assert_eq!(sends, 2, "next window re-fires");
-        assert!(
-            notes.contains(&"operator_question_due:sent".to_string()),
-            "{notes:?}"
-        );
+        assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
 
-        // An answer empties the set: the lane forgets its key.
+        // An answer empties the set: the clear note lands and the key is
+        // forgotten, so a future due set starts from a clean state.
         due_pass(
             &path,
             now + 86_400,
             0,
-            &queue_with(json!(vec![])),
+            Some(&empty),
             &mut acted,
             &mut notes,
             &mut send,
         );
         assert_eq!(sends, 2);
-        assert!(
-            notes.contains(&"operator_question_due:clear".to_string()),
-            "{notes:?}"
-        );
-        assert!(
-            load_store(&path).get("operator_question_due").is_none(),
-            "key forgotten"
-        );
+        assert!(notes.contains(&format!("{DUE_KEY}:clear")), "{notes:?}");
+        assert!(load_store(&path).get(DUE_KEY).is_none(), "key forgotten");
         std::fs::remove_file(&path).ok();
     }
 }

@@ -1423,7 +1423,7 @@ fn question_rows(outstanding: &Map<String, Value>) -> Vec<Value> {
                         // notify_watch due lane reads exactly this stamp,
                         // so a snoozed or pre-deadline question never
                         // re-fires it.
-                        "quiet": r.get("quiet")
+                        "quiet": s_str(r, "quiet")
                     })
                 })
                 .collect()
