@@ -2445,6 +2445,40 @@ impl Root {
         cx.notify();
     }
 
+    /// The composer's add-project row: register the picked folder in the
+    /// config off the UI loop, then open a workspace for it unless one already
+    /// roots there.
+    pub(super) fn add_picked_project(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.launch.state.unlisted_project().map(str::to_string) else {
+            return;
+        };
+        let rooted = self.layout.squads.iter().any(|s| s.canonical_cwd == path);
+        cx.spawn(async move |this, cx| {
+            let added = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { fno::app_api::client::agent_launcher::add_project(&path) }
+                })
+                .await;
+            this.update(cx, |root, cx| match added {
+                Ok(project) => {
+                    if !rooted {
+                        root.send(ClientMsg::Command(Command::NewSquad {
+                            name: project.name.clone(),
+                            origin: Some(project.path.clone()),
+                        }));
+                    }
+                    root.launch.state.refresh_projects(&root.layout);
+                    root.say(format!("added project {}", project.name), cx);
+                }
+                Err(why) => root.say(format!("refused: {why}"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Run `fno-agent` off the UI loop and say how it ended.
     fn run_agent_tool(&mut self, argv: Vec<String>, done: String, cx: &mut Context<Self>) {
         let bin = fno::app_api::digest_overlay::fno_agent_bin();
