@@ -173,6 +173,8 @@ pub(crate) struct StatusParkTail {
     pub(crate) pr_state: Option<String>,
     #[serde(default, deserialize_with = "opt_bool")]
     pub(crate) draft: Option<bool>,
+    #[serde(default, deserialize_with = "opt_string")]
+    pub(crate) title: Option<String>,
 }
 
 /// The assembled pr_json projection every downstream reader consumes. The
