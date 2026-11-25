@@ -584,13 +584,20 @@ pub(crate) fn events_journal() -> PathBuf {
 /// The trailing dash normalizes here, once.
 pub fn node_id_prefix(repo_root: &Path) -> Result<String, PrefixError> {
     let merged = merged_config(&resolve_lenient(repo_root)).map_err(PrefixError)?;
-    let raw = merged
+    let raw = match merged
         .get("backlog")
         .and_then(Value::as_object)
         .and_then(|b| b.get("id_prefix"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(crate::backlog::settings::DEFAULT_NODE_ID_PREFIX);
+    {
+        Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+        // Absent, explicit null, or an explicit empty string: the key does
+        // not configure a prefix here; the documented default applies.
+        None | Some(Value::Null) | Some(Value::String(_)) => {
+            crate::backlog::settings::DEFAULT_NODE_ID_PREFIX
+        }
+        // A present value of any other type is a misconfiguration: refuse.
+        Some(_) => return Err(PrefixError("backlog.id_prefix is not a string".to_string())),
+    };
     let trimmed = raw.trim_end_matches('-');
     if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
         return Err(PrefixError(format!(

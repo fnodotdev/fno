@@ -131,14 +131,20 @@ pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, 
             continue;
         }
         let doc = read_flat_result(path)?;
-        let prefix = doc
-            .get("backlog")
-            .and_then(|b| b.get("id_prefix"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if prefix.is_empty() {
-            continue;
-        }
+        let prefix = match doc.get("backlog").and_then(|b| b.get("id_prefix")) {
+            Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+            // Absent, explicit null, or an explicit empty string: the key
+            // does not configure a prefix here.
+            None | Some(Value::Null) | Some(Value::String(_)) => continue,
+            // A present value of any other type is a misconfiguration: the
+            // user wrote a prefix and none applies. Refuse, never default.
+            Some(_) => {
+                return Err(PrefixError(format!(
+                    "backlog.id_prefix in {} is not a string",
+                    path.display()
+                )))
+            }
+        };
         let trimmed = prefix.trim_end_matches('-');
         if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
             return Err(PrefixError(format!(
@@ -924,6 +930,14 @@ mod tests {
         std::fs::write(&cfg, "backlog.id_prefix = [ not toml").unwrap();
         let err = resolved_node_id_prefix_over(&[cfg]).unwrap_err();
         assert!(err.0.contains("broken.toml"), "{err}");
+    }
+
+    #[test]
+    fn a_non_string_prefix_value_refuses_instead_of_defaulting() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("wrong-type.toml");
+        std::fs::write(&cfg, "backlog.id_prefix = 123\n").unwrap();
+        assert!(resolved_node_id_prefix_over(&[cfg]).is_err());
     }
 
     #[test]
