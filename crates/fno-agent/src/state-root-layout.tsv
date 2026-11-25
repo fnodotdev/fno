@@ -203,7 +203,7 @@ squads.json.tmp.*	-	park	mux
 # Recovery copy rides beside the ledger it recovers (marker: new wins,
 # the legacy root copy parks).
 ledger.json.bak	db/history/ledger.json.bak	marker	daemon
-# keep - the categories (D2070, d-c74fda50) plus backups, the park base.
+# keep - the categories (D2070) plus backups, the park base.
 agents	agents	keep	daemon
 backups	backups	keep	daemon
 cache	cache	keep	daemon
@@ -234,7 +234,7 @@ questions.jsonl	questions.jsonl	keep	daemon
 decisions.jsonl	decisions.jsonl	keep	daemon
 posture.json	posture.json	keep	daemon
 claims	claims	keep	daemon
-# keep - folders whose home waits on the user's folder-set answer (x-7cce),
+# keep - folders whose home waits on the user's folder-set answer (D3581),
 # and worktrees, whose live checkouts never move.
 profile	profile	keep	daemon
 projects	projects	keep	daemon
