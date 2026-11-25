@@ -1569,8 +1569,10 @@ fn unreachable_notice(unreachable: &[tab_prune::UnreachableSession]) -> String {
 }
 
 /// `fno mux workspace prune [--dry-run] [--include-named] [--tabs-only]
-/// [--dead-only] [--include-used-shells] [--json]`: remove squads
+/// [--dead-only] [--include-used-shells] [--shot-pins] [--json]`: remove squads
 /// whose every recorded origin is gone and which host no live member or pane.
+/// `--shot-pins` limits the removal to the `fno-shot-pin-*` workspaces
+/// screenshot runs leave behind, and skips the tab fold.
 /// Named squads require `--include-named`. The predicate is
 /// re-evaluated under the store lock against fresh fs state, and the receipt is
 /// built from the locked closure's actual removals - never the pre-lock
