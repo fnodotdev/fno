@@ -572,3 +572,21 @@ fn every_row_reads_as_a_line_a_person_can_follow() {
         );
     }
 }
+
+#[test]
+fn the_pin_answer_emits_the_installation_row() {
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    state
+        .answers
+        .insert("github-app", Answer::Text("99".into()));
+    state
+        .answers
+        .insert("github-app-pin", Answer::Text("7".into()));
+    let rows = pending(&state);
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "github.app_id" && r.value == "99"));
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "github.app_installation_id" && r.value == "7"));
+}

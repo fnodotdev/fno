@@ -2601,11 +2601,11 @@ pub(crate) fn apply_wizard_pending(
                 }
             }
             "github-app" => {
-                let pairs = [("github.app_id", p.value.as_str())];
+                let pairs = [(p.key.as_str(), p.value.as_str())];
                 match config_set(exe, &pairs, false) {
                     Ok(path) => {
                         rep.done
-                            .push(format!("github-app: github.app_id = {}", p.value));
+                            .push(format!("github-app: {} = {}", p.key, p.value));
                         rep.paths.push(path.display().to_string());
                     }
                     Err(e) => {

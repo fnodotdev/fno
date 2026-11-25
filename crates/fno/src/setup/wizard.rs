@@ -966,11 +966,14 @@ fn screen_github_app(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> O
     Outcome::Forward
 }
 
-/// How the launcher round-trip ended. `Created` carries only the public
-/// App id; the pem never leaves the flow module and the paste code never
-/// enters state.
+/// How the launcher round-trip ended. `Created` carries the public App id
+/// and, when the person pasted one, the installation id to pin; the pem
+/// never leaves the flow module and the paste code never enters state.
 pub(crate) enum RoundTrip {
-    Created { app_id: String },
+    Created {
+        app_id: String,
+        installation_pin: Option<String>,
+    },
     Back,
     Cancel,
     Refused,
@@ -1061,8 +1064,26 @@ pub(crate) fn github_app_round_trip(pr: &mut dyn Prompter) -> RoundTrip {
             conversion.slug, conversion.slug
         ),
     );
+    // The optional pin: after installing, the completion URL ends in the
+    // installation id. Owner match already works, so a Back, Cancel or
+    // empty answer here keeps the created App and skips only the pin.
+    let installation_pin = match pr.secret(
+        "github-app",
+        "Optional: after installing, paste the installation id the install page ends in (Enter skips)",
+    ) {
+        Hidden::Value(paste) => {
+            let paste = paste.trim().to_string();
+            if paste.is_empty() {
+                None
+            } else {
+                Some(paste)
+            }
+        }
+        _ => None,
+    };
     RoundTrip::Created {
         app_id: conversion.app_id,
+        installation_pin,
     }
 }
 
@@ -1764,6 +1785,16 @@ pub fn pending(state: &State) -> Vec<Proposal> {
             value: app_id.clone(),
             scope: "global",
             reason: "the fleet App this run created".into(),
+            source: "wizard",
+        });
+    }
+    if let Some(Answer::Text(pin)) = state.answers.get("github-app-pin") {
+        rows.push(Proposal {
+            id: "github-app",
+            key: "github.app_installation_id".into(),
+            value: pin.clone(),
+            scope: "global",
+            reason: "the installation id this run pinned".into(),
             source: "wizard",
         });
     }

@@ -1236,10 +1236,18 @@ fn run_inner(tail: &[OsString], quiet_cancel: bool) -> i32 {
     // redirect code is a credential and the screen walk never reads a secret.
     if let Some(wizard::Answer::Yes) = state.answers.get("github-app") {
         match wizard::github_app_round_trip(&mut pr) {
-            wizard::RoundTrip::Created { app_id } => {
+            wizard::RoundTrip::Created {
+                app_id,
+                installation_pin,
+            } => {
                 state
                     .answers
                     .insert("github-app", wizard::Answer::Text(app_id));
+                if let Some(pin) = installation_pin {
+                    state
+                        .answers
+                        .insert("github-app-pin", wizard::Answer::Text(pin));
+                }
             }
             _ => {
                 state.answers.insert("github-app", wizard::Answer::No);
