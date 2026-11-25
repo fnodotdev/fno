@@ -138,7 +138,10 @@ pub fn add_project(path: &str) -> Result<ConfigProject, AddProjectError> {
         .args(["config", "set"])
         .arg(format!("{ADD_KEY}={value}"))
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|child| child.wait_with_output())
         .map_err(|e| AddProjectError(format!("fno config set: {e}")))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr);
@@ -158,7 +161,10 @@ fn toplevel(path: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["-C", path, "rev-parse", "--show-toplevel"])
         .stdin(std::process::Stdio::null())
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|child| child.wait_with_output())
         .ok()?;
     let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !top.is_empty()).then_some(top)
@@ -171,11 +177,12 @@ mod tests {
     fn flat(text: &str) -> BTreeMap<String, toml::Value> {
         let table: toml::Table = toml::from_str(text).expect("fixture parses");
         let mut out = BTreeMap::new();
-        for (group, entry) in table["work"]["workspaces"].as_table().expect("groups") {
-            out.insert(
-                format!("work.workspaces.{group}.projects"),
-                entry["projects"].clone(),
-            );
+        for (group, entry) in table {
+            if let toml::Value::Table(rows) = entry {
+                for (key, value) in rows {
+                    out.insert(format!("work.workspaces.{group}.{key}"), value);
+                }
+            }
         }
         out
     }
@@ -183,8 +190,8 @@ mod tests {
     #[test]
     fn projects_read_across_groups_with_derived_ids() {
         let map = flat(
-            "[work.workspaces.main]\nprojects = [{ name = \"Foot Note\", path = \"/a\" }, { name = \"x\" }]\n\
-             [work.workspaces.me]\nprojects = [{ path = \"/b/.claude\" }, { name = \"dup\", path = \"/a\" }]\n",
+            "[main]\nprojects = [{ name = \"Foot Note\", path = \"/a\" }, { name = \"x\" }]\n\
+             [me]\nprojects = [{ path = \"/b/.side\" }, { name = \"dup\", path = \"/a\" }]\n",
         );
         let got = projects_from(&map);
         let seen: Vec<(&str, &str, &str)> = got
@@ -195,7 +202,7 @@ mod tests {
             seen,
             [
                 ("foot-note", "Foot Note", "/a"),
-                ("claude", ".claude", "/b/.claude")
+                ("side", ".side", "/b/.side")
             ]
         );
     }
