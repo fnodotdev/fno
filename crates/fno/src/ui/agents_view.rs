@@ -3756,7 +3756,7 @@ unheard_of_field = true
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert!(
             names.contains(&"eval-once"),
-            "a headless run paints as its own kind, not dropped"
+            "the reader keeps a headless run, though the sideline shows no row for it"
         );
         let done = rows.iter().find(|r| r.name == "eval-done").unwrap();
         assert!(done.exited);

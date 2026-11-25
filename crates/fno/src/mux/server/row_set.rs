@@ -590,7 +590,11 @@ impl Core {
 
         // 2. Watch-only appendix: registry rows no pane claimed.
         for (i, a) in self.agents.iter().enumerate() {
-            if consumed[i] {
+            // Only a session a person can type into gets a sideline row. A
+            // headless run shows in the shell that started it, and its
+            // registry row stays: the session id, events and HQ lines are
+            // read by name, not through a row.
+            if consumed[i] || a.substrate.as_deref() == Some("headless") {
                 continue;
             }
             match &a.mux {
@@ -711,7 +715,7 @@ impl Core {
                     })
                 }
                 None => {
-                    // Truly paneless (bg/headless/daemon/roster). Its attach map
+                    // Truly paneless (bg/daemon/roster). Its attach map
                     // pointed at no live pane (else a pane row claimed it), so it
                     // stays watch-only attachable - the AC1-FR revert.
                     // Never a mission squad: that id names a render-time header

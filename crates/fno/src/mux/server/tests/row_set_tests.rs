@@ -118,6 +118,21 @@ fn paneless_row_with_no_parent_edge_stays_orphaned_but_emitted() {
     ));
 }
 
+// Only a session a person can type into gets a sideline row. A headless run
+// keeps its registry row and shows in the shell that started it, so the row
+// set emits none of it. A paneless thread row still has its row.
+#[test]
+fn a_headless_row_stays_off_the_sideline() {
+    let mut core = empty_core();
+    core.session_name = "main".into();
+    let mut once = bg_row("eval-once", "/w", None);
+    once.substrate = Some("headless".into());
+    let thread = bg_row("think-thread", "/w", None);
+    core.agents = vec![once, thread];
+    let names: Vec<&str> = core.agent_rows().iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["think-thread"]);
+}
+
 // An edge naming a session no registry row holds resolves nothing: the row
 // stays orphaned rather than cycling or guessing.
 #[test]
