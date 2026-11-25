@@ -286,11 +286,11 @@ impl Seat {
         }
     }
 
-    /// The `(rows, cols)` the attach carries.
+    /// The `(rows, cols)` the attach carries. A driver keeps the shot's old pair.
     pub fn dims(self) -> (u16, u16) {
         match self {
             Seat::Observer => (0, 0),
-            Seat::Driver => (24, 80),
+            Seat::Driver => (80, 24),
         }
     }
 }
