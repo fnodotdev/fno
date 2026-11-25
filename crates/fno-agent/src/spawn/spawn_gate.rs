@@ -97,6 +97,35 @@ pub const EXIT_OPEN_PR_CAP: i32 = 94;
 /// A team's known metered model spend has reached `budget.team.cost_cap_usd`.
 pub const EXIT_TEAM_COST_CAP: i32 = 95;
 
+/// The class word an exit code carries when a refusal arrives with no axis
+/// or reason of its own: the verdict line's last fallback, so a bare exit
+/// never prints the literal `unknown`. An exit outside this table still
+/// reads `unknown`. Contract: docs/architecture/spawn-gate.md (Reading a
+/// refusal).
+fn exit_class(exit_code: i32) -> &'static str {
+    match exit_code {
+        EXIT_QUEUE_TIMEOUT => "queue-timeout",
+        EXIT_NO_WAIT => "no-wait",
+        EXIT_RAM_REFUSED => "ram",
+        EXIT_PROVIDER_CAP => "provider-cap",
+        EXIT_LOAD_REFUSED => "load",
+        EXIT_LEAD_SHARE => "lead-share",
+        EXIT_REGISTRY_SCHEMA => "registry-schema",
+        EXIT_FLEET_STOP => "fleet-stop",
+        EXIT_FLEET_STOP_UNAVAILABLE => "fleet-stop-unavailable",
+        EXIT_STATE_ROOT_UNGRANTED => "state-root-ungranted",
+        EXIT_TERRITORY_CAP => "territory-cap",
+        EXIT_BLUEPRINT_CAP => "blueprint-cap",
+        EXIT_GATE_UNAVAILABLE => "gate-unavailable",
+        EXIT_REVIEW_SESSION => "review-session",
+        EXIT_NODE_OCCUPIED => "node-occupied",
+        EXIT_RULE_REFUSED => "rule-refused",
+        EXIT_OPEN_PR_CAP => "open-pr-cap",
+        EXIT_TEAM_COST_CAP => "team-cost-cap",
+        _ => "unknown",
+    }
+}
+
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
 /// readers (`crates/fno/src/ui/dispatch_launch.rs refusal_detail`, and the
@@ -144,7 +173,8 @@ impl Refusal {
 
 /// The one-line verdict every refusal ends with: `spawn-gate: refused on
 /// <axis> (<reason>, exit <code>): <figures>`. The axis prefers the event's
-/// explicit axis, then the receipt's axis/held_on/reason; the figures are
+/// explicit axis, then the receipt's axis/held_on/reason, then the exit
+/// code's class word (`exit_class`); the figures are
 /// the receipt's scalar fields in key order (serde_json `preserve_order`),
 /// skipping the words already named. Contract:
 /// docs/architecture/spawn-gate.md (Reading a refusal).
@@ -156,7 +186,7 @@ fn refusal_axis(r: &Refusal) -> &str {
         .or_else(|| rc_str("held_on"))
         .or_else(|| rc_str("reason"))
         .or_else(|| ev_str("reason"))
-        .unwrap_or("unknown")
+        .unwrap_or_else(|| exit_class(r.exit_code))
 }
 
 fn refusal_reason(r: &Refusal) -> &str {
@@ -165,7 +195,7 @@ fn refusal_reason(r: &Refusal) -> &str {
         .and_then(|v| v.get("reason"))
         .and_then(serde_json::Value::as_str)
         .or_else(|| r.event.get("reason").and_then(serde_json::Value::as_str))
-        .unwrap_or("unknown")
+        .unwrap_or_else(|| exit_class(r.exit_code))
 }
 
 pub(crate) fn verdict_line(r: &Refusal) -> String {
@@ -3341,10 +3371,16 @@ mod tests {
             "spawn-gate: refused on territory (territory_cap, exit 86): territory=team-x, count=3, current_count=3, max_live_per_territory=3"
         );
 
-        let refusal = Refusal::code(82);
+        let refusal = Refusal::code(EXIT_FLEET_STOP);
         assert_eq!(
             verdict_line(&refusal),
-            "spawn-gate: refused on unknown (unknown, exit 82)"
+            "spawn-gate: refused on fleet-stop (fleet-stop, exit 82)"
+        );
+
+        let refusal = Refusal::code(42);
+        assert_eq!(
+            verdict_line(&refusal),
+            "spawn-gate: refused on unknown (unknown, exit 42)"
         );
 
         let refusal = Refusal::code(EXIT_LEAD_SHARE)
