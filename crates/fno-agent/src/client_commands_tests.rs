@@ -167,5 +167,6 @@ fn a_heal_of_a_law_refused_session_resolves_without_persisting() {
     );
     let registry = crate::state::load_registry(&registry_path).unwrap();
     assert_eq!(registry.entries.len(), 1);
-    assert_eq!(registry.entries[0].origin.as_deref(), Some("adopted"));
+    let origin = registry.entries.first().and_then(|e| e.origin.as_deref());
+    assert_eq!(origin, Some("adopted"));
 }

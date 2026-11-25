@@ -316,7 +316,11 @@ pub(crate) fn handle_session_report(
     // The `spawn` word is the law read's strongest cause: fleet work from
     // birth (user law D2402).
     if launch_record.is_some() || agent_self.is_some() {
-        let _ = crate::join_marker::write_marker(home.root(), &harness, &session_id, "spawn");
+        if let Err(err) =
+            crate::join_marker::write_marker(home.root(), &harness, &session_id, "spawn")
+        {
+            eprintln!("fno: spawn birth join marker write failed: {err}");
+        }
     }
 
     // A headless one-shot touches no row: not a mint, and not a stamp on an
