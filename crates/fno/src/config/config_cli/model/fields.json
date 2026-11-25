@@ -1000,6 +1000,10 @@
     {
      "name": "working_hours",
      "default": null
+    },
+    {
+     "name": "auto_approve_routine",
+     "default": false
     }
    ]
   },
@@ -3572,6 +3576,7 @@
   "user.favorite_skills",
   "user.timezone",
   "user.working_hours",
+  "user.auto_approve_routine",
   "join.sandbox",
   "sandbox.on_unavailable",
   "sandbox.provider",

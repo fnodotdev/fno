@@ -3771,6 +3771,11 @@
    "UserBlock": {
     "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state; the native birth read (backlog/birth.rs\n``display_name``) falls back to ``git config user.name`` so a fresh\ninstall already says something better than a role noun.",
     "properties": {
+     "auto_approve_routine": {
+      "default": false,
+      "title": "Auto Approve Routine",
+      "type": "boolean"
+     },
      "favorite_skills": {
       "items": {
        "type": "string"
@@ -4781,6 +4786,17 @@
    "default_source": "",
    "doc": "When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.",
    "edit": "editor"
+  },
+  {
+   "path": "user.auto_approve_routine",
+   "label": "Auto approve routine",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Auto-approve routine worker actions: while true, a worker's file edits in its own worktree, job folder and plan folder, and its entry to its own worktree, raise no prompt. Off by default. Turn it on with `fno config set user.auto_approve_routine true`, or ask your lead.",
+   "edit": "toggle"
   },
   {
    "path": "sandbox.on_unavailable",

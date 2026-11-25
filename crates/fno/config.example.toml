@@ -107,6 +107,8 @@ favorite_skills = []
 timezone = ""
 # When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.
 # working_hours = <unset>   # optional; no default
+# Auto-approve routine worker actions: while true, a worker's file edits in its own worktree, job folder and plan folder, and its entry to its own worktree, raise no prompt. Off by default. Turn it on with `fno config set user.auto_approve_routine true`, or ask your lead.
+auto_approve_routine = false
 
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
