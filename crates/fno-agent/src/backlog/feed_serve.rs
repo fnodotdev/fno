@@ -49,7 +49,14 @@ fn start_read(home: &AgentsHome) -> Option<Read> {
         .ok()?;
     let mut out = std::io::BufReader::new(child.stdout.take()?);
     if out.fill_buf().map(<[u8]>::is_empty).unwrap_or(true) {
-        let _ = child.wait();
+        match child.wait() {
+            Ok(status) => eprintln!(
+                "fno-agent feed --serve: the child read printed nothing and exited {status}"
+            ),
+            Err(e) => {
+                eprintln!("fno-agent feed --serve: the child read could not be waited on: {e}")
+            }
+        }
         return None;
     }
     Some(Read { child, out })
@@ -62,7 +69,14 @@ fn finish_read(read: Read) -> Option<Vec<FeedItem>> {
     let rows = serde_json::from_reader::<_, Vec<FeedItem>>(out).ok();
     match child.wait() {
         Ok(status) if status.success() => rows,
-        _ => None,
+        Ok(status) => {
+            eprintln!("fno-agent feed --serve: the child read exited {status}");
+            None
+        }
+        Err(e) => {
+            eprintln!("fno-agent feed --serve: the child read could not be waited on: {e}");
+            None
+        }
     }
 }
 
@@ -81,6 +95,7 @@ fn swap_in(
         Ok(slot) => slot,
         Err(poisoned) => poisoned.into_inner(),
     };
+    let locked_at = std::time::Instant::now();
     *slot = Arc::new(Held {
         items: Vec::new(),
         stamp,
@@ -88,7 +103,12 @@ fn swap_in(
     let parsed = parse();
     let ok = parsed.is_some();
     let items = parsed.unwrap_or_default();
+    let rows = items.len();
     *slot = Arc::new(Held { items, stamp });
+    eprintln!(
+        "fno-agent feed --serve: refresh held the lock {} ms for {rows} rows",
+        locked_at.elapsed().as_millis()
+    );
     ok
 }
 
