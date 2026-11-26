@@ -76,7 +76,7 @@ What the loop prompt runs every interval and what you run by hand at any time.
 
 One command runs the body: `fno agent hq checkin`. It gathers every reading below, prints them in a fixed order, diffs the previous canonical beat, and journals the `lead_checkin` row itself from the same numbers it printed. It never decides: no lever fires from it, and the levers stay yours. Refresh the canon doc first, so the command reads this beat's doc.
 
-Name the role at the first beat with `fno agent hq checkin --name redraw`, and run `fno agent hq refresh-canon` every beat. Paste the `lineup:` table as printed in every status update. The per-line output contract and its procedures: [references/check-in.md](references/check-in.md).
+Name the role at the first beat with `fno agent hq checkin --name redraw`. An L0 or L2 lead also passes `--theme <theme>` on that first check-in, or it refuses. Run `fno agent hq refresh-canon` every beat. Paste the `lineup:` table as printed in every status update. The per-line output contract and its procedures: [references/check-in.md](references/check-in.md).
 
 State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
 
