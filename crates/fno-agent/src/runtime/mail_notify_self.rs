@@ -60,7 +60,7 @@ pub(crate) fn notify_to(bus_dir: &Path, session: &str, out: &mut impl std::io::W
     // Python body. The scan is outbox-shaped and early-returns before any
     // transcript read when nothing is unclaimed, so the no-mail path of a
     // session that only reads never pays for it.
-    if let Some(line) = crate::mail_cli::sent::nag_line(bus_dir, &handle) {
+    if let Some(line) = crate::mail_sent_env::nag_line(bus_dir, &handle) {
         pending.lines.push(line);
     }
     if pending.lines.is_empty() {
