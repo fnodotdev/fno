@@ -47,6 +47,23 @@
         "statusline",
         "mod"
       ]
+    },
+    {
+      "name": "fno-table",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/fnodotdev/fno.git",
+        "path": "plugins/fno-table",
+        "ref": "main"
+      },
+      "description": "A table of your fno fleet and backlog inside Claude Code. /fno, with keys to spawn, target, join, peek, or open in the mux.",
+      "category": "productivity",
+      "tags": [
+        "fno",
+        "fleet",
+        "backlog",
+        "mod"
+      ]
     }
   ]
 }
