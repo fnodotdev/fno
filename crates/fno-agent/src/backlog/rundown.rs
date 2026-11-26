@@ -872,11 +872,26 @@ pub struct Arm {
 /// does not read. Returns the page path
 /// the child named, so a tick can never call the wrong file rendered.
 fn run_ledger() -> Result<String, String> {
-    let output = std::process::Command::new(crate::scrape::fno_bin())
-        .args(crate::door_argv::TEAM_LEDGER)
-        .stdin(std::process::Stdio::null())
-        .output()
+    run_ledger_within(crate::bounded_cmd::load_scaled_budget_s(
+        LEDGER_BUDGET_FLOOR_S,
+        LEDGER_BUDGET_CAP_S,
+    ))
+}
+
+/// The render child runs under a wall budget. An unbounded `output()` let a
+/// child parked on the graph store hold the arm's one-in-flight gate for
+/// hours, so no tick ran again. The cap stays under the 300 s beat.
+const LEDGER_BUDGET_FLOOR_S: u64 = 60;
+const LEDGER_BUDGET_CAP_S: u64 = 240;
+
+fn run_ledger_within(budget_s: u64) -> Result<String, String> {
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    cmd.args(crate::door_argv::TEAM_LEDGER);
+    let output = crate::bounded_cmd::output_with_timeout_result(cmd, budget_s)
         .map_err(|e| format!("spawn: {e}"))?;
+    if output.status.code().is_none() {
+        return Err(format!("render killed after {budget_s}s budget"));
+    }
     if !output.status.success() {
         let last = output
             .stderr
@@ -1649,6 +1664,26 @@ mod tests {
             crate::door_argv::TEAM_LEDGER,
             "the arm's spawned argv must equal the door_argv table row"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_render_that_outlives_its_budget_is_killed_and_reads_as_an_error() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_bin = std::env::var_os("FNO_BIN");
+        let dir = tempfile::tempdir().unwrap();
+        let stub = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\nsleep 30\n");
+        std::env::set_var("FNO_BIN", &stub);
+        let started = std::time::Instant::now();
+        let run = run_ledger_within(1);
+        match prior_bin {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        assert!(started.elapsed().as_secs() < 20, "the stall was not cut");
+        assert!(run.unwrap_err().contains("killed after 1s"));
     }
 
     #[test]
