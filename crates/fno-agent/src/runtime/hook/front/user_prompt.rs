@@ -204,30 +204,23 @@ fn frontdoor_nudge(_args: &[String]) -> i32 {
         }
         return 0;
     }
-    // The notice starts nothing; the marker caps the repeat per version.
-    super::emit_raw(&install_notice(&root.join(".claude-plugin/postinstall.sh")));
-    let _ = fs::create_dir_all(&data);
-    if let Some(v) = &version {
-        let _ = fs::write(&marker, v);
+    // The notice is frontdoor-nudge-session-start.sh, the one copy: hosts
+    // with no fno-agent run it directly. It starts nothing; the marker caps
+    // the repeat per version.
+    let mut cmd = Command::new("bash");
+    cmd.arg(root.join("hooks/frontdoor-nudge-session-start.sh"));
+    let out = super::bounded(cmd, None, 5)
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let out = out.trim_end_matches('\n');
+    if !out.is_empty() {
+        super::emit_raw(out);
+        let _ = fs::create_dir_all(&data);
+        if let Some(v) = &version {
+            let _ = fs::write(&marker, v);
+        }
     }
     0
-}
-
-/// frontdoor-nudge-session-start.sh's answer when no `fno` resolves at all
-/// (its probe and drift branches need one): the consent notice, or the note
-/// that the plugin tree carries no installer. That script stays shell for the
-/// hosts that run it with no fno-agent; keep the two texts in step.
-fn install_notice(installer: &Path) -> String {
-    let present = installer.is_file();
-    let installer = installer.display();
-    if !present {
-        return format!(
-            "## fno is not installed, and the plugin tree carries no installer\n\nExpected the installer at `{installer}` but it is missing; reinstall the footnote plugin. Until `fno` is installed, commands that shell out to `fno` fail."
-        );
-    }
-    format!(
-        "## Install the fno CLI? Ask the user first\n\n`fno` (the footnote CLI) is not installed on this machine. The plugin ships an installer, but nothing runs it without the user's explicit yes.\n\nWhat the installer does: it downloads the fno release tarball from GitHub Releases, verifies its sha256, installs the binaries into `~/.fno/install/bin`, and links them into `~/.local/bin`. It touches nothing else: no Python, no uv, and no shell profile edit.\n\nThe one command that runs the install: `bash {installer}`\n\nYou (the agent) must tell the user what it does, ask, and run it only on a yes - never unasked, never detached in the background. It takes a few minutes. Its output ends with `installer exit 0` on success; any other code on that final line means it failed.\n\nOn `installer exit 0`, do not send the user to a new session: run the `fno` command they asked about right here. Call `~/.local/bin/fno` when this session's PATH lacks `~/.local/bin`; bare `fno` works once PATH carries it. The installer edits no shell profile, so a fresh session reads nothing extra."
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -949,7 +942,8 @@ fn mail_miss(rc: i32, tail: &str) {
 fn mail_notify(_args: &[String]) -> i32 {
     // Past the overload threshold the read could die mid-ack; skipped mail
     // stays pending and delivers next turn.
-    if super::overloaded() || super::budget_secs() == 0 {
+    // A pack install drops the mux scripts, this one among them.
+    if !super::mux_profile() || super::overloaded() || super::budget_secs() == 0 {
         return 0;
     }
     // A door miss is a no-answer, never a guessed path: one row says so.
@@ -999,7 +993,8 @@ fn boundary_of(word: &str) -> crate::announce::Boundary {
 /// session through the reader's own cursor. `args[0]` is the boundary
 /// (default prompt); a SessionStart with `source: compact` reads as compact.
 fn announce(args: &[String]) -> i32 {
-    if super::overloaded() {
+    // A pack install drops the mux scripts, this one among them.
+    if !super::mux_profile() || super::overloaded() {
         return 0;
     }
     let (_, payload) = super::payload();
