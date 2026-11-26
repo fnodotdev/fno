@@ -2028,6 +2028,20 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     off.gh_output = "crates/fno/src/ui/client/theme.rs\n".to_string();
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
+    // A look the user was asked for holds in a repo with no paint paths too:
+    // a worker's hold for a docs-site UI change must not read as clear.
+    let bare_qdir = crate::escalation::questions_dir(&bare);
+    std::fs::create_dir_all(&bare_qdir).unwrap();
+    let bare_page = bare_qdir.join("q-xc129bare.md");
+    std::fs::write(
+        &bare_page,
+        "---\nquestion_id: q-xc129b\nstatus: open\ntitle: May PR 7 merge?\n---\n## Screens\n\nshots\n",
+    )
+    .unwrap();
+    let asked = crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head)
+        .expect("an open look ask holds without paint paths");
+    assert_eq!(asked.code, "visual_look_pending");
+    std::fs::remove_file(&bare_page).ok();
     // A checkout that carries the mux client arms the built-in paint list
     // with no config key: a stock footnote tree holds its own UI PRs, and a
     // config list cannot opt a client tree out.
