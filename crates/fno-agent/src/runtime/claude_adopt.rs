@@ -320,13 +320,19 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                 // observed nothing about the birth); a user-typed adopt
                 // upgrades it to `operator`, the origin the gc keeps
                 // (rev-2 scope, ruling d-79e0186b).
-                reg.entries[i].origin = if crate::claims::adopter_is_operator()
-                    && prev.spawned_by_session.as_deref().is_none_or(str::is_empty)
-                {
+                let prev_origin = prev.origin.clone();
+                let named_spawner = prev
+                    .spawned_by_session
+                    .as_deref()
+                    .is_some_and(|s| !s.is_empty());
+                reg.entries[i].origin = if crate::claims::adopter_is_operator() {
                     Some("operator".to_string())
                 } else {
                     prev.origin
                 };
+                if named_spawner {
+                    reg.entries[i].origin = prev_origin;
+                }
                 reg.entries[i].spawned_by_session = prev.spawned_by_session;
                 reg.entries[i].spawned_by_harness = prev.spawned_by_harness;
                 reg.entries[i].spawned_by_cwd = prev.spawned_by_cwd;
