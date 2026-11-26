@@ -5,8 +5,7 @@
 //! store it joins) is the child's and is gone when it exits. A thread reads
 //! again every 15 seconds. The old rows drop when the new rows start to
 //! stream, so two copies never coexist, and an answer waits only for that
-//! parse. The reader exits when its stdin closes, so it
-//! dies with the panel.
+//! parse. The reader exits when its stdin closes, so it dies with the panel.
 
 use crate::paths::AgentsHome;
 use fno_proto::feed::row::FeedItem;
@@ -102,7 +101,6 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
     fno_proto::feed::grammar::set_sequential_tail(super::node_ref::is_sequential_tail);
     let items = start_read(home).and_then(finish_read).unwrap_or_default();
     let held = Arc::new(RwLock::new(Arc::new(Held { items, stamp: 1 })));
-    crate::runtime::page_relief::relieve_now();
     {
         let held = Arc::clone(&held);
         let home = home.clone();
@@ -115,7 +113,6 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
                 };
                 stamp += 1;
                 swap_in(&held, stamp, || finish_read(read));
-                crate::runtime::page_relief::relieve_now();
             }
         });
     }

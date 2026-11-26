@@ -103,12 +103,6 @@ fn relief_pass() -> usize {
     0
 }
 
-/// Return the freed pages now, with no gate and no event: for a caller that
-/// just freed a known burst and wants its RSS to read its live use.
-pub fn relieve_now() -> usize {
-    relief_pass()
-}
-
 /// One gated relief: at most once per [`RELIEF_INTERVAL`], only above the
 /// resident threshold, counted and emitted so a RSS drop the meter reads is
 /// attributable.
