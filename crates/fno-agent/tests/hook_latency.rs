@@ -1748,6 +1748,12 @@ fn hook_chain_baseline_per_event() {
     chains.push(("UserPromptSubmit".into(), "UserPromptSubmit", "", prompt));
     let stop = stop_payload(VISITOR_SID, Some("Work continues."));
     chains.push(("Stop".into(), "Stop", "", stop));
+    let mut start = stop_payload(VISITOR_SID, None);
+    if let Some(fields) = start.as_object_mut() {
+        fields.insert("hook_event_name".into(), json!("SessionStart"));
+        fields.insert("source".into(), json!("startup"));
+    }
+    chains.push(("SessionStart".into(), "SessionStart", "", start));
 
     let n = sample_count().min(20);
     for (name, event, tool, payload) in &chains {

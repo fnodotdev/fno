@@ -37,6 +37,7 @@
     "hooks/frontdoor-nudge-prompt-submit.sh",
     "hooks/frontdoor-nudge-session-start.sh",
     "hooks/groom-self-heal-session-start.sh",
+    "hooks/hook-front.sh",
     "hooks/inject-fno-agent-whoami.sh",
     "hooks/inject-project-vision.sh",
     "hooks/join-partition-write-guard.sh",

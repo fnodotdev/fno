@@ -12,7 +12,6 @@
 
 use crate::harness::Harness;
 use serde_json::Value;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -43,14 +42,9 @@ pub fn run(args: &[String]) -> i32 {
         .and_then(|i| args.get(i + 1))
         .cloned();
     let sandbox_dirty = args.iter().any(|a| a == "--sandbox-dirty");
-    let mut payload = String::new();
-    if std::io::stdin().read_to_string(&mut payload).is_err() {
-        // An unreadable payload is not a verdict for an owner, but the shell
-        // treated it as an empty read and continued; with no identity, the
-        // ownership evaluation answers no-owner and the stop allows.
-        eprintln!("target stop-hook: unreadable payload; allowing");
-        return 0;
-    }
+    // An unreadable payload reads as empty: with no identity, the ownership
+    // evaluation answers no-owner and the stop allows.
+    let payload = super::read_stdin();
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
@@ -976,9 +970,9 @@ fn emit_block_for_harness(session_id: &str, reason: &str) -> i32 {
     ]
     .iter()
     .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
-    if claude && !foreign {
+    if (claude && !foreign) || super::capturing() {
         let out = serde_json::json!({ "decision": "block", "reason": reason });
-        println!("{out}");
+        super::emit_line(&out.to_string());
         return 0;
     }
     eprintln!("target stop-hook: {reason}");
