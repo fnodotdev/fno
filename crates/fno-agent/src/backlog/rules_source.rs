@@ -1490,7 +1490,14 @@ mod tests {
             damaged: 0,
         };
         let set = assemble(Path::new("/"), laws, &BTreeMap::new(), Vec::new()).expect("builds");
-        let ids: Vec<&str> = set.rules.iter().map(|r| r.id.as_str()).collect();
+        // The shipped table rides every assembly; this law's rules are the
+        // ones that carry its id.
+        let ours: Vec<crate::rules::Rule> = set
+            .rules
+            .into_iter()
+            .filter(|r| r.law.as_deref() == Some("d-0000a7a7"))
+            .collect();
+        let ids: Vec<&str> = ours.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             ids,
             ["law-d-0000a7a7", "law-d-0000a7a7-at", "law-d-0000a7a7-door"],
@@ -1498,7 +1505,7 @@ mod tests {
         );
         let today = chrono::Local::now().date_naive();
         let fired = |ev: &crate::rules::Event| -> Vec<String> {
-            crate::rules::decide(&set.rules, ev, today)
+            crate::rules::decide(&ours, ev, today)
                 .fires
                 .into_iter()
                 .map(|f| f.rule)
