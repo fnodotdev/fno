@@ -114,15 +114,47 @@ impl Tail {
 /// The timeout a tool call declares, in milliseconds. Claude `input.timeout`
 /// and Codex `timeout_ms` both carry it; a call that names none gets the
 /// harness default.
-fn declared_timeout_ms(input: Option<&Value>) -> i64 {
-    input
-        .and_then(|v| {
-            v.get("timeout")
-                .or_else(|| v.get("timeout_ms"))
-                .and_then(Value::as_i64)
-        })
+fn declared_timeout_ms(declared: Option<DeclaredTimeout>) -> i64 {
+    declared
+        .and_then(|d| d.timeout.or(d.timeout_ms))
         .filter(|ms| *ms > 0)
         .unwrap_or(DEFAULT_CALL_TIMEOUT_MS)
+}
+
+/// The timeout fields a tool call's arguments may carry. Claude puts them in
+/// `input`, Codex in its JSON-string `arguments`.
+#[derive(Deserialize)]
+struct DeclaredTimeout {
+    timeout: Option<i64>,
+    timeout_ms: Option<i64>,
+}
+
+/// One `message.content` item of a Claude row. Only the fields a tool call
+/// opens or closes with are read.
+#[derive(Deserialize)]
+struct ToolItem {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    id: Option<String>,
+    tool_use_id: Option<String>,
+    input: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ToolMessage {
+    content: Option<Vec<ToolItem>>,
+}
+
+#[derive(Deserialize)]
+struct ToolRow {
+    message: Option<ToolMessage>,
+}
+
+/// A Codex `response_item` payload that opens or closes a call.
+#[derive(Deserialize)]
+struct CodexCall {
+    call_id: Option<String>,
+    arguments: Option<String>,
 }
 
 /// Fold one transcript row into the set of open tool calls. Claude carries
@@ -136,48 +168,54 @@ fn fold_tool_calls(
     at: Option<i64>,
     open: &mut Vec<OpenCall>,
 ) {
-    if let Some(items) = row.pointer("/message/content").and_then(Value::as_array) {
-        for item in items {
-            match item.get("type").and_then(Value::as_str) {
-                Some("tool_use") => {
-                    if let (Some(id), Some(started_s)) =
-                        (item.get("id").and_then(Value::as_str), at)
-                    {
-                        open.push(OpenCall {
-                            id: id.to_string(),
-                            started_s,
-                            timeout_ms: declared_timeout_ms(item.get("input")),
-                        });
-                    }
+    let items = ToolRow::deserialize(row)
+        .ok()
+        .and_then(|r| r.message)
+        .and_then(|m| m.content)
+        .unwrap_or_default();
+    for item in items {
+        match item.kind.as_deref() {
+            Some("tool_use") => {
+                if let (Some(id), Some(started_s)) = (item.id, at) {
+                    let declared = item
+                        .input
+                        .as_ref()
+                        .and_then(|input| DeclaredTimeout::deserialize(input).ok());
+                    open.push(OpenCall {
+                        id,
+                        started_s,
+                        timeout_ms: declared_timeout_ms(declared),
+                    });
                 }
-                Some("tool_result") => {
-                    if let Some(id) = item.get("tool_use_id").and_then(Value::as_str) {
-                        open.retain(|call| call.id != id);
-                    }
-                }
-                _ => {}
             }
+            Some("tool_result") => {
+                if let Some(id) = item.tool_use_id {
+                    open.retain(|call| call.id != id);
+                }
+            }
+            _ => {}
         }
     }
+    let Ok(call) = CodexCall::deserialize(payload) else {
+        return;
+    };
     match event {
         "function_call" => {
-            if let (Some(id), Some(started_s)) =
-                (payload.get("call_id").and_then(Value::as_str), at)
-            {
-                let args = payload
-                    .get("arguments")
-                    .and_then(Value::as_str)
-                    .and_then(|text| serde_json::from_str::<Value>(text).ok());
+            if let (Some(id), Some(started_s)) = (call.call_id, at) {
+                let declared = call
+                    .arguments
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<DeclaredTimeout>(text).ok());
                 open.push(OpenCall {
-                    id: id.to_string(),
+                    id,
                     started_s,
-                    timeout_ms: declared_timeout_ms(args.as_ref()),
+                    timeout_ms: declared_timeout_ms(declared),
                 });
             }
         }
         "function_call_output" => {
-            if let Some(id) = payload.get("call_id").and_then(Value::as_str) {
-                open.retain(|call| call.id != id);
+            if let Some(id) = call.call_id {
+                open.retain(|open_call| open_call.id != id);
             }
         }
         _ => {}
@@ -1411,7 +1449,7 @@ mod tests {
             "a call with a result is not open"
         );
         // Codex: a function_call with no output is open until its timeout_ms.
-        std::fs::write(&open_path, r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{"command":["sleep","900"],"timeout_ms":1200000}"}}"#).unwrap();
+        std::fs::write(&open_path, r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{\"command\":[\"sleep\",\"900\"],\"timeout_ms\":1200000}"}}"#).unwrap();
         let codex = tail(&open_path, None).unwrap();
         assert!(
             codex.call_open(opened + 900),
@@ -1828,7 +1866,7 @@ mod tests {
                 session_id: Some("sess-a".into()),
                 data,
             }];
-            let watches = super::settle_watches(&evidence);
+            let watches = crate::codex_watch::settle_watches(&evidence);
             assert_eq!(
                 watches.len(),
                 1,
