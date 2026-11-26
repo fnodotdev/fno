@@ -1,23 +1,27 @@
 //! A law's action triggers: `--at-command <glob>` and `--at-door
 //! <door>[:<subject-glob>]` on the record door. The row stores
 //! `at_command: [..]` and `at_door: {door, subjects}`; the rule source turns
-//! them into one tier-0 rule, `law-<id>-at`, beside the law's prompt rule. A
-//! law about an action then fires at the action, not only when prompt text
-//! happens to rank it.
+//! them into tier-0 rules, `law-<id>-at` and `law-<id>-door`, beside the
+//! law's prompt rule. A law about an action then fires at the action, not
+//! only when prompt text happens to rank it. The send door's `by-name:`
+//! subject and the check-in's read of law fires at actions live here too.
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 
 /// The doors a law can name: the door events with a wired decide() site.
 pub const DOORS: &[&str] = &["send", "spawn", "merge"];
 
-#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct AtDoor {
     pub door: String,
     pub subjects: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct LawAt {
     #[serde(rename = "at_command")]
@@ -111,6 +115,104 @@ impl LawAt {
     }
 }
 
+/// The `door:send` subjects for one recipient: the recipient as typed, plus
+/// `by-name:<recipient>` when it is not session-id-shaped (a uuid or an
+/// 8-hex fno id), so a law about addressing by name can match.
+pub fn send_subjects(recipient: &str) -> Vec<String> {
+    let mut out = vec![recipient.to_string()];
+    if !crate::session_truth::is_session_id_prefix(recipient) {
+        out.push(format!("by-name:{recipient}"));
+    }
+    out
+}
+
+const LOOKBACK_MS: i64 = 24 * 3600 * 1000;
+const MAX_LAWS: usize = 5;
+const MAX_SESSIONS: usize = 3;
+
+#[derive(Deserialize)]
+struct SpanLine {
+    #[serde(default)]
+    data: SpanData,
+}
+
+#[derive(Deserialize, Default)]
+struct SpanData {
+    #[serde(default)]
+    span_kind: String,
+    #[serde(default)]
+    event: String,
+    law: Option<String>,
+    #[serde(default)]
+    trace: SpanTrace,
+}
+
+#[derive(Deserialize, Default)]
+struct SpanTrace {
+    actor_session: Option<String>,
+}
+
+/// The lead check-in's `law_fires` reading: the laws that fired at an
+/// action (a pre-tool call or a door) over the last 24h, or null when none
+/// did, so a quiet beat prints no line.
+pub fn fires_at_actions(events_paths: &[PathBuf]) -> Value {
+    fires_with(events_paths, &crate::numbers::labels())
+}
+
+/// The summary over the 24h window, laws by fire count, each named by its
+/// short number when it has one.
+fn fires_with(events_paths: &[PathBuf], labels: &HashMap<String, String>) -> Value {
+    let query = crate::event_store::EventQuery {
+        types: vec!["decision_span".to_string()],
+        since_ms: Some(chrono::Utc::now().timestamp_millis() - LOOKBACK_MS),
+        ..Default::default()
+    };
+    let mut seen = HashSet::new();
+    let mut by_law: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+    for path in events_paths {
+        for row in crate::event_store::query_events(path, &query).unwrap_or_default() {
+            if !seen.insert(row.event_id.clone()) {
+                continue;
+            }
+            let Ok(span) = serde_json::from_str::<SpanLine>(&row.line) else {
+                continue;
+            };
+            let d = span.data;
+            let at_action = d.event == "pre-tool" || d.event.starts_with("door:");
+            let (true, true, Some(law)) = (d.span_kind == "rule", at_action, d.law) else {
+                continue;
+            };
+            let entry = by_law.entry(law).or_default();
+            entry.0 += 1;
+            if let Some(sid) = d.trace.actor_session {
+                let short: String = sid.chars().take(8).collect();
+                if !entry.1.contains(&short) {
+                    entry.1.push(short);
+                }
+            }
+        }
+    }
+    if by_law.is_empty() {
+        return Value::Null;
+    }
+    let mut laws: Vec<_> = by_law.into_iter().collect();
+    laws.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    let parts: Vec<String> = laws
+        .into_iter()
+        .take(MAX_LAWS)
+        .map(|(law, (n, mut sessions))| {
+            let label = labels.get(&law).cloned().unwrap_or(law);
+            sessions.truncate(MAX_SESSIONS);
+            if sessions.is_empty() {
+                format!("{label} x{n}")
+            } else {
+                format!("{label} x{n} (sessions {})", sessions.join(", "))
+            }
+        })
+        .collect();
+    json!(parts.join("; "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +237,42 @@ mod tests {
             vec!["by-name:*", "@*"]
         );
         assert_eq!(LawAt::of(&json!({"decision": "x"})), LawAt::default());
+    }
+
+    #[test]
+    fn a_name_recipient_carries_a_by_name_subject_and_an_id_does_not() {
+        assert_eq!(send_subjects("nova"), ["nova", "by-name:nova"]);
+        let uuid = "0e0b4dc7-e6b9-454a-b0dc-ebc0a2dd33a6";
+        assert_eq!(send_subjects(uuid), [uuid]);
+        assert_eq!(send_subjects("a8a39a7a"), ["a8a39a7a"]);
+    }
+
+    #[test]
+    fn law_fires_at_actions_count_per_law_and_a_quiet_window_is_null() {
+        let td = tempfile::TempDir::new().unwrap();
+        let journal = td.path().join("events.jsonl");
+        assert_eq!(fires_with(&[journal.clone()], &HashMap::new()), Value::Null);
+        let span = |law: Option<&str>, event: &str, sid: &str| {
+            json!({
+                "ts": chrono::Utc::now().to_rfc3339(), "type": "decision_span", "source": "target",
+                "data": {"span_kind": "rule", "rule": "r", "law": law, "event": event,
+                         "verdict": "warn", "trace": {"actor_session": sid}},
+            })
+            .to_string()
+        };
+        for line in [
+            span(Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
+            span(Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
+            span(Some("d-e952ed19"), "prompt", "ffff0000-0000"),
+            span(None, "pre-tool", "ffff0000-0000"),
+        ] {
+            crate::event_store::append_envelope(&journal, &line, None).unwrap();
+        }
+        let labels = HashMap::from([("d-e952ed19".to_string(), "D1051".to_string())]);
+        assert_eq!(
+            fires_with(&[journal], &labels),
+            json!("D1051 x2 (sessions a1b2c3d4)"),
+            "a prompt fire and a law-less rule are not law fires at an action"
+        );
     }
 }
