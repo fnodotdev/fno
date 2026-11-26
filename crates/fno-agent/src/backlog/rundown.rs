@@ -865,17 +865,8 @@ pub struct Arm {
     last_page: std::sync::Arc<std::sync::Mutex<Option<std::path::PathBuf>>>,
 }
 
-/// The production runner: the page render, cwd-bound (config, the graph and
-/// the default out path all resolve per cwd). The Rust front is the program:
-/// `hq chart rundown` is its rewrite of `lead ledger` plus the faithful-root
-/// `--out`; bare `lead ledger` defaults to lead.html, which the /team route
-/// does not read. Returns the page path
-/// the child named, so a tick can never call the wrong file rendered.
-fn run_ledger() -> Result<String, String> {
-    run_ledger_within(crate::bounded_cmd::load_scaled_budget_s(
-        LEDGER_BUDGET_FLOOR_S,
-        LEDGER_BUDGET_CAP_S,
-    ))
+fn ledger_budget_s() -> u64 {
+    crate::bounded_cmd::load_scaled_budget_s(LEDGER_BUDGET_FLOOR_S, LEDGER_BUDGET_CAP_S)
 }
 
 /// The render child runs under a wall budget. An unbounded `output()` let a
@@ -884,7 +875,13 @@ fn run_ledger() -> Result<String, String> {
 const LEDGER_BUDGET_FLOOR_S: u64 = 60;
 const LEDGER_BUDGET_CAP_S: u64 = 240;
 
-fn run_ledger_within(budget_s: u64) -> Result<String, String> {
+/// The production runner: the page render, cwd-bound (config, the graph and
+/// the default out path all resolve per cwd). The Rust front is the program:
+/// `hq chart rundown` is its rewrite of `lead ledger` plus the faithful-root
+/// `--out`; bare `lead ledger` defaults to lead.html, which the /team route
+/// does not read. Returns the page path
+/// the child named, so a tick can never call the wrong file rendered.
+fn run_ledger(budget_s: u64) -> Result<String, String> {
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.args(crate::door_argv::TEAM_LEDGER);
     let output = crate::bounded_cmd::output_with_timeout_result(cmd, budget_s)
@@ -978,7 +975,7 @@ fn emit_one(
 /// only after a viewer was served the page since the last render, so an
 /// unread page stops spending the core bucket's requests.
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
-    maybe_tick_with(arm, home, run_ledger);
+    maybe_tick_with(arm, home, || run_ledger(ledger_budget_s()));
 }
 
 fn maybe_tick_with(
@@ -1589,7 +1586,7 @@ mod tests {
         );
         std::env::set_var("FNO_BIN", &stub);
         let h = home();
-        let (o, named) = emit_one(&h, run_ledger);
+        let (o, named) = emit_one(&h, || run_ledger(5));
         assert_eq!(o.acted, 1);
         assert_eq!(o.skip_reason, None);
         assert_eq!(o.detail, format!("{} rendered", page.display()));
@@ -1602,7 +1599,7 @@ mod tests {
             "#!/bin/sh\necho \"lead ledger: /nonexistent/ghost.html\"\n",
         );
         std::env::set_var("FNO_BIN", &ghost);
-        let (o, ghost_named) = emit_one(&h, run_ledger);
+        let (o, ghost_named) = emit_one(&h, || run_ledger(5));
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
@@ -1647,7 +1644,7 @@ mod tests {
             ),
         );
         std::env::set_var("FNO_BIN", &stub);
-        let run = run_ledger();
+        let run = run_ledger(5);
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
@@ -1677,7 +1674,7 @@ mod tests {
         let stub = crate::write_exec_stub(dir.path(), "fno", "#!/bin/sh\nsleep 30\n");
         std::env::set_var("FNO_BIN", &stub);
         let started = std::time::Instant::now();
-        let run = run_ledger_within(1);
+        let run = run_ledger(1);
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
@@ -1706,7 +1703,7 @@ mod tests {
             &format!("#!/bin/sh\necho \"lead ledger: {}\"\n", lead.display()),
         );
         std::env::set_var("FNO_BIN", &stub);
-        let run = run_ledger();
+        let run = run_ledger(5);
         match prior_bin {
             Some(v) => std::env::set_var("FNO_BIN", v),
             None => std::env::remove_var("FNO_BIN"),
