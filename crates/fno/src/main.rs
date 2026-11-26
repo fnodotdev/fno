@@ -2441,7 +2441,17 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
             &rest,
         )),
         Role::MailUnread(rest) => {
-            fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match fno::mail_unread::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+                }
+            }
         }
         Role::MailViewRenamed => {
             eprintln!("fno agent mail view was renamed: use fno agent mail show");

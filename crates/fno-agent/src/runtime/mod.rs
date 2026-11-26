@@ -28,6 +28,7 @@ pub mod battery_save;
 pub mod board_render_arm;
 pub(crate) mod boot_revival;
 pub mod burn_watch;
+pub mod bus_read;
 pub mod cargo_build_dirs;
 pub(crate) mod cargo_builds;
 pub(crate) mod cargo_orphans;

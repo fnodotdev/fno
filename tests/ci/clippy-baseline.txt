@@ -8013,7 +8013,6 @@ crates/fno-agent/src/runtime/mail_cli/team.rs	clippy::let_underscore_must_use	le
 crates/fno-agent/src/runtime/mail_cli/team.rs	clippy::let_underscore_must_use	let _ = std::io::stdout().write_all(&out.stdout);
 crates/fno-agent/src/runtime/mail_cli/team.rs	clippy::let_underscore_must_use	let _ = stdin.write_all(body.as_bytes());
 crates/fno-agent/src/runtime/mail_cli/team.rs	clippy::too_many_lines	pub fn run_team(args: &[String]) -> i32 {
-crates/fno-agent/src/runtime/mail_cli/unread.rs	clippy::too_many_lines	pub fn run(args: &[String]) -> i32 {
 crates/fno-agent/src/runtime/mail_cli/withdraw.rs	clippy::too_many_lines	pub fn run(args: &[String]) -> i32 {
 crates/fno-agent/src/runtime/mail_control_drain.rs	clippy::indexing_slicing	assert_eq!(v["hookSpecificOutput"]["hookEventName"], "PreToolUse");
 crates/fno-agent/src/runtime/mail_control_drain.rs	clippy::indexing_slicing	assert_eq!(v["systemMessage"], "mail: 1 message(s) from lead");

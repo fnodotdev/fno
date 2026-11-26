@@ -18,6 +18,8 @@ This page answers four questions. Which cross-tree guards mark a real second imp
 
 **The caller-identity core.** Single owner, generated artifact. Three fno-agent modules own it. `crates/fno-agent/src/spawn/self_identity.rs` owns `resolve_self_identity` and the ancestry walk. `crates/fno-agent/src/eval/proc_table.rs` owns the process table. `crates/fno-agent/src/runtime/identity_markers.rs` owns the harness marker tables and the fno stamp reads. fno compiles the generated copies at `crates/fno/src/self_identity.rs`, `proc_table.rs` and `identity_markers.rs`, so the front door resolves the caller's session in process. `generated-artifacts.tsv` records each copy. The fno caller passes the registry path, because fno has no `AgentsHome`. The front-door join reads the copied marker table, so no hand mirror of it remains. When fno links fno-agent, the copies go away.
 
+**The bus read rules.** Single owner, generated artifact. `crates/fno-agent/src/runtime/bus_read.rs` owns which bus rows are mail (`deliverable`), which are retracted (`withdrawn_ids`), how a cursor file reads, and the cursor-bounded unread walk. fno-agent's drain and its `mail unread --mine` leaf use it. The fno front door answers `mail unread` in process from the generated copy at `crates/fno/src/bus_read.rs`. `generated-artifacts.tsv` records the copy. The bus directory comes from `config_doctor::bus_dir`, the one resolver fno has for the mail tree.
+
 **The tick timestamp parser.** Single owner. `event_store.rs` owns `parse_rfc3339_ms`. The indexed writer and incremental tick fold share it, so both retain the same millisecond maxima.
 
 ## The discriminator
