@@ -1315,7 +1315,7 @@ fn resolvable_handle_log_fallback(
         return None;
     }
     // No session id exists yet, so a mint stamp keys the file: a reused
-    // name never reopens an earlier reign's log.
+    // name never reopens an earlier agent's log.
     let minted = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());

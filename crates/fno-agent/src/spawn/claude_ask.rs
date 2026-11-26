@@ -2429,7 +2429,7 @@ use crate::agent_lock::{holder_note, AgentLock};
 use crate::spawn_gate_admission::AnswerCaller;
 
 /// Stable fno-side log path for `fno agent logs <name>`, keyed on the
-/// session id so a reused name never inherits an earlier reign's log. The
+/// session id so a reused name never inherits an earlier agent's log. The
 /// row's `log_path` field is what readers follow.
 fn derive_log_path(home: &AgentsHome, session_id: &str) -> PathBuf {
     home.root().join("logs").join(format!("{session_id}.log"))
