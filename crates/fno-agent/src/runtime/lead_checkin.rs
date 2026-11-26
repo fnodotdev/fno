@@ -56,6 +56,9 @@ pub(crate) mod prompt_parked;
 #[path = "lead_checkin_rate_limits.rs"]
 mod rate_limits;
 
+#[path = "lead_checkin_law_fires.rs"]
+mod law_fires;
+
 /// The numeric keys this command owns and diffs versus the previous beat.
 const NUMERIC_DIFF_KEYS: [&str; 11] = [
     "open_prs",
@@ -1291,6 +1294,10 @@ fn collect_readings(
         let events_paths = events_paths.clone();
         move || Ok(rate_limits::reading(&events_paths))
     });
+    let h_law_fires = spawn_reading(beat_started, "law_fires", {
+        let events_paths = events_paths.clone();
+        move || Ok(law_fires::reading(&events_paths))
+    });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {
         let events_paths = events_paths.clone();
@@ -1482,6 +1489,7 @@ fn collect_readings(
     h_layout.collect_into(&mut readings, beat_started);
     h_telemetry.collect_into(&mut readings, beat_started);
     h_rate_limits.collect_into(&mut readings, beat_started);
+    h_law_fires.collect_into(&mut readings, beat_started);
     h_laws.collect_into(&mut readings, beat_started);
     h_machine.collect_into(&mut readings, beat_started);
 
@@ -2107,6 +2115,15 @@ fn render_lines_with(
         Some(r) => {
             if let Some(summary) = r.value.as_str() {
                 lines.push(format!("rate limits: {summary}"));
+            }
+        }
+        _ => {}
+    }
+    match by_name("law_fires") {
+        Some(r) if !r.ok => lines.push(format!("READER FAILED law_fires: {}", r.error)),
+        Some(r) => {
+            if let Some(summary) = r.value.as_str() {
+                lines.push(format!("law fires at actions: {summary}"));
             }
         }
         _ => {}
