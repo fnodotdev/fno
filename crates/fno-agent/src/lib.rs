@@ -1155,6 +1155,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
+    // The in-process mux pane client met an unset FNO_MUX_DIR (mux_client.rs).
+    "mux_dir_unset",
     // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
     // the per-pass summary row and its pause-skip row.
     "shell_writers_sweep",

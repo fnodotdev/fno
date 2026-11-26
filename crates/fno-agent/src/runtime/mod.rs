@@ -182,6 +182,7 @@ pub mod mail_threads;
 pub mod manifest;
 pub mod manifest_lookup;
 pub mod mcp;
+pub(crate) mod mux_client;
 pub mod native_adopt;
 pub mod notice_route;
 pub mod notify_dispatch;
