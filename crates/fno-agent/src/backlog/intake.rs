@@ -1301,20 +1301,21 @@ fn build_intake_node(spec: &IntakeSpec, entries: &[Value]) -> Result<Value, Stri
     let minted = super::create_cli::mint_node_id(&existing)
         .map_err(|e| format!("{}: mint failed: {e}", spec.plan_path))?;
 
-    // The body form keeps `sources` in the `## Gate records` fence.
-    let body_sources = std::fs::read_to_string(&spec.plan_path)
-        .ok()
-        .and_then(|t| crate::plan_doc::records::body_records(&t).ok().flatten())
-        .and_then(|m| m.get("sources").cloned());
     let plan_sources: Vec<String> = fm
         .get("sources")
-        .or(body_sources.as_ref())
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
                 .map(flexible_display)
                 .filter(|s| !s.is_empty())
                 .collect()
+        })
+        // The body form keeps `sources` in the `## Gate records` fence.
+        .or_else(|| {
+            let text = std::fs::read_to_string(&spec.plan_path).ok()?;
+            crate::plan_doc::records::body_list(&text, "sources")
+                .ok()
+                .flatten()
         })
         .unwrap_or_default();
     let evidence = if plan_sources.is_empty() {

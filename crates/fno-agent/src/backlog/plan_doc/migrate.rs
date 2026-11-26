@@ -399,18 +399,6 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
         }
     }
 
-    // The Obsidian PR column keeps one scalar link: the newest url.
-    let has_pr_url = top_level_keys(fm).contains("pr_url");
-    if let Some(last) = parsed_map
-        .get("urls")
-        .and_then(|v| v.as_sequence())
-        .and_then(|s| s.last())
-        .and_then(|v| v.as_str())
-        .filter(|_| !has_pr_url)
-    {
-        keep.push(format!("pr_url: {}", yaml_scalar(last)));
-    }
-
     let new_body = if existing.is_some() {
         match super::records::set_blocks(body, &per_key) {
             Ok(b) => b,
@@ -426,6 +414,13 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
             cut_text
         )
     };
+    // The Obsidian PR column keeps one scalar link: the newest url.
+    if !top_level_keys(fm).contains("pr_url") {
+        let urls = super::records::body_list(&new_body, "urls").ok().flatten();
+        if let Some(last) = urls.as_ref().and_then(|u| u.last()) {
+            keep.push(format!("pr_url: {}", yaml_scalar(last)));
+        }
+    }
     let new_text = format!("---\n{}\n---{}", keep.join("\n"), new_body);
     // The migrated file must read back clean: no both-places, no stranger.
     match super::doc::load_plan_text(&new_text).map(|d| d.validation_map().map(|_| ())) {

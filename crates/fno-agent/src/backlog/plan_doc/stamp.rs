@@ -103,16 +103,18 @@ const BODY_LISTS: [&str; 2] = ["urls", "session_ids"];
 
 /// Overlay the fence's urls and session_ids onto `fields`, so every reader
 /// below sees one map. Returns the keys that live, or will live, in the body.
-fn overlay_body_lists(fields: &mut Fields, rest: &str) -> Result<Vec<&'static str>, String> {
+fn overlay_body_lists(
+    fields: &mut Fields,
+    rest: &str,
+) -> Result<Vec<&'static str>, super::records::RecordsError> {
     // A legacy plan keeps both lists in frontmatter until the migration runs.
     let legacy = BODY_LISTS.iter().any(|k| fields.contains_key(k));
     let mut body_keys = Vec::new();
     for key in BODY_LISTS {
-        let body = super::records::body_list(rest, key).map_err(|e| format!("error: {e}"))?;
+        let body = super::records::body_list(rest, key)?;
         match (body, fields.contains_key(key)) {
             (Some(_), true) => {
-                let both = super::records::RecordsError::BothPlaces(key.to_string());
-                return Err(format!("error: {both}"));
+                return Err(super::records::RecordsError::BothPlaces(key.to_string()))
             }
             (Some(items), false) => {
                 fields.insert(key, Fv::BlockList(items));
@@ -132,7 +134,7 @@ fn split_body_lists(
     fields: &Fields,
     rest: &str,
     body_keys: &[&str],
-) -> Result<(Fields, String), String> {
+) -> Result<(Fields, String), super::records::RecordsError> {
     let mut fm = fields.clone();
     let mut blocks = Vec::new();
     for key in body_keys {
@@ -155,7 +157,7 @@ fn split_body_lists(
     if blocks.is_empty() {
         return Ok((fm, rest.to_string()));
     }
-    let rest = super::records::set_blocks(rest, &blocks).map_err(|e| format!("error: {e}"))?;
+    let rest = super::records::set_blocks(rest, &blocks)?;
     Ok((fm, rest))
 }
 
@@ -270,7 +272,7 @@ fn do_stamp(
     };
     let body_keys = match overlay_body_lists(&mut fields, &rest) {
         Ok(keys) => keys,
-        Err(e) => return OpResult::fail(1, e),
+        Err(e) => return OpResult::fail(1, format!("error: {e}")),
     };
     let now_utc = now_stamp();
     let status_from: Option<String> = match fields.get("status") {
@@ -360,7 +362,7 @@ fn do_stamp(
     }
     let (fm, rest) = match split_body_lists(&fields, &rest, &body_keys) {
         Ok(split) => split,
-        Err(e) => return OpResult::fail(1, e),
+        Err(e) => return OpResult::fail(1, format!("error: {e}")),
     };
     if let Err(e) = codec::write_plan_file(&target, &fm, &rest) {
         return OpResult::fail(1, format!("error: {e}"));
@@ -440,7 +442,7 @@ fn do_graduate(plan_path: &Path, dry_run: bool, events_path: Option<&Path>) -> O
     // fence keeps its bytes.
     let body_keys = match overlay_body_lists(&mut fields, &rest) {
         Ok(keys) => keys,
-        Err(e) => return OpResult::fail(1, e),
+        Err(e) => return OpResult::fail(1, format!("error: {e}")),
     };
     let status = match fields.get("status") {
         Some(Fv::Scalar(s)) if !s.is_empty() => Some(s.clone()),
