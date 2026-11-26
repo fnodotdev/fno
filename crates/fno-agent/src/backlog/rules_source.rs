@@ -766,7 +766,7 @@ fn emit_fire_span(
         "tool".into(),
         ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
     );
-    let _ = crate::decision_trace::emit_span_to(journal, "rule", &trace, &attrs);
+    crate::decision_trace::emit_span_to(journal, "rule", &trace, &attrs).ok();
 }
 
 /// One config read per assembly: the whole `event_rules` table, the same
@@ -1060,8 +1060,10 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
 
         let empty = rules_report_in(&cwd, Some("7d"));
-        assert_eq!(empty["ok"], serde_json::json!(true), "{empty}");
-        let named = empty["unread"][0].as_str().unwrap_or("");
+        let at = |v: &Value, ptr: &str| v.pointer(ptr).cloned().unwrap_or(Value::Null);
+        assert_eq!(at(&empty, "/ok"), serde_json::json!(true), "{empty}");
+        let named = at(&empty, "/unread/0");
+        let named = named.as_str().unwrap_or("");
         assert!(named.contains(".fno/events.jsonl"), "{empty}");
 
         let journal = crate::law_match::project_events_journal_in(&cwd);
@@ -1080,14 +1082,14 @@ mod tests {
         }
 
         let out = rules_report_in(&cwd, Some("7d"));
-        assert_eq!(out["rules"]["r-a"]["fires"], serde_json::json!(2), "{out}");
-        assert_eq!(out["rules"]["r-a"]["blocks"], serde_json::json!(1));
-        assert_eq!(out["rules"]["r-a"]["warns"], serde_json::json!(1));
+        assert_eq!(at(&out, "/rules/r-a/fires"), serde_json::json!(2), "{out}");
+        assert_eq!(at(&out, "/rules/r-a/blocks"), serde_json::json!(1));
+        assert_eq!(at(&out, "/rules/r-a/warns"), serde_json::json!(1));
         assert!(
-            out["rules"].get("r-b").is_none(),
+            out.pointer("/rules/r-b").is_none(),
             "outside the window: {out}"
         );
-        let unread = out["unread"].as_array().cloned().unwrap_or_default();
+        let unread = at(&out, "/unread").as_array().cloned().unwrap_or_default();
         assert!(
             unread
                 .iter()
