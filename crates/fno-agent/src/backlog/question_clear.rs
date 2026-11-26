@@ -1684,15 +1684,6 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     None => false,
                 };
             let denied = denied_class(question_event);
-            if holds_rung && req.answer.is_some() && !user_lane {
-                if let Some(class) = &denied {
-                    refused += 1;
-                    answer.lines.push(format!(
-                        "outstanding: refused: {shown} is class {class}, and the asking project's questions.rules.deny keeps it from agents. Nothing was closed. Climb it: fno inbox outstanding climb {shown} --evidence \"<what you checked>\""
-                    ));
-                    continue;
-                }
-            }
             // A titled lead rules a reversible question inside its scope,
             // the asker's liveness aside. The deny classes stay the user's.
             let scope_lead = !own_ask
@@ -1700,7 +1691,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 && authority == Some("role")
                 && caller.teamed
                 && node.is_some_and(|node| scope_holds(req, &caller, node));
-            if scope_lead && !user_lane {
+            if (holds_rung || scope_lead) && req.answer.is_some() && !user_lane {
                 if let Some(class) = &denied {
                     refused += 1;
                     answer.lines.push(format!(
