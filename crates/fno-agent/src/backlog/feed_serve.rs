@@ -1,11 +1,12 @@
-//! `fno-agent fleet feed --serve`: the activity panel's held reader. It
-//! projects the whole history once, holds it, and answers one JSON request
-//! per stdin line with one JSON answer per stdout line
-//! (`fno_proto::feed::serve`). A thread re-projects every 15 seconds and
-//! swaps the held rows in one step, so an answer never waits on a refresh.
-//! The reader exits when its stdin closes, so it dies with the panel.
+//! `fno-agent feed --serve`: the activity panel's held reader. It holds the
+//! whole history's rows and answers one JSON request per stdin line with one
+//! JSON answer per stdout line (`fno_proto::feed::serve`). A child read of
+//! this binary projects the rows, so the projection's working set (every
+//! store it joins) is the child's and is gone when it exits. A thread reads
+//! again every 15 seconds. The old rows drop when the new rows start to
+//! stream, so two copies never coexist, and an answer waits only for that
+//! parse. The reader exits when its stdin closes, so it dies with the panel.
 
-use super::feed::serve_rows;
 use crate::paths::AgentsHome;
 use fno_proto::feed::row::FeedItem;
 use fno_proto::feed::serve;
@@ -22,16 +23,93 @@ struct Held {
     stamp: u64,
 }
 
-/// Project the history and read it as the panel's rows. The rows cross the
-/// same JSON shape the printed read emits, so the reader and the printed
-/// read can never disagree on a field.
-fn load(home: &AgentsHome, stamp: u64) -> Held {
-    let rows = serve_rows(home);
-    let items = serde_json::to_string(&rows)
-        .ok()
-        .and_then(|json| serde_json::from_str::<Vec<FeedItem>>(&json).ok())
-        .unwrap_or_default();
-    Held { items, stamp }
+/// The `--limit` that reads every row, the panel's one-shot read's own.
+const ALL_ROWS: &str = "10000000";
+
+/// A running child read, past its projection: its first byte has arrived.
+struct Read {
+    child: std::process::Child,
+    out: std::io::BufReader<std::process::ChildStdout>,
+}
+
+/// Start the printed read, `fno-agent feed --json`, in a child and wait for
+/// its first byte. The child prints only after it has projected every row,
+/// so the wait is the projection and the rows are still to be parsed.
+/// `None` when the child fails first, so a refresh keeps the rows it has.
+fn start_read(home: &AgentsHome) -> Option<Read> {
+    use std::io::BufRead;
+    let exe = std::env::current_exe().ok()?;
+    let mut child = std::process::Command::new(exe)
+        .args(["feed", "--json", "--limit", ALL_ROWS])
+        .env(crate::paths::HOME_ENV, home.root())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut out = std::io::BufReader::new(child.stdout.take()?);
+    if out.fill_buf().map(<[u8]>::is_empty).unwrap_or(true) {
+        match child.wait() {
+            Ok(status) => eprintln!(
+                "fno-agent feed --serve: the child read printed nothing and exited {status}"
+            ),
+            Err(e) => {
+                eprintln!("fno-agent feed --serve: the child read could not be waited on: {e}")
+            }
+        }
+        return None;
+    }
+    Some(Read { child, out })
+}
+
+/// Parse the child's rows as they stream: the reader never holds the
+/// projection or the JSON text, only the rows.
+fn finish_read(read: Read) -> Option<Vec<FeedItem>> {
+    let Read { mut child, out } = read;
+    let rows = serde_json::from_reader::<_, Vec<FeedItem>>(out).ok();
+    match child.wait() {
+        Ok(status) if status.success() => rows,
+        Ok(status) => {
+            eprintln!("fno-agent feed --serve: the child read exited {status}");
+            None
+        }
+        Err(e) => {
+            eprintln!("fno-agent feed --serve: the child read could not be waited on: {e}");
+            None
+        }
+    }
+}
+
+/// Replace the held rows with `parse`'s. The old rows drop before `parse`
+/// runs, so two copies never coexist, and the write lock spans the parse, so
+/// an answer waits on the lock and then reads the new rows: it never reads
+/// an empty history. Only the parse is under the lock, not the projection.
+/// A failed parse leaves the history empty and answers `false`, so the caller
+/// reads again at once instead of waiting a refresh.
+fn swap_in(
+    held: &RwLock<Arc<Held>>,
+    stamp: u64,
+    parse: impl FnOnce() -> Option<Vec<FeedItem>>,
+) -> bool {
+    let mut slot = match held.write() {
+        Ok(slot) => slot,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let locked_at = std::time::Instant::now();
+    *slot = Arc::new(Held {
+        items: Vec::new(),
+        stamp,
+    });
+    let parsed = parse();
+    let ok = parsed.is_some();
+    let items = parsed.unwrap_or_default();
+    let rows = items.len();
+    *slot = Arc::new(Held { items, stamp });
+    eprintln!(
+        "fno-agent feed --serve: refresh held the lock {} ms for {rows} rows",
+        locked_at.elapsed().as_millis()
+    );
+    ok
 }
 
 /// The reader's width: one column per char. The capped columns hold ids,
@@ -50,20 +128,24 @@ fn now_secs() -> i64 {
 /// Serve until stdin closes. Exit 0 on a clean close, 1 when stdout breaks.
 pub(crate) fn run(home: &AgentsHome) -> i32 {
     fno_proto::feed::grammar::set_sequential_tail(super::node_ref::is_sequential_tail);
-    let held = Arc::new(RwLock::new(Arc::new(load(home, 1))));
+    let items = start_read(home).and_then(finish_read).unwrap_or_default();
+    let held = Arc::new(RwLock::new(Arc::new(Held { items, stamp: 1 })));
     {
         let held = Arc::clone(&held);
         let home = home.clone();
         std::thread::spawn(move || {
             let mut stamp = 1;
+            let mut retry_now = false;
             loop {
-                std::thread::sleep(REFRESH_EVERY);
-                stamp += 1;
-                let fresh = Arc::new(load(&home, stamp));
-                match held.write() {
-                    Ok(mut slot) => *slot = fresh,
-                    Err(poisoned) => *poisoned.into_inner() = fresh,
+                if !retry_now {
+                    std::thread::sleep(REFRESH_EVERY);
                 }
+                retry_now = false;
+                let Some(read) = start_read(&home) else {
+                    continue;
+                };
+                stamp += 1;
+                retry_now = !swap_in(&held, stamp, || finish_read(read));
             }
         });
     }
@@ -103,6 +185,47 @@ fn serve_lines(input: impl BufRead, mut out: impl Write, held: &RwLock<Arc<Held>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A swap drops the old rows before it parses, and an answer that lands
+    /// mid-swap waits on the lock: it reads the old rows or the new ones,
+    /// never an empty history.
+    #[test]
+    fn an_answer_during_a_swap_never_reads_an_empty_history() {
+        let rows = |n: usize| {
+            (0..n)
+                .map(|i| FeedItem {
+                    ts: format!("2026-09-01T10:00:{i:02}Z"),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>()
+        };
+        let held = Arc::new(RwLock::new(Arc::new(Held {
+            items: rows(3),
+            stamp: 1,
+        })));
+        let writer = {
+            let held = Arc::clone(&held);
+            std::thread::spawn(move || {
+                swap_in(&held, 2, || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    Some(rows(5))
+                });
+            })
+        };
+        let mut seen = std::collections::BTreeSet::new();
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(600) {
+            let cur = match held.read() {
+                Ok(slot) => Arc::clone(&slot),
+                Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+            };
+            seen.insert(cur.items.len());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        writer.join().expect("the swap thread finishes");
+        assert!(!seen.contains(&0), "an empty history was read: {seen:?}");
+        assert!(seen.contains(&5), "the new rows landed: {seen:?}");
+    }
 
     /// One request in, one answer out carrying its id, and the end of
     /// input ends the reader: the panel's close is the reader's exit.

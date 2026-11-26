@@ -266,7 +266,7 @@ jobs:
         run: bash scripts/ci/clippy-check.sh crates/fno-mail
 
       - name: clippy gate (fno-proto)
-        run: bash scripts/ci/clippy-check.sh crates/fno-proto
+        run: bash scripts/ci/clippy-check.sh --features feed crates/fno-proto
 
   bell-shots:
     name: bell panel snapshot shots

@@ -42,7 +42,7 @@
 # site for good; the diagnostic and its key disappear together.
 #
 # Usage:
-#   bash scripts/ci/clippy-check.sh [--baseline FILE] [--write-baseline] CRATE_DIR...
+#   bash scripts/ci/clippy-check.sh [--baseline FILE] [--write-baseline] [--features LIST] CRATE_DIR...
 #   bash scripts/ci/clippy-check.sh --extract <clippy.jsonl> <crate>     (print keys)
 #   bash scripts/ci/clippy-check.sh --hits-file <keys.tsv> [--baseline FILE] [--write-baseline] CRATE_DIR...
 #
@@ -60,6 +60,9 @@ WRITE=0
 EXTRACT_SRC=""
 EXTRACT_CRATE=""
 HITS_FILE=""
+# A crate whose code sits behind a feature lints with it on: under default
+# features a gated module never reaches the gate.
+FEATURE_ARGS=()
 CRATES=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --write-baseline) WRITE=1; shift ;;
         --extract) EXTRACT_SRC="$2"; EXTRACT_CRATE="$3"; shift 3 ;;
         --hits-file) HITS_FILE="$2"; shift 2 ;;
+        --features) FEATURE_ARGS=(--features "$2"); shift 2 ;;
         -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
         *) CRATES+=("$1"); shift ;;
     esac
@@ -138,7 +142,7 @@ else
         fi
         local_tmp="$(mktemp)"
         err_tmp="$(mktemp)"
-        if ! ( cd "$REPO_ROOT/$crate" && cargo clippy --all-targets --locked --message-format=json -- "${LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
+        if ! ( cd "$REPO_ROOT/$crate" && cargo clippy --all-targets --locked ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --message-format=json -- "${LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
             # A compile error is not a lint verdict: fail loudly with the
             # readable stderr, never a silent pass.
             echo "clippy-check: cargo clippy failed in $crate; stderr tail:" >&2
@@ -152,7 +156,7 @@ else
         # Product-only pass: --lib --bins leaves #[cfg(test)] and tests/ out.
         # A crate with neither target (cargo exits non-zero) has no product
         # code to ratchet.
-        if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
+        if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
             extract_keys "$local_tmp" "$crate" >>"$CURRENT"
         elif ! grep -q "no library targets found" "$err_tmp"; then
             echo "clippy-check: cargo clippy (product pass) failed in $crate; stderr tail:" >&2
