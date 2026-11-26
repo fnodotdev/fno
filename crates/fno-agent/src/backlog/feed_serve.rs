@@ -70,7 +70,13 @@ fn finish_read(read: Read) -> Option<Vec<FeedItem>> {
 /// runs, so two copies never coexist, and the write lock spans the parse, so
 /// an answer waits on the lock and then reads the new rows: it never reads
 /// an empty history. Only the parse is under the lock, not the projection.
-fn swap_in(held: &RwLock<Arc<Held>>, stamp: u64, parse: impl FnOnce() -> Option<Vec<FeedItem>>) {
+/// A failed parse leaves the history empty and answers `false`, so the caller
+/// reads again at once instead of waiting a refresh.
+fn swap_in(
+    held: &RwLock<Arc<Held>>,
+    stamp: u64,
+    parse: impl FnOnce() -> Option<Vec<FeedItem>>,
+) -> bool {
     let mut slot = match held.write() {
         Ok(slot) => slot,
         Err(poisoned) => poisoned.into_inner(),
@@ -79,8 +85,11 @@ fn swap_in(held: &RwLock<Arc<Held>>, stamp: u64, parse: impl FnOnce() -> Option<
         items: Vec::new(),
         stamp,
     });
-    let items = parse().unwrap_or_default();
+    let parsed = parse();
+    let ok = parsed.is_some();
+    let items = parsed.unwrap_or_default();
     *slot = Arc::new(Held { items, stamp });
+    ok
 }
 
 /// The reader's width: one column per char. The capped columns hold ids,
@@ -106,13 +115,17 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
         let home = home.clone();
         std::thread::spawn(move || {
             let mut stamp = 1;
+            let mut retry_now = false;
             loop {
-                std::thread::sleep(REFRESH_EVERY);
+                if !retry_now {
+                    std::thread::sleep(REFRESH_EVERY);
+                }
+                retry_now = false;
                 let Some(read) = start_read(&home) else {
                     continue;
                 };
                 stamp += 1;
-                swap_in(&held, stamp, || finish_read(read));
+                retry_now = !swap_in(&held, stamp, || finish_read(read));
             }
         });
     }
