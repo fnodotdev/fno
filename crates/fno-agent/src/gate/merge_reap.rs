@@ -1253,14 +1253,14 @@ mod tests {
     #[test]
     fn scan_branch_nodes_binds_the_node_the_branch_names() {
         let entries = vec![
-            json!({"id": "x-31e0", "status": "done"}),
-            json!({"id": "x-2f48", "pr_number": 4100}),
+            json!({"id": "x-aaaa", "status": "done"}),
+            json!({"id": "x-bbbb", "pr_number": 4100}),
         ];
         assert_eq!(
-            scan_branch_nodes(&entries, "feature/x-31e0-reap-rows"),
-            ["x-31e0"]
+            scan_branch_nodes(&entries, "feature/x-aaaa-reap-rows"),
+            ["x-aaaa"]
         );
-        assert!(scan_branch_nodes(&entries, "feature/x-9999-gone").is_empty());
+        assert!(scan_branch_nodes(&entries, "feature/x-cccc-gone").is_empty());
         assert!(scan_branch_nodes(&entries, "main").is_empty());
     }
 
