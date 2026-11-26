@@ -173,7 +173,7 @@ pub use runtime::{
     lease_heartbeat, ledger_axes, link_dial, liveness_cmd, liveness_sweep, lock_queue, logs,
     logs_args, logs_client, loop_lead, loop_runtime, loop_target, loops_pause, machine_load,
     machine_mail, machine_sample, machine_watch, mail_arm, mail_backfill, mail_bus, mail_carrier,
-    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
+    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_ids, mail_sent_core, mail_sent_env, mail_hold, mail_inject,
     mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
     manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
     opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns,

@@ -19,6 +19,9 @@
 
 use serde_json::Value;
 
+use crate::mail_ids::{ascii_lower, attr_in, header_fields, opens_tag, split_header_span};
+pub use crate::mail_ids::{delivered_msg_id_with, ids_in_text_with, is_header_line};
+
 /// The summary cut: at most this many words of the body's first sentence.
 pub const SUMMARY_MAX_WORDS: usize = 12;
 
@@ -448,62 +451,6 @@ pub fn header_third_field(subject: Option<&str>, body: &str) -> Option<String> {
     }
 }
 
-/// The header's inner span and what follows it: the opening backtick through
-/// the first closing backtick whose remainder is the line's end, the
-/// transcript's one-line body separator " ⏎ " (a legacy stored turn renders
-/// on ONE physical line, header then separator then body), or one space -
-/// the `NewlineRule::OneLine` keystrokes (`fno_mail::turn::one_line`),
-/// which collapse every whitespace run, the header's new line included, to
-/// one space; the law form is two physical lines. `None` when no closer
-/// reads.
-fn split_header_span(trimmed: &str) -> Option<(&str, &str)> {
-    let rest = trimmed.strip_prefix('`')?;
-    let mut from = 0;
-    while let Some(rel) = rest[from..].find('`') {
-        let close = from + rel;
-        let tail = &rest[close + 1..];
-        if tail.is_empty() || tail.starts_with(' ') {
-            return Some((&rest[..close], tail));
-        }
-        from = close + 1;
-    }
-    None
-}
-
-/// The span's fields: sender, id, and an optional subject - the law's
-/// two-field form carries none. A three-field span keeps the subject as
-/// everything after the second separator, not the third split field: it
-/// may itself carry a backtick or a " · " separator.
-fn header_fields(inner: &str) -> Option<(&str, &str, Option<&str>)> {
-    let mut parts = inner.splitn(3, " · ");
-    Some((parts.next()?, parts.next()?, parts.next()))
-}
-
-/// True when the whole line reads as a delivered-mail header: one backticked
-/// span of `sender · id` (the law form) or `sender · id · subject` (the
-/// legacy stored form), the sender `@name` or `name` with no spaces, the
-/// id `fmail-` plus 12 hex (the message-id form the mux-messages group
-/// rules on) or a legacy `msg-…` token that still resolves. The span
-/// closes at the line's end or before the " ⏎ " body separator; a subject
-/// may carry a backtick or " · " and must be nonempty. This is the
-/// reader's shape test and the forged-body detector.
-pub fn is_header_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some((inner, _tail)) = split_header_span(trimmed) else {
-        return false;
-    };
-    let Some((sender, id, subject)) = header_fields(inner) else {
-        return false;
-    };
-    let bare = sender.strip_prefix('@').unwrap_or(sender);
-    if bare.is_empty() || bare.chars().any(|c| c.is_whitespace()) {
-        return false;
-    }
-    let id_ok = fno_mail::address::is_mail_id(id)
-        || id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty());
-    id_ok && subject.map_or(true, |s| !s.trim().is_empty())
-}
-
 /// True when any line of `body` is shaped like a delivered header. A send
 /// carrying one refuses: a body cannot forge a second message's first line.
 pub fn body_holds_header_line(body: &str) -> bool {
@@ -656,41 +603,6 @@ pub fn classify(text: &str) -> Framing {
     Framing::Bare
 }
 
-/// True when `head` starts with `tag` at a delimiter (space, `>`, newline,
-/// end), case-insensitive - the same boundary rule the injection door's
-/// framing test uses, so a `<fno_mailicious` prefix never reads as a tag.
-fn opens_tag(head: &str, tag: &str) -> bool {
-    let head_lower = head.to_lowercase();
-    let tag_lower = tag.to_lowercase();
-    match head_lower.strip_prefix(tag_lower.as_str()) {
-        Some(rest) => matches!(
-            rest.chars().next(),
-            Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('>') | None
-        ),
-        None => false,
-    }
-}
-
-/// The msg id a delivered turn carries, whatever its framing: the header's
-/// middle token, or the legacy tag's `id="…"` attribute. Reply resolution
-/// and drain dedup join on this; `None` when the turn names no id.
-pub fn delivered_msg_id(text: &str) -> Option<String> {
-    let head = text.trim_start();
-    if opens_tag(head, "<fno_mail") {
-        let open_end = head.find('>').map(|e| e + 1).unwrap_or(head.len());
-        // attr_in enforces the attribute boundary (`xid="` never matches).
-        let id = attr_in(&head[..open_end], "id")?;
-        return (!id.is_empty()).then(|| id);
-    }
-    let line = head.lines().next()?;
-    if !is_header_line(line) {
-        return None;
-    }
-    let (inner, _) = split_header_span(line.trim())?;
-    let (_, id, _) = header_fields(inner)?;
-    Some(crate::numbers::mail_hash(id))
-}
-
 /// The header's sender when the store backs it: the first line must parse as
 /// a delivered header and the caller's lookup (the chats store) must hold the
 /// header's id under the sender the header names. A leading `@` does not
@@ -703,12 +615,6 @@ pub fn verified_sender(text: &str, lookup: impl Fn(&str) -> Option<String>) -> O
     let bare = sender.strip_prefix('@').unwrap_or(sender);
     let stored = lookup(&crate::numbers::mail_hash(id))?;
     (stored.strip_prefix('@').unwrap_or(&stored) == bare).then(|| bare.to_string())
-}
-
-/// ASCII-only case fold that preserves byte offsets, so a match position in
-/// the folded copy indexes the original.
-fn ascii_lower(text: &str) -> String {
-    text.chars().map(|c| c.to_ascii_lowercase()).collect()
 }
 
 /// A JSONL transcript as the text its records carry. A hook delivery puts
@@ -841,58 +747,17 @@ pub fn text_holds_legacy_tag(text: &str) -> bool {
     low.contains("</fno_mail>")
 }
 
-/// Every delivered-mail id `text` carries, anywhere: the middle token of a
-/// header line, or the `id="…"` attribute of a legacy open tag. Reply
-/// resolution and dedup read through this one scan.
-pub fn ids_in_text(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for line in text.lines() {
-        if let Some(id) = delivered_msg_id(line) {
-            out.push(id);
-        }
-    }
-    let low = ascii_lower(text);
-    let mut start = 0;
-    while let Some(idx) = low[start..].find("<fno_mail") {
-        let abs = start + idx;
-        let boundary = matches!(
-            low[abs + 9..].chars().next(),
-            None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('>')
-        );
-        if boundary {
-            if let Some(rel_end) = low[abs..].find('>') {
-                let tag = &text[abs..=abs + rel_end];
-                if let Some(id) = attr_in(tag, "id") {
-                    out.push(id);
-                }
-            }
-        }
-        start = abs + 9;
-    }
-    out
+/// The msg id a delivered turn carries, whatever its framing: the header's
+/// middle token resolved through the numbers store, or the legacy tag's
+/// `id="…"` attribute. `None` when the turn names no id.
+pub fn delivered_msg_id(text: &str) -> Option<String> {
+    delivered_msg_id_with(text, &crate::numbers::mail_hash)
 }
 
-/// One attribute value (`name="…"`) in one legacy open tag, `None` when the
-/// tag carries none. A preceding word character (`xid="`) never matches - the
-/// attribute boundary the old `\\bid="` regex enforced.
-fn attr_in(tag: &str, name: &str) -> Option<String> {
-    let low = ascii_lower(tag);
-    let needle = format!("{name}=\"");
-    let mut from = 0;
-    while let Some(p) = low[from..].find(needle.as_str()) {
-        let abs = from + p;
-        let prev_ok = match low[..abs].chars().next_back() {
-            None => true,
-            Some(c) => matches!(c, ' ' | '\t' | '<'),
-        };
-        if prev_ok {
-            let rest = &tag[abs + needle.len()..];
-            let end = rest.find('"')?;
-            return Some(rest[..end].to_string());
-        }
-        from = abs + needle.len();
-    }
-    None
+/// Every delivered-mail id `text` carries, anywhere. Reply resolution and
+/// dedup read through this one scan.
+pub fn ids_in_text(text: &str) -> Vec<String> {
+    ids_in_text_with(text, &crate::numbers::mail_hash)
 }
 
 /// Every legacy open tag's key attributes, anywhere in `text`, for the

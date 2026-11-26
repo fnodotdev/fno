@@ -32,6 +32,12 @@ mod lenient_de;
 #[cfg(feature = "app")]
 pub mod live_store_fence;
 #[cfg(feature = "app")]
+pub mod mail_ids;
+#[cfg(feature = "app")]
+pub mod mail_sent;
+#[cfg(feature = "app")]
+pub mod mail_sent_core;
+#[cfg(feature = "app")]
 pub mod mail_unread;
 #[cfg(feature = "app")]
 pub mod notify_dispatch;

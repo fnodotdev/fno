@@ -428,6 +428,7 @@ enum Role {
     /// `fno agent mail unread`: the native cursor-bounded unread listing.
     /// The command and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
+    MailSent(Vec<OsString>),
     /// `fno agent mail view`: refused by name; the command is now `show`
     /// (no compat shell, the same rule as a removed mux command).
     MailViewRenamed,
@@ -1355,7 +1356,8 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // RemoteMail claim this arm replaces never fires for reply.
             Some(Role::MailReply(tail.to_vec()))
         }
-        "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
+        "sent" => Some(Role::MailSent(tail.to_vec())),
+        "hold" | "dnd" | "hold-release" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(command))
                 .chain(tail.to_vec())
                 .collect(),
@@ -2452,6 +2454,13 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
                     fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
                 }
             }
+        }
+        Role::MailSent(rest) => {
+            let args: Vec<String> = rest
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            fno::cli_usage::exit(fno::mail_sent::run(&args))
         }
         Role::MailViewRenamed => {
             eprintln!("fno agent mail view was renamed: use fno agent mail show");
