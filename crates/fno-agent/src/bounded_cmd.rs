@@ -68,11 +68,13 @@ pub(crate) fn output_with_timeout_result(
         (out, err)
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut pause = std::time::Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::thread::sleep(pause);
+                pause = next_pause(pause);
             }
             Ok(None) => {
                 // The child is its own group leader (process_group(0)), so
@@ -121,6 +123,12 @@ pub(crate) fn load_scaled_budget_for_s(
         Some(load) => ((floor_s as f64 * (load / 2.0).max(1.0)) as u64).clamp(floor_s, cap_s),
         None => floor_s,
     }
+}
+
+/// The wait between exit polls: 1 ms doubling to 50 ms. A fixed 50 ms
+/// added up to 50 ms to every short child, and a hook front starts several.
+fn next_pause(pause: std::time::Duration) -> std::time::Duration {
+    (pause * 2).min(std::time::Duration::from_millis(50))
 }
 
 pub(crate) fn output_with_timeout(
@@ -192,11 +200,13 @@ pub(crate) fn output_with_timeout_stdin(
         (out, err)
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut pause = std::time::Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                std::thread::sleep(pause);
+                pause = next_pause(pause);
             }
             Ok(None) => {
                 Pid::kill_child_group(&child);
