@@ -124,7 +124,7 @@ fn landed_id() -> String {
     hasher.update(std::process::id().to_le_bytes());
     hasher.update(SEQ.fetch_add(1, Ordering::Relaxed).to_le_bytes());
     let digest = hasher.finalize();
-    let hex: String = digest[..6].iter().map(|b| format!("{b:02x}")).collect();
+    let hex: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
     format!("fmail-{hex}")
 }
 
