@@ -11,7 +11,7 @@ let tab: Tab = 'fleet'
 let rows: Record<Tab, Row[]> = { fleet: [], backlog: [] }
 let selected = 0
 let status = ''
-let isOpen = false
+let drawnAt = -Infinity
 const facts = new Map<string, NodeFacts>()
 
 async function runJson($: EngineInterface, argv: string[]): Promise<any> {
@@ -63,7 +63,8 @@ async function press($: EngineInterface, row: Row, action: Action): Promise<void
 export function register(on: On) {
   on('session.start', async ($, e, next) => {
     $.clock.every(POLL_MS, async () => {
-      if (isOpen) await refresh($).catch(() => {})
+      // The pane draws on every invalidate; one not drawn for two polls was closed (Escape sends no event).
+      if ((await $.clock.now()) - drawnAt < POLL_MS * 2) await refresh($).catch(() => {})
     })
     try {
       await $.command.register({ name: 'fno', description: 'Your fno fleet and backlog as a table', argumentHint: '[fleet|backlog|close]', immediate: true })
@@ -76,13 +77,13 @@ export function register(on: On) {
   on('command.run', { command: 'fno' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'close') {
-      isOpen = false
+      drawnAt = -Infinity
       await $.ui.close({ id: PANE_ID }).catch(() => {})
       return { text: 'fno table closed' }
     }
     if (arg === 'fleet' || arg === 'backlog') tab = arg
     selected = 0
-    isOpen = true
+    drawnAt = await $.clock.now()
     await $.ui.open({ id: PANE_ID, title: 'fno', columns: PANE_COLUMNS, focus: true, closeOnEscape: true })
     await refresh($)
     return { text: `fno table: ${tab}` }
@@ -90,6 +91,7 @@ export function register(on: On) {
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE_ID) return next(e)
+    drawnAt = await $.clock.now()
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = rows[tab]
     const row = list[selected]
