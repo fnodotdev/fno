@@ -115,7 +115,7 @@ pub fn run(args: &[String]) -> i32 {
                 eprintln!("{USAGE}");
                 return 2;
             };
-            run_one(event, name, &args[3..], &raw)
+            run_one(event, name, args.get(3..).unwrap_or_default(), &raw)
         }
         Some(other) => {
             eprintln!("fno-agent hook front: unknown argument {other:?}; {USAGE}");
@@ -166,7 +166,8 @@ fn run_legs(event: Event, legs: Vec<Leg>, raw: &str) -> Value {
             .name(format!("hook-front-{}", leg.name))
             .spawn(move || {
                 let answer = std::panic::catch_unwind(|| super::captured(&payload, || entry(&[])));
-                let _ = tx.send(answer.ok());
+                // The receiver has gone once the bound fired.
+                tx.send(answer.ok()).ok();
             });
         match spawned {
             Ok(_) => waits.push((leg.name, leg.timeout, rx)),
@@ -300,4 +301,5 @@ pub(crate) fn merge(event: Event, outs: &[String]) -> Value {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts read JSON answers by key
 mod tests;

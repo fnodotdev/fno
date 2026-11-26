@@ -159,13 +159,15 @@ fn spawn_setup(fno: &Path, log: &Path) {
     let Ok(err) = out.try_clone() else {
         return;
     };
-    let _ = Command::new(fno)
+    // A child that fails to start is a skipped leg.
+    Command::new(fno)
         .args(["config", "setup", "run", "--once", "--json"])
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err))
-        .spawn();
+        .spawn()
+        .ok();
 }
 
 /// SessionStart does not fire in the session that installed the plugin, so
@@ -198,8 +200,10 @@ fn frontdoor_nudge(_args: &[String]) -> i32 {
         // respawn even when the run ends needs-human.
         let attempted = data.join("setup.attempted");
         if !attempted.is_file() {
-            let _ = fs::create_dir_all(&data);
-            let _ = fs::write(&attempted, "");
+            // A failed mkdir fails the write that needs it.
+            fs::create_dir_all(&data).ok();
+            // Best effort, as the script's write was.
+            fs::write(&attempted, "").ok();
             spawn_setup(&fno, &data.join("setup.log"));
         }
         return 0;
@@ -215,9 +219,11 @@ fn frontdoor_nudge(_args: &[String]) -> i32 {
     let out = out.trim_end_matches('\n');
     if !out.is_empty() {
         super::emit_raw(out);
-        let _ = fs::create_dir_all(&data);
+        // A failed mkdir fails the write that needs it.
+        fs::create_dir_all(&data).ok();
         if let Some(v) = &version {
-            let _ = fs::write(&marker, v);
+            // Best effort, as the script's write was.
+            fs::write(&marker, v).ok();
         }
     }
     0
@@ -304,17 +310,21 @@ fn steal_stale(lock: &Path) -> bool {
         // direct rename back would nest the reaped dir inside a new holder's.
         if fs::create_dir(lock).is_ok() {
             if fs::rename(reap.join("owner"), lock.join("owner")).is_ok() {
-                let _ = fs::remove_dir(&reap);
+                // Best effort, as the script's rm -f was.
+                fs::remove_dir(&reap).ok();
                 return false;
             }
-            let _ = fs::remove_dir(lock);
+            // Best effort, as the script's rm -f was.
+            fs::remove_dir(lock).ok();
         }
-        let _ = fs::remove_file(reap.join("owner"));
-        let _ = fs::remove_dir(&reap);
+        // Best effort, as the script's rm -f was.
+        fs::remove_file(reap.join("owner")).ok();
+        fs::remove_dir(&reap).ok();
         return false;
     }
-    let _ = fs::remove_file(reap.join("owner"));
-    let _ = fs::remove_dir(&reap);
+    // Best effort, as the script's rm -f was.
+    fs::remove_file(reap.join("owner")).ok();
+    fs::remove_dir(&reap).ok();
     true
 }
 
@@ -346,7 +356,8 @@ impl CursorLock {
             attempts += 1;
         }
         if fs::write(dir.join("owner"), &token).is_err() {
-            let _ = fs::remove_dir(&dir);
+            // Best effort, as the script's rm -f was.
+            fs::remove_dir(&dir).ok();
             return None;
         }
         Some(CursorLock { dir, token })
@@ -358,8 +369,9 @@ impl Drop for CursorLock {
         if fs::read_to_string(self.dir.join("owner")).ok().as_deref() != Some(self.token.as_str()) {
             return;
         }
-        let _ = fs::remove_file(self.dir.join("owner"));
-        let _ = fs::remove_dir(&self.dir);
+        // Best effort, as the script's rm -f was.
+        fs::remove_file(self.dir.join("owner")).ok();
+        fs::remove_dir(&self.dir).ok();
     }
 }
 
@@ -530,7 +542,7 @@ fn enrich(json: &str) -> Option<(String, String, String)> {
     let why0 = defang(&words(node.details.as_ref())?);
     let chars: Vec<char> = why0.chars().collect();
     let why = if chars.len() > 200 {
-        let head: String = chars[..200].iter().collect();
+        let head: String = chars.iter().take(200).collect();
         let cut = match head.rfind(' ') {
             Some(i) => head[..i].trim_end().to_string(),
             None => head.clone(),
@@ -676,7 +688,8 @@ fn recover_gc_cursor(cursor: &Path, events: &Path) -> Option<()> {
         .open(&recover)
         .and_then(|mut f| std::io::Write::write_all(&mut f, format!("{}", at as u64).as_bytes()));
     if written.is_err() || fs::rename(&recover, cursor).is_err() {
-        let _ = fs::remove_file(&recover);
+        // Best effort, as the script's rm -f was.
+        fs::remove_file(&recover).ok();
         return None;
     }
     fs::remove_file(&pending_path).ok()
@@ -770,7 +783,8 @@ fn born_with_why_offer(_args: &[String]) -> i32 {
         return 0;
     };
     let scan = scan_offers(&String::from_utf8_lossy(&slice));
-    let _ = fs::write(&cursor, size.to_string());
+    // Best effort, as the script's write was.
+    fs::write(&cursor, size.to_string()).ok();
     if scan.nid.is_empty() {
         return 0;
     }
@@ -911,7 +925,8 @@ pub(super) fn friction_offer(_args: &[String]) -> i32 {
     let text = fs::read(&claimed)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default();
-    let _ = fs::remove_file(&claimed);
+    // Best effort, as the script's rm -f was.
+    fs::remove_file(&claimed).ok();
     let text = text.trim_end_matches('\n').replace('\r', "");
     super::emit_context(event, &text);
     0

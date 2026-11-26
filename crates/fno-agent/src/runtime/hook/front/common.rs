@@ -153,12 +153,13 @@ pub(crate) fn bounded_stdout(cmd: Command, stdin: Option<&str>, secs: u64) -> Op
 /// Start `cmd` detached: no stdio, never waited on. It outlives the front.
 pub(crate) fn detach(mut cmd: Command) {
     use std::os::unix::process::CommandExt;
-    let _ = cmd
-        .process_group(0)
+    // A child that fails to start is a skipped leg.
+    cmd.process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn();
+        .spawn()
+        .ok();
 }
 
 /// The `fno` front door: PATH first, then the install homes fno-bin.sh read.

@@ -80,7 +80,7 @@ const CHILD_SECS: u64 = 30;
 
 fn context_nudge(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some(CACHE_REFRESH) {
-        return cache_refresh(&args[1..]);
+        return cache_refresh(args.get(1..).unwrap_or_default());
     }
     let (_raw, payload) = super::payload();
     // stop_hook_active: Stop re-fired after a block (mid-compaction, or
@@ -104,12 +104,11 @@ fn context_nudge(args: &[String]) -> i32 {
     let tbase = transcript_base(&transcript);
     let cwd = super::cwd();
     let repo_root = super::repo_root(&cwd);
-    let plugin_root = super::plugin_root();
     let budget = super::budget_secs();
     let fno = super::fno_bin();
 
     // Both triggers from one `fno config get target.handoff` boot.
-    let (general_trigger, lead_trigger) = match (&fno, budget > 0) {
+    let triggers = match (&fno, budget > 0) {
         (Some(fno), true) => {
             let mut cmd = Command::new(fno);
             cmd.args(["config", "get", "target.handoff"]);
@@ -117,64 +116,14 @@ fn context_nudge(args: &[String]) -> i32 {
         }
         _ => (50, 40),
     };
-
-    // The probe rides the stale-while-revalidate cache, fingerprinted by a
-    // cksum of the transcript bytes so any changed transcript re-measures.
-    let fingerprint = cksum_fingerprint(&transcript);
-    let probe_out = {
-        let t = transcript.clone();
-        let sid = session_id.clone();
-        let here = cwd.clone();
-        let live = move || probe_live(&t, &sid, &here);
-        let refresh = super::fno_agent_bin()
-            .map(|bin| {
-                vec![
-                    bin.to_string_lossy().into_owned(),
-                    "context-run".to_string(),
-                    "--probe".to_string(),
-                    "--transcript".to_string(),
-                    transcript.to_string_lossy().into_owned(),
-                    "--session".to_string(),
-                    session_id.clone(),
-                    "--json".to_string(),
-                ]
-            })
-            .unwrap_or_default();
-        cache_serve(
-            &format!("ctxprobe-{tbase}"),
-            PROBE_MAX_AGE,
-            &fingerprint,
-            &live,
-            &refresh,
-        )
-        .0
-    };
-    let probe = Probe::parse(&probe_out);
+    let probe = read_probe(&transcript, &session_id, &cwd, &tbase);
 
     // The registry, best-effort: an unreadable one reads as non-teamed.
     let agents = read_registry();
-    let me = agents
-        .as_deref()
-        .and_then(|rows| my_row(rows, &session_id))
-        .cloned();
-    let team_level = me
-        .as_ref()
-        .map(|r| r.role_level.clone())
-        .filter(level_present);
-    let team_scope = me
-        .as_ref()
-        .and_then(|r| r.role_scope.clone())
-        .unwrap_or_default();
-    let lead_row_cwd = me.as_ref().and_then(|r| r.cwd.clone()).unwrap_or_default();
-    let is_lead = team_level.is_some();
-    let buckets = match (&agents, is_lead) {
+    let team = Team::of(agents.as_deref(), &session_id);
+    let buckets = match (&agents, team.is_lead()) {
         (Some(rows), true) => Buckets::of(rows, &session_id),
         _ => Buckets::default(),
-    };
-    let effective_trigger = if is_lead {
-        lead_trigger
-    } else {
-        general_trigger
     };
 
     let band = probe.used_pct.map(|p| p / 10).unwrap_or(0);
@@ -183,209 +132,316 @@ fn context_nudge(args: &[String]) -> i32 {
     // overridden config.state_dir.
     let state_dir = state_dir(&cwd);
     let latch_dir = state_dir.join("state/latches");
-    let _ = std::fs::create_dir_all(&latch_dir);
+    // A failed mkdir fails the write that needs it.
+    std::fs::create_dir_all(&latch_dir).ok();
     sweep_latches(&latch_dir);
     let latches = Latches::new(&latch_dir, &tbase, band);
     let events = Events {
-        repo_root: repo_root.clone(),
-        state_dir: state_dir.clone(),
+        repo_root,
+        state_dir,
+    };
+    let cx = Nudge {
+        session_id: &session_id,
+        cwd: &cwd,
+        fno: fno.as_deref(),
+        budget,
+        events: &events,
+        latches: &latches,
     };
 
     let mut reasons: Vec<String> = Vec::new();
-
-    // Check (a): context pressure, every session.
-    let (fire_ctx, preparation) = probe.fire(effective_trigger);
-    if fire_ctx && !latches.ctx.exists() {
-        touch(&latches.ctx);
-        let codex = std::env::var("FNO_HARNESS").as_deref() == Ok("codex")
-            || std::env::var_os("CODEX_THREAD_ID").is_some_and(|v| !v.is_empty());
-        let compact_ask = if codex {
-            if preparation {
-                "Astra preparation band reached. Preserve volatile decisions and continue; the provider compact action waits for the action band.".to_string()
-            } else {
-                provider_text(&provider_compaction_receipt(&session_id, &cwd), &session_id)
-            }
-        } else {
-            compact_text(&compact_check(fno.as_deref(), budget))
-        };
-        let pct = probe.used_pct.unwrap_or(0);
-        if is_lead {
-            events.emit(
-                "lead_context_nudge",
-                json!({"used_pct": pct, "trigger": lead_trigger, "role_level": team_level.clone().unwrap_or(Value::Null), "role_scope": team_scope, "session_id": session_id}),
-            );
-            let rows = agents.as_deref().unwrap_or(&[]);
-            let canon_doc = fno
-                .as_deref()
-                .map(|fno| {
-                    let mut cmd = Command::new(fno);
-                    cmd.args(["config", "paths", "handoff"]);
-                    if team_scope.is_empty() {
-                        cmd.args(["--session-id", &session_id]);
-                    } else {
-                        cmd.args(["--scope", &team_scope]);
-                    }
-                    first_line(&stdout_any(super::bounded(cmd, None, budget)))
-                })
-                .unwrap_or_default();
-            reasons.push(lead_reason(
-                &probe,
-                &team_scope,
-                &compact_ask,
-                &canon_doc,
-                preparation,
-                &rollup(rows, &team_scope),
-            ));
-        } else {
-            events.emit(
-                "session_context_nudge",
-                json!({"used_pct": pct, "trigger": general_trigger, "session_id": session_id}),
-            );
-            // plan_path only words the ask; it gates nothing.
-            let plan_path = super::fno_agent_bin()
-                .map(|bin| {
-                    let mut cmd = Command::new(bin);
-                    cmd.args([
-                        "state-cli",
-                        "show",
-                        "--type",
-                        "target",
-                        "--field",
-                        "plan_path",
-                    ]);
-                    first_line(&stdout_any(super::bounded(cmd, None, budget)))
-                })
-                .unwrap_or_default();
-            let canon_doc = if plan_path.is_empty() {
-                fno.as_deref()
-                    .map(|fno| {
-                        let mut cmd = Command::new(fno);
-                        cmd.args(["config", "paths", "handoff", "--session-id", &session_id]);
-                        first_line(&stdout_any(super::bounded(cmd, None, budget)))
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            reasons.push(session_reason(
-                &probe,
-                general_trigger,
-                &compact_ask,
-                &plan_path,
-                &canon_doc,
-                preparation,
-            ));
-        }
+    reasons.extend(pressure_check(
+        &cx,
+        &probe,
+        &team,
+        agents.as_deref(),
+        triggers,
+    ));
+    if team.is_lead() && buckets.any() && !latches.orphan.exists() {
+        reasons.extend(orphan_check(&cx, &team, &buckets));
     }
-
-    // Check (b): orphaned live children, teamed leads only, own latch.
-    if is_lead && buckets.any() && !latches.orphan.exists() {
-        let mut resolved = false;
-        // Resolution 1: the holder declared the team on the manifest, read
-        // from the ROLE ROW's cwd space, never this leg's cwd.
-        if !team_scope.is_empty() {
-            if let Some(manifest) =
-                lead_manifest_path_for_row(&lead_row_cwd, &team_scope, &cwd, &state_dir)
-            {
-                if let Ok(text) = std::fs::read_to_string(&manifest) {
-                    resolved = shape_declares_team(&text);
-                }
-            }
-        }
-        // Resolution 3: a recent carveout carrying THIS scope, filed by any
-        // session (`--all`). A broken reader never clears the guard.
-        if let Some(fno) = fno.as_deref() {
-            let mut cmd = Command::new(fno);
-            cmd.args(["backlog", "carveout", "list", "--all", "--json"]);
-            let ledger = stdout_any(super::bounded(cmd, None, budget));
-            let cutoff = utc_stamp(SystemTime::now() - Duration::from_secs(24 * 3600));
-            if carveout_hit(&ledger, &team_scope, &cutoff) {
-                resolved = true;
-            }
-        }
-        if !resolved {
-            touch(&latches.orphan);
-            events.emit(
-                "lead_orphan_block",
-                json!({
-                    "role_level": team_level.clone().unwrap_or(Value::Null),
-                    "role_scope": team_scope,
-                    "workers": buckets.linked.names(),
-                    "count": buckets.linked.count(),
-                    "unknown_workers": buckets.unknown.names(),
-                    "unknown_count": buckets.unknown.count(),
-                    "unlinked_workers": buckets.unlinked.names(),
-                    "unlinked_count": buckets.unlinked.count(),
-                    "unlinked_unknown_workers": buckets.unlinked_unknown.names(),
-                    "unlinked_unknown_count": buckets.unlinked_unknown.count(),
-                    "session_id": session_id,
-                }),
-            );
-            reasons.push(orphan_reason(&team_scope, &buckets));
-        }
-    }
-
-    // Check (c): flush cadence, work only in volatile state. git is the
-    // code-vertical detector; no repo degrades to silence.
-    let dirty = git_out(&repo_root, &["status", "--porcelain"])
-        .lines()
-        .filter(|l| !l.is_empty())
-        .count() as u64;
-    let head = git_out(&repo_root, &["rev-parse", "HEAD"])
-        .trim_end_matches('\n')
-        .to_string();
-    let mut fire_flush = false;
-    let mut static_stops = 0;
-    if !head.is_empty() {
-        let stored = std::fs::read_to_string(&latches.flush_state).unwrap_or_default();
-        static_stops = next_static_count(stored.trim_end_matches('\n'), &head);
-        let _ = std::fs::write(&latches.flush_state, format!("{head} {static_stops}\n"));
-        fire_flush = dirty > FLUSH_FILE_THRESHOLD
-            && static_stops >= FLUSH_STATIC_STOPS
-            && !latches.flush.exists();
-    }
-    if fire_flush {
-        // Whose dirt is this? Unmeasurable fails closed, never reads empty.
-        let root_text = repo_root.to_string_lossy().into_owned();
-        match foreign_rooted_writers(&plugin_root, &repo_root, &session_id, &state_dir) {
-            Err(()) => {
-                events.emit(
-                    "context_flush_refused",
-                    json!({"dirty_files": dirty, "readable": false, "writers": "", "session_id": session_id}),
-                );
-                reasons.push(format!(
-                    "flush: REFUSED. {dirty} files are dirty in {root_text}, but whether a foreign live writer is rooted there could not be measured (process snapshot or agents registry unreadable), so the dirt cannot be read as yours alone. Do NOT run 'git add -A' or 'git commit -a' - stage only your own paths by name, and leave the rest."
-                ));
-            }
-            Ok(foreign) if !foreign.is_empty() => {
-                // Refused once already: stay silent. The flush latch stays
-                // unconsumed so the real nudge fires once the writer leaves.
-                if !latches.foreign.exists() {
-                    touch(&latches.foreign);
-                    events.emit(
-                        "context_flush_refused",
-                        json!({"dirty_files": dirty, "readable": true, "writers": foreign.replace('\t', ":").replace('\n', ","), "session_id": session_id}),
-                    );
-                    reasons.push(foreign_reason(dirty, &root_text, &foreign));
-                }
-            }
-            Ok(_) => {
-                touch(&latches.flush);
-                events.emit(
-                    "context_flush_nudge",
-                    json!({"dirty_files": dirty, "static_stops": static_stops, "session_id": session_id}),
-                );
-                reasons.push(format!(
-                    "flush: {dirty} files have uncommitted changes and the tree has not moved in {static_stops} turn-ends, so this work exists only in this session's volatile state - a compact or a crashed pane loses it. Fix what you found if it is small: commit it now, in this PR, as its own atomic commit. File a carveout ONLY for what is genuinely separable: 'fno backlog carveout add -k deferred \"...\"'. A session that never reaches the end of a unit of work records nothing."
-                ));
-            }
-        }
-    }
-
+    reasons.extend(flush_check(&cx));
     if !reasons.is_empty() {
         super::emit_block(&reasons.join("  ||  "));
     }
     0
+}
+
+/// What every context-nudge check reads.
+struct Nudge<'a> {
+    session_id: &'a str,
+    cwd: &'a Path,
+    fno: Option<&'a Path>,
+    budget: u64,
+    events: &'a Events,
+    latches: &'a Latches,
+}
+
+/// This session's registry role. A level marks a teamed lead.
+#[derive(Default)]
+struct Team {
+    level: Option<Value>,
+    scope: String,
+    row_cwd: String,
+}
+
+impl Team {
+    fn of(agents: Option<&[AgentRow]>, session_id: &str) -> Self {
+        let Some(me) = agents.and_then(|rows| my_row(rows, session_id)) else {
+            return Team::default();
+        };
+        Team {
+            level: Some(me.role_level.clone()).filter(level_present),
+            scope: me.role_scope.clone().unwrap_or_default(),
+            row_cwd: me.cwd.clone().unwrap_or_default(),
+        }
+    }
+
+    fn is_lead(&self) -> bool {
+        self.level.is_some()
+    }
+}
+
+/// The probe rides the stale-while-revalidate cache, fingerprinted by a
+/// cksum of the transcript bytes so any changed transcript re-measures.
+fn read_probe(transcript: &Path, session_id: &str, cwd: &Path, tbase: &str) -> Probe {
+    let fingerprint = cksum_fingerprint(transcript);
+    let (t, sid, here) = (
+        transcript.to_path_buf(),
+        session_id.to_string(),
+        cwd.to_path_buf(),
+    );
+    let live = move || probe_live(&t, &sid, &here);
+    let refresh = super::fno_agent_bin()
+        .map(|bin| {
+            vec![
+                bin.to_string_lossy().into_owned(),
+                "context-run".to_string(),
+                "--probe".to_string(),
+                "--transcript".to_string(),
+                transcript.to_string_lossy().into_owned(),
+                "--session".to_string(),
+                session_id.to_string(),
+                "--json".to_string(),
+            ]
+        })
+        .unwrap_or_default();
+    let out = cache_serve(
+        &format!("ctxprobe-{tbase}"),
+        PROBE_MAX_AGE,
+        &fingerprint,
+        &live,
+        &refresh,
+    )
+    .0;
+    Probe::parse(&out)
+}
+
+/// Check (a): context pressure, every session.
+fn pressure_check(
+    cx: &Nudge,
+    probe: &Probe,
+    team: &Team,
+    agents: Option<&[AgentRow]>,
+    (general_trigger, lead_trigger): (u64, u64),
+) -> Option<String> {
+    let (session_id, fno, budget) = (cx.session_id, cx.fno, cx.budget);
+    let trigger = if team.is_lead() {
+        lead_trigger
+    } else {
+        general_trigger
+    };
+    let (fire_ctx, preparation) = probe.fire(trigger);
+    if !fire_ctx || cx.latches.ctx.exists() {
+        return None;
+    }
+    touch(&cx.latches.ctx);
+    let codex = std::env::var("FNO_HARNESS").as_deref() == Ok("codex")
+        || std::env::var_os("CODEX_THREAD_ID").is_some_and(|v| !v.is_empty());
+    let compact_ask = if codex {
+        if preparation {
+            "Astra preparation band reached. Preserve volatile decisions and continue; the provider compact action waits for the action band.".to_string()
+        } else {
+            provider_text(&provider_compaction_receipt(session_id, cx.cwd), session_id)
+        }
+    } else {
+        compact_text(&compact_check(fno, budget))
+    };
+    let pct = probe.used_pct.unwrap_or(0);
+    if team.is_lead() {
+        cx.events.emit(
+            "lead_context_nudge",
+            json!({"used_pct": pct, "trigger": lead_trigger, "role_level": team.level.clone().unwrap_or(Value::Null), "role_scope": team.scope, "session_id": session_id}),
+        );
+        let rows = agents.unwrap_or(&[]);
+        let canon_doc = fno
+            .map(|fno| {
+                let mut cmd = Command::new(fno);
+                cmd.args(["config", "paths", "handoff"]);
+                if team.scope.is_empty() {
+                    cmd.args(["--session-id", session_id]);
+                } else {
+                    cmd.args(["--scope", team.scope.as_str()]);
+                }
+                first_line(&stdout_any(super::bounded(cmd, None, budget)))
+            })
+            .unwrap_or_default();
+        return Some(lead_reason(
+            probe,
+            &team.scope,
+            &compact_ask,
+            &canon_doc,
+            preparation,
+            &rollup(rows, &team.scope),
+        ));
+    }
+    cx.events.emit(
+        "session_context_nudge",
+        json!({"used_pct": pct, "trigger": general_trigger, "session_id": session_id}),
+    );
+    // plan_path only words the ask; it gates nothing.
+    let plan_path = super::fno_agent_bin()
+        .map(|bin| {
+            let mut cmd = Command::new(bin);
+            cmd.args([
+                "state-cli",
+                "show",
+                "--type",
+                "target",
+                "--field",
+                "plan_path",
+            ]);
+            first_line(&stdout_any(super::bounded(cmd, None, budget)))
+        })
+        .unwrap_or_default();
+    let canon_doc = if plan_path.is_empty() {
+        fno.map(|fno| {
+            let mut cmd = Command::new(fno);
+            cmd.args(["config", "paths", "handoff", "--session-id", session_id]);
+            first_line(&stdout_any(super::bounded(cmd, None, budget)))
+        })
+        .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Some(session_reason(
+        probe,
+        general_trigger,
+        &compact_ask,
+        &plan_path,
+        &canon_doc,
+        preparation,
+    ))
+}
+
+/// Check (b): orphaned live children, teamed leads only, own latch.
+fn orphan_check(cx: &Nudge, team: &Team, buckets: &Buckets) -> Option<String> {
+    let mut resolved = false;
+    // Resolution 1: the holder declared the team on the manifest, read
+    // from the ROLE ROW's cwd space, never this leg's cwd.
+    if !team.scope.is_empty() {
+        if let Some(manifest) =
+            lead_manifest_path_for_row(&team.row_cwd, &team.scope, cx.cwd, &cx.events.state_dir)
+        {
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                resolved = shape_declares_team(&text);
+            }
+        }
+    }
+    // Resolution 3: a recent carveout carrying THIS scope, filed by any
+    // session (`--all`). A broken reader never clears the guard.
+    if let Some(fno) = cx.fno {
+        let mut cmd = Command::new(fno);
+        cmd.args(["backlog", "carveout", "list", "--all", "--json"]);
+        let ledger = stdout_any(super::bounded(cmd, None, cx.budget));
+        let cutoff = utc_stamp(SystemTime::now() - Duration::from_secs(24 * 3600));
+        if carveout_hit(&ledger, &team.scope, &cutoff) {
+            resolved = true;
+        }
+    }
+    if resolved {
+        return None;
+    }
+    touch(&cx.latches.orphan);
+    cx.events.emit(
+        "lead_orphan_block",
+        json!({
+            "role_level": team.level.clone().unwrap_or(Value::Null),
+            "role_scope": team.scope,
+            "workers": buckets.linked.names(),
+            "count": buckets.linked.count(),
+            "unknown_workers": buckets.unknown.names(),
+            "unknown_count": buckets.unknown.count(),
+            "unlinked_workers": buckets.unlinked.names(),
+            "unlinked_count": buckets.unlinked.count(),
+            "unlinked_unknown_workers": buckets.unlinked_unknown.names(),
+            "unlinked_unknown_count": buckets.unlinked_unknown.count(),
+            "session_id": cx.session_id,
+        }),
+    );
+    Some(orphan_reason(&team.scope, buckets))
+}
+
+/// Check (c): flush cadence, work only in volatile state. git is the
+/// code-vertical detector; no repo degrades to silence.
+fn flush_check(cx: &Nudge) -> Option<String> {
+    let (session_id, latches) = (cx.session_id, cx.latches);
+    let repo_root = &cx.events.repo_root;
+    let dirty = git_out(repo_root, &["status", "--porcelain"])
+        .lines()
+        .filter(|l| !l.is_empty())
+        .count() as u64;
+    let head = git_out(repo_root, &["rev-parse", "HEAD"])
+        .trim_end_matches('\n')
+        .to_string();
+    if head.is_empty() {
+        return None;
+    }
+    let stored = std::fs::read_to_string(&latches.flush_state).unwrap_or_default();
+    let static_stops = next_static_count(stored.trim_end_matches('\n'), &head);
+    // Best effort, as the script's write was.
+    std::fs::write(&latches.flush_state, format!("{head} {static_stops}\n")).ok();
+    if dirty <= FLUSH_FILE_THRESHOLD || static_stops < FLUSH_STATIC_STOPS || latches.flush.exists()
+    {
+        return None;
+    }
+    // Whose dirt is this? Unmeasurable fails closed, never reads empty.
+    let root_text = repo_root.to_string_lossy().into_owned();
+    let plugin_root = super::plugin_root();
+    match foreign_rooted_writers(&plugin_root, repo_root, session_id, &cx.events.state_dir) {
+        Err(()) => {
+            cx.events.emit(
+                "context_flush_refused",
+                json!({"dirty_files": dirty, "readable": false, "writers": "", "session_id": session_id}),
+            );
+            Some(format!(
+                "flush: REFUSED. {dirty} files are dirty in {root_text}, but whether a foreign live writer is rooted there could not be measured (process snapshot or agents registry unreadable), so the dirt cannot be read as yours alone. Do NOT run 'git add -A' or 'git commit -a' - stage only your own paths by name, and leave the rest."
+            ))
+        }
+        Ok(foreign) if !foreign.is_empty() => {
+            // Refused once already: stay silent. The flush latch stays
+            // unconsumed so the real nudge fires once the writer leaves.
+            if latches.foreign.exists() {
+                return None;
+            }
+            touch(&latches.foreign);
+            cx.events.emit(
+                "context_flush_refused",
+                json!({"dirty_files": dirty, "readable": true, "writers": foreign.replace('\t', ":").replace('\n', ","), "session_id": session_id}),
+            );
+            Some(foreign_reason(dirty, &root_text, &foreign))
+        }
+        Ok(_) => {
+            touch(&latches.flush);
+            cx.events.emit(
+                "context_flush_nudge",
+                json!({"dirty_files": dirty, "static_stops": static_stops, "session_id": session_id}),
+            );
+            Some(format!(
+                "flush: {dirty} files have uncommitted changes and the tree has not moved in {static_stops} turn-ends, so this work exists only in this session's volatile state - a compact or a crashed pane loses it. Fix what you found if it is small: commit it now, in this PR, as its own atomic commit. File a carveout ONLY for what is genuinely separable: 'fno backlog carveout add -k deferred \"...\"'. A session that never reaches the end of a unit of work records nothing."
+            ))
+        }
+    }
 }
 
 /// `basename <transcript> .jsonl`.
@@ -498,7 +554,9 @@ fn probe_live(transcript: &Path, session: &str, cwd: &Path) -> (String, i32) {
     let spawned = std::thread::Builder::new()
         .name("context-nudge-probe".into())
         .spawn(move || {
-            let _ = tx.send(crate::context_run::transcript_reading(&t, &s, &c));
+            // The receiver has gone once the bound fired.
+            tx.send(crate::context_run::transcript_reading(&t, &s, &c))
+                .ok();
         });
     if spawned.is_err() {
         return (String::new(), 0);
@@ -1091,7 +1149,8 @@ fn sweep_latches(dir: &Path) {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         if age / 86_400 > LATCH_MAX_AGE_DAYS {
-            let _ = std::fs::remove_file(entry.path());
+            // Best effort, as the script's rm -f was.
+            std::fs::remove_file(entry.path()).ok();
         }
     }
 }
@@ -1188,7 +1247,7 @@ fn physical(path: &Path) -> PathBuf {
 
 fn operator_capture_nudge(args: &[String]) -> i32 {
     if args.first().map(String::as_str) == Some(CACHE_REFRESH) {
-        return cache_refresh(&args[1..]);
+        return cache_refresh(args.get(1..).unwrap_or_default());
     }
     let Some(fno) = super::fno_bin() else {
         return 0;
@@ -1260,11 +1319,17 @@ fn operator_capture_nudge(args: &[String]) -> i32 {
 /// prints, and a preamble can carry a brace. Offsets walk codepoints.
 fn operator_capture_text(payload: &str) -> Option<String> {
     let c: Vec<char> = payload.chars().collect();
-    let closes: Vec<usize> = (0..c.len()).filter(|&j| c[j] == '}').collect();
+    let closes: Vec<usize> = c
+        .iter()
+        .enumerate()
+        .filter(|(_, ch)| **ch == '}')
+        .map(|(j, _)| j)
+        .collect();
     let mut objs: Vec<serde_json::Map<String, Value>> = Vec::new();
-    for i in (0..c.len()).filter(|&i| c[i] == '{') {
+    let opens = c.iter().enumerate().filter(|(_, ch)| **ch == '{');
+    for (i, _) in opens {
         let found = closes.iter().filter(|&&j| j > i).find_map(|&j| {
-            let s: String = c[i..=j].iter().collect();
+            let s: String = c.get(i..=j).unwrap_or_default().iter().collect();
             serde_json::from_str::<Value>(&s)
                 .ok()
                 .filter(|v| !v.is_null())
@@ -1348,7 +1413,7 @@ fn run_optional(argv: &[String]) -> (String, i32) {
         return (String::new(), 0);
     };
     let mut cmd = Command::new(prog);
-    cmd.args(&argv[1..]);
+    cmd.args(argv.get(1..).unwrap_or_default());
     match super::bounded(cmd, None, budget) {
         None => (String::new(), 127),
         Some(out) => match out.status.code() {
@@ -1424,7 +1489,8 @@ fn cache_serve(
     }
     let (out, rc) = live();
     if !out.is_empty() {
-        let _ = std::fs::create_dir_all(&dir);
+        // A failed mkdir fails the write that needs it.
+        std::fs::create_dir_all(&dir).ok();
         prune_cache(&dir);
         store(&file, fp, &out);
         return (out, rc);
@@ -1453,7 +1519,8 @@ fn prune_cache(dir: &Path) {
     }
     files.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, path) in files.into_iter().skip(250) {
-        let _ = std::fs::remove_file(path);
+        // Best effort, as the script's rm -f was.
+        std::fs::remove_file(path).ok();
     }
 }
 
@@ -1463,7 +1530,8 @@ fn store(file: &Path, fp: &str, out: &str) {
     let tmp = PathBuf::from(format!("{}.tmp.{}", file.display(), std::process::id()));
     if std::fs::write(&tmp, format!("{fp}\n{out}")).is_ok() && std::fs::rename(&tmp, file).is_err()
     {
-        let _ = std::fs::remove_file(&tmp);
+        // Best effort, as the script's rm -f was.
+        std::fs::remove_file(&tmp).ok();
     }
 }
 
@@ -1498,7 +1566,7 @@ fn cache_refresh(args: &[String]) -> i32 {
         return 0;
     }
     let mut cmd = Command::new(prog);
-    cmd.args(&args[3..]);
+    cmd.args(args.get(3..).unwrap_or_default());
     let fresh = stdout_ok(super::bounded(cmd, None, budget));
     if !fresh.is_empty() {
         store(Path::new(file), fp, &fresh);
@@ -1533,7 +1601,13 @@ fn posix_cksum(mut input: impl Read) -> Option<(u32, u64)> {
         }
         *slot = c;
     }
-    let step = |crc: u32, byte: u8| (crc << 8) ^ table[(((crc >> 24) as u8) ^ byte) as usize];
+    let step = |crc: u32, byte: u8| {
+        (crc << 8)
+            ^ table
+                .get(usize::from(((crc >> 24) as u8) ^ byte))
+                .copied()
+                .unwrap_or(0)
+    };
     let mut crc = 0u32;
     let mut len = 0u64;
     let mut buf = [0u8; 64 * 1024];
@@ -1545,7 +1619,7 @@ fn posix_cksum(mut input: impl Read) -> Option<(u32, u64)> {
             Err(_) => return None,
         };
         len += n as u64;
-        for &b in &buf[..n] {
+        for &b in buf.get(..n).unwrap_or_default() {
             crc = step(crc, b);
         }
     }
@@ -1582,10 +1656,12 @@ fn first_line(text: &str) -> String {
 }
 
 fn touch(path: &Path) {
-    let _ = std::fs::OpenOptions::new()
+    // Best effort, as the script's write was.
+    std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path);
+        .open(path)
+        .ok();
 }
 
 fn env_nonempty(key: &str) -> Option<String> {

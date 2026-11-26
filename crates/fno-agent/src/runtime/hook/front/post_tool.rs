@@ -67,7 +67,8 @@ fn touch(path: &Path) {
         .append(true)
         .open(path)
     {
-        let _ = file.set_modified(SystemTime::now());
+        // Best effort, as the script's write was.
+        file.set_modified(SystemTime::now()).ok();
     }
 }
 
@@ -297,7 +298,8 @@ fn attested_model(session: &str) -> Option<String> {
 }
 
 fn persist(path: &Path, state: &Map<String, Value>) {
-    let _ = std::fs::write(path, Value::Object(state.clone()).to_string());
+    // Best effort, as the script's write was.
+    std::fs::write(path, Value::Object(state.clone()).to_string()).ok();
 }
 
 fn spend_drift(_args: &[String]) -> i32 {
@@ -411,7 +413,8 @@ fn within<T: Send + 'static>(secs: u64, work: impl FnOnce() -> T + Send + 'stati
     std::thread::Builder::new()
         .name("claim-heartbeat-call".into())
         .spawn(move || {
-            let _ = tx.send(work());
+            // The receiver has gone once the bound fired.
+            tx.send(work()).ok();
         })
         .ok()?;
     rx.recv_timeout(Duration::from_secs(secs)).ok()
@@ -654,9 +657,11 @@ fn write_stamp(
     }
     let tmp = PathBuf::from(format!("{}.tmp.{}", stamp.display(), std::process::id()));
     if std::fs::write(&tmp, body).is_ok() {
-        let _ = std::fs::rename(&tmp, stamp);
+        // Best effort, as the script's write was.
+        std::fs::rename(&tmp, stamp).ok();
     }
-    let _ = std::fs::remove_file(&tmp);
+    // Best effort, as the script's rm -f was.
+    std::fs::remove_file(&tmp).ok();
 }
 
 /// `<git dir>/fno/live`: the per-physical-worktree activity folder, even
@@ -843,7 +848,8 @@ fn handover_heartbeat(cwd: &str, live: Option<&Path>) {
     // physical worktree, so the throttle stamp can always be written there.
     let stamp = match live.and_then(Path::parent) {
         Some(fno) => {
-            let _ = std::fs::create_dir_all(fno);
+            // A failed mkdir fails the write that needs it.
+            std::fs::create_dir_all(fno).ok();
             fno.join("claim-handover-heartbeat.stamp")
         }
         None => Path::new(cwd).join(".fno/.claim-handover-heartbeat.stamp"),
@@ -979,27 +985,33 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
     }
 
     handover_heartbeat(&cwd, live.as_deref());
-
-    let here = super::cwd();
-    let here = std::fs::canonicalize(&here).unwrap_or(here);
-    let manifest_path = crate::state_path::resolve("target-state", &here)
-        .unwrap_or_else(|| Path::new(&cwd).join(".fno/target-state.md"));
-    if !manifest_path.is_file() {
-        return 0;
-    }
-    let Some(m) = std::fs::read_to_string(&manifest_path)
-        .ok()
-        .and_then(|t| parse_manifest(&t))
-    else {
-        return 0;
-    };
     let id = Identity {
         codex,
         claude_sid: &claude_sid,
         codex_thread: &codex_thread,
     };
-    if !owns(&m, &id) {
-        return 0;
+    renew_owned_claim(&cwd, &id);
+    0
+}
+
+/// The holder-gated renewal: the session that owns the manifest renews its
+/// node claim, at most once per throttle window.
+fn renew_owned_claim(cwd: &str, id: &Identity) {
+    let here = super::cwd();
+    let here = std::fs::canonicalize(&here).unwrap_or(here);
+    let manifest_path = crate::state_path::resolve("target-state", &here)
+        .unwrap_or_else(|| Path::new(cwd).join(".fno/target-state.md"));
+    if !manifest_path.is_file() {
+        return;
+    }
+    let Some(m) = std::fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|t| parse_manifest(&t))
+    else {
+        return;
+    };
+    if !owns(&m, id) {
+        return;
     }
     let sid = ledger_sid(&m);
 
@@ -1011,7 +1023,7 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
         .join(".claim-heartbeat.stamp");
     let throttle = env_secs("FNO_CLAIM_HEARTBEAT_THROTTLE", 1200) as i64;
     if fresh(&stamp, throttle) {
-        return 0;
+        return;
     }
 
     let key = format!("node:{}", m.node);
@@ -1022,7 +1034,7 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
         Err((outcome, line)) => {
             eprintln!("{line}");
             write_stamp(&stamp, outcome, &m, &sid, &holder_state, None);
-            return 0;
+            return;
         }
     };
     // Re-arm to the claim's 2h window: refresh with no ttl shrinks it to
@@ -1038,7 +1050,6 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
         eprintln!("{line}");
     }
     write_stamp(&stamp, outcome, &m, &sid, &holder_state, expires);
-    0
 }
 
 #[cfg(test)]

@@ -239,7 +239,8 @@ fn check_due(harness: &str, sid: &str, transcript: Option<&str>, compacted: bool
                 true,
                 compacted,
             );
-            let _ = tx.send(due);
+            // The receiver has gone once the bound fired.
+            tx.send(due).ok();
         });
     spawned.is_ok()
         && rx
@@ -294,7 +295,8 @@ fn prime_plugin_root_pointer(root: &Path, home: &Path) {
     if std::fs::create_dir_all(home.join("install")).is_err() {
         return;
     }
-    let _ = std::fs::write(&ptr, format!("{want}\n"));
+    // Best effort, as the script's write was.
+    std::fs::write(&ptr, format!("{want}\n")).ok();
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +341,8 @@ fn context_run_leg(args: &[String]) -> i32 {
         return 0;
     };
     let cache_dir = context_cache_dir(&env_nonempty);
-    let _ = std::fs::create_dir_all(&cache_dir);
+    // A failed mkdir fails the write that needs it.
+    std::fs::create_dir_all(&cache_dir).ok();
     let key = cwd_key(&super::cwd());
     let cache = cache_dir.join(format!("{key}-{group}.json"));
 
@@ -497,7 +500,9 @@ fn daemon_down(sock: &Path) -> bool {
     let spawned = std::thread::Builder::new()
         .name("hook-front-daemon-probe".into())
         .spawn(move || {
-            let _ = tx.send(std::os::unix::net::UnixStream::connect(&path).is_ok());
+            // The receiver has gone once the bound fired.
+            tx.send(std::os::unix::net::UnixStream::connect(&path).is_ok())
+                .ok();
         });
     spawned.is_ok() && !rx.recv_timeout(Duration::from_secs(1)).unwrap_or(false)
 }
@@ -819,11 +824,13 @@ fn prune_index(mem_dir: &Path, moved: &[String]) {
         return;
     };
     if tmp.write_all(&new).is_ok() {
-        let _ = tmp.persist(&index);
+        // Best effort, as the script's write was.
+        tmp.persist(&index).ok();
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts read JSON answers by key
 mod tests {
     use super::*;
     use std::collections::HashMap;
