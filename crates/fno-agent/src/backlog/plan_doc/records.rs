@@ -211,9 +211,10 @@ fn fence_span(lines: &[&str]) -> Result<Option<(usize, usize)>, RecordsError> {
             outer_fence = Some(stripped.chars().take_while(|&c| c == first).collect());
             continue;
         }
+        // The last heading wins, as in extract_sections: the fence every
+        // reader lifts is the one the writer edits.
         if raw.starts_with("## ") && raw[3..].trim_end() == GATE_SECTION {
             heading = Some(i);
-            break;
         }
     }
     let Some(h) = heading else {

@@ -444,7 +444,11 @@ fn remove_blueprint_sections(body: &str) -> String {
     let mut out = String::new();
     for line in body.split_inclusive('\n') {
         if let Some(heading) = line.strip_prefix("## ") {
-            skip = BLUEPRINT_WRITE_ALLOWLIST.contains(&heading.trim_end());
+            // The record fence holds author records (kill_criteria,
+            // done_probes, consolidation), never a regenerated draft section.
+            let heading = heading.trim_end();
+            skip = BLUEPRINT_WRITE_ALLOWLIST.contains(&heading)
+                && heading != super::records::GATE_SECTION;
             if skip {
                 continue;
             }
@@ -1053,6 +1057,12 @@ mod tests {
             draft(path.to_str().unwrap(), "auto", false, true, dir.path()).0,
             1
         );
+        // AC7-ERR: a rewrite keeps the record fence and adds no second
+        // kill_criteria.
+        let (code, again) = draft(path.to_str().unwrap(), "auto", true, true, dir.path());
+        assert_eq!(code, 0, "{again}");
+        assert_eq!(again.matches("## Gate records").count(), 1, "{again}");
+        assert_eq!(again.matches("kill_criteria:").count(), 1, "{again}");
 
         // The location contract at the door: a doc outside the plans dir
         // refuses with the fix named, and nothing is written. no_emit=false,
