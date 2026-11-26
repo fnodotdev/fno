@@ -1052,7 +1052,8 @@ impl Root {
                 let open = Action::OpenAnswer(item.id.clone());
                 div()
                     .absolute()
-                    .top(px(ui::TITLE_H + 24.0))
+                    // Below the Questions heading on the HQ board, never over it.
+                    .top(px(ui::TITLE_H + 44.0))
                     .right(px(12.0))
                     .w(px(420.0))
                     .flex()
