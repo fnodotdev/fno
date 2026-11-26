@@ -33,13 +33,6 @@ impl Payload {
     pub(crate) fn session(&self) -> &str {
         self.session_id.as_deref().unwrap_or("")
     }
-
-    pub(crate) fn event(&self, fallback: &'static str) -> String {
-        self.hook_event_name
-            .clone()
-            .filter(|e| !e.is_empty())
-            .unwrap_or_else(|| fallback.to_string())
-    }
 }
 
 /// The stdin payload of this leg and its parsed fields.

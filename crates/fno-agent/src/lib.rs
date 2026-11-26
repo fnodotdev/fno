@@ -1759,6 +1759,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the store's identity columns, and the scoreboard lanes view plus the
     // lead check-in read it.
     "provider_rate_limited",
+    // The Stop front's context-nudge leg: the context and orphan blocks and
+    // the flush advice or refusal (runtime/hook/front/stop.rs).
+    "session_context_nudge",
+    "lead_context_nudge",
+    "lead_orphan_block",
+    "context_flush_nudge",
+    "context_flush_refused",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the
