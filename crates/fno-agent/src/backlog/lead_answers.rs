@@ -607,22 +607,26 @@ struct CachedRecommendation {
     option: Option<u64>,
 }
 
-/// Whether a page's frozen team shares a node with the check-in's scope. A
-/// lead promoted to a wider scope keeps the team string its open pages were
-/// written under, so an exact match hides those questions.
-fn team_overlaps(team: &str, scope: &str) -> bool {
+/// Whether every node of a page's frozen team sits inside the check-in's
+/// scope. A lead promoted to a wider scope keeps the team string its open
+/// pages were written under, so an exact match hides those questions. Subset
+/// (not any-overlap) keeps a sibling lead's partly shared page off this line.
+fn team_within(team: &str, scope: &str) -> bool {
     let members: BTreeSet<&str> = scope
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
-    team.split(',')
+    let nodes: Vec<&str> = team
+        .split(',')
         .map(str::trim)
-        .any(|node| members.contains(node))
+        .filter(|s| !s.is_empty())
+        .collect();
+    !nodes.is_empty() && nodes.iter().all(|node| members.contains(node))
 }
 
 /// The pure fold: open pages whose question_id the stem names and whose
-/// team shares a node with this check-in's scope, oldest first. Rows carry
+/// team sits inside this check-in's scope, oldest first. Rows carry
 /// what the render needs to name the decide command. Each row joins the
 /// arm's cached item by id: `quiet` is `snoozed` or `deadline` while the
 /// question waits on either, and `overdue` names what a past deadline means
@@ -645,7 +649,7 @@ pub(crate) fn held_from_pages(
         if !crate::attention_arm::stem_names_id(stem, &front.question_id) {
             continue;
         }
-        if !team_overlaps(&front.team, scope) {
+        if !team_within(&front.team, scope) {
             continue;
         }
         let epoch = chrono::DateTime::parse_from_rfc3339(&front.asked_at)
@@ -1148,5 +1152,13 @@ mod tests {
         assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
         let other = held_from_pages(&pages, "x-zz01", &[], 0);
         assert_eq!(other.len(), 1, "{other:?}");
+        let mut partly = pages.clone();
+        partly.push(open_page("q-partly1", "x-0c2a,x-zz09"));
+        let rows = held_from_pages(&partly, &widened, &[], 0);
+        assert_eq!(
+            rows.len(),
+            2,
+            "a page with a node outside the scope stays off: {rows:?}"
+        );
     }
 }
