@@ -157,37 +157,35 @@ pub fn run(args: &[String]) -> i32 {
     };
     let (args, (contract, rows, sample, sample_sha, rows_sha)) = parsed;
     let baseline = check(&contract, &rows, &sample, args.source_count);
-    let baseline_pass = baseline.pass;
-    let mut receipt = json!({
-        "contract": args.contract.display().to_string(),
-        "sample_sha256": sample_sha,
-        "rows_sha256": rows_sha,
-        "gate_code_version": args.code_dir.as_deref().map(git_head),
-        "sample_checked_by": checked_by(&sample),
-        "sample_checked_at_latest": sample.iter().map(|s| s.checked_at.as_str()).max(),
-        "baseline": baseline.receipt,
-    });
-    let mut all_rejected = true;
-    if !args.mutate.is_empty() {
-        let mut out = Vec::new();
-        for class in &args.mutate {
+    let mutations: Vec<Mutation> = args
+        .mutate
+        .iter()
+        .map(|class| {
             let mutated = mutate(&contract, &rows, class, args.seed);
             let run = check(&contract, &mutated, &sample, args.source_count);
-            all_rejected &= !run.pass;
-            out.push(json!({
-                "class": class,
-                "rejected": !run.pass,
-                "caught_by": run.failed,
-            }));
-        }
-        receipt["mutations"] = Value::Array(out);
-    }
+            Mutation { class: *class, run }
+        })
+        .collect();
     if args.json {
+        let muts: Vec<Value> = mutations
+            .iter()
+            .map(|m| json!({"class": m.class, "rejected": !m.run.pass, "caught_by": m.run.failed}))
+            .collect();
+        let receipt = json!({
+            "contract": args.contract.display().to_string(),
+            "sample_sha256": sample_sha,
+            "rows_sha256": rows_sha,
+            "gate_code_version": args.code_dir.as_deref().map(git_head),
+            "sample_checked_by": checked_by(&sample),
+            "sample_checked_at_latest": sample.iter().map(|s| s.checked_at.as_str()).max(),
+            "baseline": baseline.receipt,
+            "mutations": (!muts.is_empty()).then_some(muts),
+        });
         println!("{receipt:#}");
     } else {
-        print_human(&receipt);
+        print_human(&baseline, &mutations);
     }
-    let ok = baseline_pass && (args.mutate.is_empty() || all_rejected);
+    let ok = baseline.pass && mutations.iter().all(|m| !m.run.pass);
     if ok {
         0
     } else {
@@ -312,12 +310,9 @@ fn sha256(text: &str) -> String {
 }
 
 fn git_head(dir: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("-C").arg(dir).args(["rev-parse", "HEAD"]);
+    let out = crate::bounded_cmd::output_with_timeout(cmd, 10)?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -370,22 +365,26 @@ fn date_iso(value: &str) -> String {
 struct Run {
     pass: bool,
     failed: Vec<&'static str>,
+    rows: usize,
+    sample_n: usize,
+    page_size: usize,
+    bound: Option<f64>,
     receipt: Value,
 }
 
-fn check(
-    contract: &Contract,
-    rows: &[Row],
-    sample: &[SampleLine],
-    source_count: Option<usize>,
-) -> Run {
-    let mut failed = Vec::new();
-    let n = sample.len();
-    let sample_ok = n >= contract.min_sample;
-    if !sample_ok {
-        failed.push("sample_size");
-    }
+struct Mutation {
+    class: &'static str,
+    run: Run,
+}
 
+struct KeyMatch<'a> {
+    missing: Vec<String>,
+    duplicate: Vec<String>,
+    matched: Vec<(&'a SampleLine, &'a Row)>,
+}
+
+/// Join each sampled key to its rows through one index over the rows.
+fn match_keys<'a>(contract: &Contract, rows: &'a [Row], sample: &'a [SampleLine]) -> KeyMatch<'a> {
     let mut by_key: std::collections::HashMap<String, Vec<&Row>> = Default::default();
     for r in rows {
         by_key
@@ -393,23 +392,30 @@ fn check(
             .or_default()
             .push(r);
     }
-    let mut missing = Vec::new();
-    let mut duplicate = Vec::new();
-    let mut matched: Vec<(&SampleLine, &Row)> = Vec::new();
+    let mut out = KeyMatch {
+        missing: Vec::new(),
+        duplicate: Vec::new(),
+        matched: Vec::new(),
+    };
     for s in sample {
         match by_key.get(&s.key).map(Vec::as_slice).unwrap_or_default() {
-            [] => missing.push(s.key.clone()),
-            [one] => matched.push((s, *one)),
-            _ => duplicate.push(s.key.clone()),
+            [] => out.missing.push(s.key.clone()),
+            [one] => out.matched.push((s, *one)),
+            _ => out.duplicate.push(s.key.clone()),
         }
     }
+    out
+}
 
+/// The value check: every contract field of every matched row against the
+/// person's value, after normalization.
+fn value_check(contract: &Contract, matched: &[(&SampleLine, &Row)]) -> (bool, Value) {
     let mut field_rows = Vec::new();
     let mut mismatches = Vec::new();
     let mut mismatch_total = 0usize;
     for f in &contract.fields {
         let mut hits = 0usize;
-        for (s, row) in &matched {
+        for (s, row) in matched {
             let want = normalize(&text(s.fields.get(&f.name)), &f.normalize);
             let got = normalize(&text(row.get(&f.name)), &f.normalize);
             if want == got {
@@ -429,7 +435,45 @@ fn check(
             "accuracy": rate, "wilson_low": low, "wilson_high": high,
         }));
     }
-    let value_ok = !matched.is_empty() && mismatch_total <= contract.max_mismatches;
+    let ok = !matched.is_empty() && mismatch_total <= contract.max_mismatches;
+    let receipt = json!({
+        "pass": ok,
+        "fields": field_rows,
+        "mismatch_total": mismatch_total,
+        "max_mismatches": contract.max_mismatches,
+        "mismatches": mismatches,
+    });
+    (ok, receipt)
+}
+
+/// One-based line numbers of rows that fail a predicate.
+fn row_lines(rows: &[Row], bad: impl Fn(&Row) -> bool) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter(|(_, r)| bad(r))
+        .map(|(i, _)| i + 1)
+        .collect()
+}
+
+fn blank(r: &Row, field: &str) -> bool {
+    text(r.get(field)).trim().is_empty()
+}
+
+fn check(
+    contract: &Contract,
+    rows: &[Row],
+    sample: &[SampleLine],
+    source_count: Option<usize>,
+) -> Run {
+    let mut failed = Vec::new();
+    let n = sample.len();
+    let sample_ok = n >= contract.min_sample;
+    if !sample_ok {
+        failed.push("sample_size");
+    }
+
+    let keys = match_keys(contract, rows, sample);
+    let (value_ok, value) = value_check(contract, &keys.matched);
     if !value_ok {
         failed.push("value");
     }
@@ -443,33 +487,24 @@ fn check(
         let k = contract.page_size.min(rows.len()) as f64;
         1.0 - (1.0 - k / rows.len() as f64).powi(n as i32)
     });
-    let blank = |r: &Row, field: &str| text(r.get(field)).trim().is_empty();
     // A row with every contract field blank is a husk: a blocked or expired
     // response the connector kept. Unsampled husks are invisible to the
     // value check, so this one reads every row.
-    let empty: Vec<usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| {
-            let mut data = contract.fields.iter().filter(|f| f.name != contract.key);
-            data.all(|f| blank(r, &f.name))
-        })
-        .map(|(i, _)| i + 1)
-        .collect();
-    let complete_ok =
-        missing.is_empty() && duplicate.is_empty() && empty.is_empty() && count_check != "mismatch";
+    let empty = row_lines(rows, |r| {
+        let mut data = contract.fields.iter().filter(|f| f.name != contract.key);
+        data.all(|f| blank(r, &f.name))
+    });
+    let complete_ok = keys.missing.is_empty()
+        && keys.duplicate.is_empty()
+        && empty.is_empty()
+        && count_check != "mismatch";
     if !complete_ok {
         failed.push("completeness");
     }
 
-    let unproven: Vec<usize> = rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| {
-            blank(r, &contract.source_document_field) || blank(r, &contract.code_version_field)
-        })
-        .map(|(i, _)| i + 1)
-        .collect();
+    let unproven = row_lines(rows, |r| {
+        blank(r, &contract.source_document_field) || blank(r, &contract.code_version_field)
+    });
     let provenance_ok = unproven.is_empty();
     if !provenance_ok {
         failed.push("provenance");
@@ -480,20 +515,14 @@ fn check(
         "verdict": if pass { "pass" } else { "fail" },
         "failed_checks": failed,
         "sample": { "n": n, "min_sample": contract.min_sample, "pass": sample_ok },
-        "value": {
-            "pass": value_ok,
-            "fields": field_rows,
-            "mismatch_total": mismatch_total,
-            "max_mismatches": contract.max_mismatches,
-            "mismatches": mismatches,
-        },
+        "value": value,
         "completeness": {
             "pass": complete_ok,
             "rows": rows.len(),
             "source_count": source_count,
             "count_check": count_check,
-            "missing_keys": missing,
-            "duplicate_keys": duplicate,
+            "missing_keys": keys.missing,
+            "duplicate_keys": keys.duplicate,
             "empty_rows": empty.len(),
             "first_empty_rows": empty.iter().take(10).collect::<Vec<_>>(),
             "dropped_page_detection_bound": bound,
@@ -508,6 +537,10 @@ fn check(
     Run {
         pass,
         failed,
+        rows: rows.len(),
+        sample_n: n,
+        page_size: contract.page_size,
+        bound,
         receipt,
     }
 }
@@ -529,18 +562,28 @@ fn mutate(contract: &Contract, rows: &[Row], class: &str, seed: u64) -> Vec<Row>
     }
     match class {
         // A mapping defect hits every row, as a parser bug would. The pair
-        // is the first one, from a seeded start, whose values differ on some
-        // row, so the swap is never a silent no-op.
+        // is the first adjacent one, from a seeded start, whose values
+        // differ on some row, so the swap is never a silent no-op.
         "wrong-field" => {
             let names: Vec<&str> = contract.fields.iter().map(|f| f.name.as_str()).collect();
-            if names.len() < 2 {
+            let pairs: Vec<(&str, &str)> = names
+                .windows(2)
+                .filter_map(|w| match w {
+                    [a, b] => Some((*a, *b)),
+                    _ => None,
+                })
+                .collect();
+            if pairs.is_empty() {
                 return out;
             }
-            let start = (next(&mut state) as usize) % (names.len() - 1);
-            let pair = (0..names.len() - 1)
-                .map(|i| (start + i) % (names.len() - 1))
-                .map(|i| (names[i], names[i + 1]))
-                .find(|(a, b)| out.iter().any(|r| text(r.get(*a)) != text(r.get(*b))));
+            let start = (next(&mut state) as usize) % pairs.len();
+            let pair = pairs
+                .iter()
+                .cycle()
+                .skip(start)
+                .take(pairs.len())
+                .find(|(a, b)| out.iter().any(|r| text(r.get(*a)) != text(r.get(*b))))
+                .copied();
             if let Some((a, b)) = pair {
                 for r in &mut out {
                     let va = r.remove(a).unwrap_or(Value::Null);
@@ -561,7 +604,7 @@ fn mutate(contract: &Contract, rows: &[Row], class: &str, seed: u64) -> Vec<Row>
         // catch it.
         _ => {
             let at = (next(&mut state) as usize) % out.len();
-            for r in &mut out[at..] {
+            for r in out.iter_mut().skip(at) {
                 for f in contract.fields.iter().filter(|f| f.name != contract.key) {
                     r.insert(f.name.clone(), Value::String(String::new()));
                 }
@@ -571,36 +614,38 @@ fn mutate(contract: &Contract, rows: &[Row], class: &str, seed: u64) -> Vec<Row>
     out
 }
 
-fn print_human(receipt: &Value) {
-    let base = &receipt["baseline"];
+fn print_human(base: &Run, mutations: &[Mutation]) {
     println!(
         "connector-gate: {} (sample {}, rows {})",
-        base["verdict"].as_str().unwrap_or("?"),
-        base["sample"]["n"],
-        base["completeness"]["rows"],
+        if base.pass { "pass" } else { "fail" },
+        base.sample_n,
+        base.rows,
     );
-    for name in ["sample", "value", "completeness", "provenance"] {
-        let ok = base[name]["pass"].as_bool().unwrap_or(false);
-        println!("  {name}: {}", if ok { "pass" } else { "FAIL" });
+    for (label, key) in [
+        ("sample", "sample_size"),
+        ("value", "value"),
+        ("completeness", "completeness"),
+        ("provenance", "provenance"),
+    ] {
+        let failed = base.failed.contains(&key);
+        println!("  {label}: {}", if failed { "FAIL" } else { "pass" });
     }
-    if let Some(b) = base["completeness"]["dropped_page_detection_bound"].as_f64() {
+    if let Some(b) = base.bound {
         println!(
             "  no --source-count: a dropped page of {} rows is caught with p={b:.3}",
-            base["completeness"]["page_size"]
+            base.page_size
         );
     }
-    if let Some(muts) = receipt["mutations"].as_array() {
-        for m in muts {
-            println!(
-                "  mutation {}: {} (caught by {})",
-                m["class"].as_str().unwrap_or("?"),
-                if m["rejected"].as_bool().unwrap_or(false) {
-                    "rejected"
-                } else {
-                    "NOT rejected"
-                },
-                m["caught_by"],
-            );
-        }
+    for m in mutations {
+        let verdict = if m.run.pass {
+            "NOT rejected"
+        } else {
+            "rejected"
+        };
+        println!(
+            "  mutation {}: {verdict} (caught by {})",
+            m.class,
+            m.run.failed.join(", ")
+        );
     }
 }
