@@ -176,6 +176,27 @@ pub fn preamble_due(
     )
 }
 
+/// The `--preamble-due` answer. A carrier that fires exactly at a compaction
+/// says so with `compacted`: opencode, pi and agy transcripts carry no
+/// boundary shape the stamp could read, so any joined session is due there.
+pub fn preamble_due_now(
+    root: &Path,
+    harness: &str,
+    session_id: &str,
+    transcript: Option<&Path>,
+    mark: bool,
+    compacted: bool,
+) -> bool {
+    if !compacted {
+        return preamble_due(root, harness, session_id, transcript, mark);
+    }
+    let joined = is_joined(root, harness, session_id) || env_set("FNO_AGENT_SELF");
+    if joined && mark {
+        preamble_due(root, harness, session_id, transcript, true);
+    }
+    joined
+}
+
 // ---------------------------------------------------------------------------
 // `fno-agent report --kind join --harness <h> --session-id <id>
 //      [--trigger <word>] [--check] [--preamble-due [--mark] [--compacted]
@@ -270,17 +291,14 @@ pub fn run_join(args: &[String], home: &AgentsHome) -> i32 {
             }
         }
     }
-    // A carrier that fires exactly at a compaction says so: opencode, pi and
-    // agy transcripts carry no boundary shape the stamp could read.
-    let due_now = if compacted {
-        let joined = is_joined(root, &harness, &session) || env_set("FNO_AGENT_SELF");
-        if joined && mark {
-            preamble_due(root, &harness, &session, transcript.as_deref(), true);
-        }
-        joined
-    } else {
-        preamble_due(root, &harness, &session, transcript.as_deref(), mark)
-    };
+    let due_now = preamble_due_now(
+        root,
+        &harness,
+        &session,
+        transcript.as_deref(),
+        mark,
+        compacted,
+    );
     if due && due_now {
         println!("due");
     }
