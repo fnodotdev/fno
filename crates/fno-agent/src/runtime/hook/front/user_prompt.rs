@@ -768,6 +768,28 @@ fn scan_past_cursor(dir: &Path, events: &Path) -> Option<(CursorLock, Scan)> {
     Some((lock, scan))
 }
 
+/// The "Also on deck" line: a ready node in the offered node's domain, else
+/// the next node, named only when its title reads.
+fn on_deck(fno: &Path, repo: &Path, budget: u64, node_id: &str, domain: &str) -> String {
+    let run = |args: &[&str]| {
+        fno_run(fno, args, repo, budget)
+            .map(|o| stdout_text(&o))
+            .unwrap_or_default()
+    };
+    let mut cand_id = ready_pick(&run(&["backlog", "ready"]), node_id, domain);
+    if cand_id.is_empty() {
+        cand_id = next_pick(&run(&["backlog", "next"]), node_id);
+    }
+    if cand_id.is_empty() {
+        return String::new();
+    }
+    let cand_title = candidate_title(&run(&["backlog", "get", cand_id.as_str()]));
+    if cand_title.is_empty() {
+        return String::new();
+    }
+    format!("\n\nAlso on deck: {cand_id} - \"{cand_title}\" (`/think {cand_id}`).")
+}
+
 fn born_with_why_offer(_args: &[String]) -> i32 {
     // Overload skip before the cursor: the offer re-surfaces next turn.
     if super::overloaded() {
@@ -849,30 +871,10 @@ fn born_with_why_offer(_args: &[String]) -> i32 {
         } else {
             format!(" Why: {why}.")
         };
-        let mut cand_id = String::new();
-        let mut cand_title = String::new();
-        if let Some(fno) = &fno {
-            let run = |args: &[&str]| {
-                fno_run(fno, args, &repo, budget)
-                    .map(|o| stdout_text(&o))
-                    .unwrap_or_default()
-            };
-            cand_id = ready_pick(&run(&["backlog", "ready"]), node_id, &domain);
-            if cand_id.is_empty() {
-                cand_id = next_pick(&run(&["backlog", "next"]), node_id);
-            }
-            if !cand_id.is_empty() {
-                cand_title = candidate_title(&run(&["backlog", "get", cand_id.as_str()]));
-                if cand_title.is_empty() {
-                    cand_id.clear();
-                }
-            }
-        }
-        let ondeck_line = if cand_id.is_empty() {
-            String::new()
-        } else {
-            format!("\n\nAlso on deck: {cand_id} - \"{cand_title}\" (`/think {cand_id}`).")
-        };
+        let ondeck_line = fno
+            .as_deref()
+            .map(|fno| on_deck(fno, &repo, budget, node_id, &domain))
+            .unwrap_or_default();
         reminder = offer_reminder(
             node_id,
             &offer_cmd,
