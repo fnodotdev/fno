@@ -1701,6 +1701,115 @@ fn latency_guard_org_plan_allow() {
     );
 }
 
+/// The whole claude chain one tool call or turn meets, per event, replayed
+/// from hooks/hooks.json itself: once one front per event replaces a chain,
+/// this same fixture measures the front. Claude runs an event's matching
+/// hooks in parallel, so each sample reports the summed leg time (the
+/// process cost) and the slowest leg (the wait). Advisory: no budget is
+/// asserted until the user sets one, and a leg's exit code is recorded,
+/// never judged.
+#[test]
+#[ignore]
+fn hook_chain_baseline_per_event() {
+    let _guard = BENCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let b = bench();
+    let hooks = fs::read_to_string(b.root.join("hooks/hooks.json")).unwrap();
+    let manifest: Value = serde_json::from_str(&hooks).unwrap();
+    let file = b.repo.join("notes.md");
+    write(&file, "a\n");
+    let path = file.display().to_string();
+    let inputs = [
+        ("Read", json!({"file_path": path})),
+        ("Bash", json!({"command": "ls"})),
+        (
+            "Edit",
+            json!({"file_path": path, "old_string": "a", "new_string": "b"}),
+        ),
+        ("Write", json!({"file_path": path, "content": "b\n"})),
+    ];
+    let mut chains: Vec<(String, &str, Value)> = Vec::new();
+    for (tool, input) in &inputs {
+        for event in ["PreToolUse", "PostToolUse"] {
+            let mut payload = guard_payload(VISITOR_SID, tool, input.clone());
+            payload["hook_event_name"] = json!(event);
+            if event == "PostToolUse" {
+                payload["tool_response"] = json!({});
+            }
+            chains.push((format!("{event}_{tool}"), event, payload));
+        }
+    }
+    let mut prompt = stop_payload(VISITOR_SID, None);
+    prompt["hook_event_name"] = json!("UserPromptSubmit");
+    prompt["prompt"] = json!("hello");
+    chains.push(("UserPromptSubmit".into(), "UserPromptSubmit", prompt));
+    let stop = stop_payload(VISITOR_SID, Some("Work continues."));
+    chains.push(("Stop".into(), "Stop", stop));
+
+    let n = sample_count().min(20);
+    for (name, event, payload) in &chains {
+        let tool = payload["tool_name"].as_str().unwrap_or("");
+        let legs = chain_commands(&manifest, event, tool);
+        assert!(
+            !legs.is_empty(),
+            "{name}: hooks.json registers no {event} hook"
+        );
+        let mut sums: Vec<f64> = Vec::new();
+        let mut slowest: Vec<f64> = Vec::new();
+        for i in 0..(n + 3) {
+            let (mut sum, mut max) = (0.0_f64, 0.0_f64);
+            for leg in &legs {
+                let args = vec!["sh".to_string(), "-c".to_string(), leg.clone()];
+                let (ms, code, _, _) = sample_once(&args, Some(payload), &b.env, &b.repo, None);
+                sum += ms;
+                max = max.max(ms);
+                if i < 3 {
+                    continue; // warmup, recorded nowhere
+                }
+                let row = json!({"fixture": format!("chain_{name}"), "iteration": i - 3,
+                    "leg": leg, "ms": ms, "exit": code});
+                writeln!(
+                    fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(b.out.join(format!("chain_{name}.jsonl")))
+                        .unwrap(),
+                    "{row}"
+                )
+                .unwrap();
+            }
+            if i >= 3 {
+                sums.push(sum);
+                slowest.push(max);
+            }
+        }
+        let (sum_p50, sum_p90) = (percentile(&mut sums, 50), p90(&mut sums));
+        let (max_p50, max_p90) = (percentile(&mut slowest, 50), p90(&mut slowest));
+        println!(
+            "hook chain {name}: {} legs, summed p50 {sum_p50:.1}ms p90 {sum_p90:.1}ms, slowest leg p50 {max_p50:.1}ms p90 {max_p90:.1}ms (advisory, no budget)",
+            legs.len()
+        );
+    }
+}
+
+/// Every command the event's matching hooks.json groups register, in order.
+/// A matcher there is an alternation of exact tool names; an empty or absent
+/// one matches every call.
+fn chain_commands(manifest: &Value, event: &str, tool: &str) -> Vec<String> {
+    let groups = manifest["hooks"][event]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    groups
+        .iter()
+        .filter(|g| {
+            let m = g["matcher"].as_str().unwrap_or("");
+            m.is_empty() || m == "*" || m.split('|').any(|t| t == tool)
+        })
+        .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
+        .filter_map(|h| h["command"].as_str().map(str::to_string))
+        .collect()
+}
+
 /// AC12-HP: the per-turn hot path stays small. Ceilings freeze this branch's
 /// measured floors so the wrappers, the native handlers, and the decision
 /// core cannot quietly regrow. Physical counts for the wrappers and
