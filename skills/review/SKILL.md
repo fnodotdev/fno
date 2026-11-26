@@ -244,7 +244,7 @@ footnote does not parse skill output and will not pretend otherwise: a per-skill
 
 The attestation itself is still emitted - "emit nothing" means your skill reports no *findings*, not that the gate clears by itself.
 Nothing witnesses an invocation implicitly.
-The `/target` session runs your `invocation` and then `bash skills/review/scripts/emit-attestation.sh <name>` on the final HEAD, exactly as it does for `code-review` ([ship-and-promise.md](../target/references/ship-and-promise.md)).
+The `/target` session runs your `invocation` and then `bash skills/review/scripts/emit-attestation.sh <name> pass <context>` on the final HEAD, with your descriptor's declared `context` (enum `fresh|shared`) as emit positional 3, exactly as it does for `code-review` ([ship-and-promise.md](../target/references/ship-and-promise.md)).
 That helper takes any reviewer name, which is why a registered reviewer needs no producer machinery of its own.
 
 **Rung two: emit your findings.** Call `fno backlog note <id> "<finding>" --blocking` and the gate becomes real. Clear it after the fix with `fno backlog note --resolve <finding-id>`.
