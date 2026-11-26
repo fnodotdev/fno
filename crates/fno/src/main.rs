@@ -2392,11 +2392,22 @@ fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
             &["spawn-remote"],
             &rest,
         )),
-        Role::MailHold(rest) => fno::cli_usage::exit(fno_agent_exec(
-            "fno agent mail hold|dnd|hold-release|sent|ack",
-            &["mail"],
-            &rest,
-        )),
+        Role::MailHold(rest) => {
+            let is_hold = rest.first().is_some_and(|c| c == "hold" || c == "dnd");
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match is_hold.then(|| fno::mail_hold_status::run(&args)).flatten() {
+                Some(code) => fno::cli_usage::exit(code),
+                None => fno::cli_usage::exit(fno_agent_exec(
+                    "fno agent mail hold|dnd|hold-release|sent|ack",
+                    &["mail"],
+                    &rest,
+                )),
+            }
+        }
         Role::MailSend(rest) => {
             // Role::MailSend carries the tail without the command; the exec
             // prefix re-adds `send` or an id-shaped target reads as the command.
