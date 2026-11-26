@@ -210,6 +210,15 @@ fn read_plan_block(plan_path: &str) -> Option<String> {
         return Some(fm_block);
     }
 
+    // Body form: the `## Gate records` fence, read by the same block awk so
+    // the output stays byte-identical to the frontmatter form.
+    if let Some(fence) = crate::plan_doc::records::fence_text(&content) {
+        let block = extract_kill_criteria_block(&fence);
+        if !block.is_empty() {
+            return Some(block);
+        }
+    }
+
     // Quick-mode: fenced YAML under `## Kill Criteria` -> the kill_criteria:
     // block.
     let fenced = extract_fenced_under_heading(&content);
