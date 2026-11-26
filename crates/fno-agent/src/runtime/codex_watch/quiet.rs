@@ -1659,6 +1659,45 @@ mod tests {
     }
 
     #[test]
+    fn a_declared_watch_shields_the_seat_whatever_runs_the_wait() {
+        // The shield keys on the declared `<watching>` row, never on the
+        // runner. A `fno do pr wait` watch and a background REST loop that
+        // the worker declares write the same row, so both must shield.
+        let now = 1_000_000;
+        for runner_task in [None, Some("bash-rest-loop")] {
+            let mut data = serde_json::json!({
+                "harness": "claude",
+                "pr": 149,
+                "blocker": "ci",
+                "reason": "ci",
+                "node": "x-b153",
+                "expires_at_ms": now + 15 * 60_000,
+            });
+            if let Some(task) = runner_task {
+                data["task_id"] = serde_json::json!(task);
+            }
+            let evidence = vec![crate::watch_expiry::Evidence {
+                event_id: "e1".into(),
+                seq: 1,
+                ts_ms: now - 60_000,
+                kind: crate::watch_expiry::WATCH_IDLE.into(),
+                session_id: Some("sess-a".into()),
+                data,
+            }];
+            let watches = super::settle_watches(&evidence);
+            assert_eq!(
+                watches.len(),
+                1,
+                "a declared watch registers for {runner_task:?}"
+            );
+            assert!(
+                watch_shielded(&watches[0].watch, &evidence, now + 60_000),
+                "a live declared watch must shield the seat for {runner_task:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_expiry_wake_does_not_unshield_a_parked_session() {
         // The incident: a session parks on ci, the bound fires, the daemon
         // emits its wake row (which ends is_current_watch), and the worker's
