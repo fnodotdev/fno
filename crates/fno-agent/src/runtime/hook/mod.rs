@@ -16,6 +16,7 @@ pub mod broad_kill_guard;
 pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
+pub mod front;
 pub mod gate;
 pub mod git_protection;
 pub mod join_partition_guard;
@@ -56,6 +57,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
+        Some("front") => front::run(args.get(1..).unwrap_or(&[])),
         Some("gate") => gate::run(args.get(1..).unwrap_or(&[])),
         Some("git-protection") => git_protection::run(&args[1..]),
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
@@ -80,7 +82,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, sandbox-guest, sandbox-run, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, worktree-relocation-allow, write-gate or stop"
+                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, front, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, sandbox-guest, sandbox-run, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
@@ -137,6 +139,12 @@ pub(crate) fn captured(stdin: &str, entry: impl FnOnce() -> i32) -> (i32, String
         .map(|io| io.stdout)
         .unwrap_or_default();
     (code, out)
+}
+
+/// Whether a gate or front is capturing this thread's answer: the caller is
+/// claude's in-process front, so a block rides stdout JSON.
+pub(crate) fn capturing() -> bool {
+    GATE_IO.with(|io| io.borrow().is_some())
 }
 
 /// Print one hook answer line, or hand it to the gate capturing this guard.
