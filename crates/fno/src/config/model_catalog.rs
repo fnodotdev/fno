@@ -455,6 +455,9 @@ struct ProviderFacts {
     key_file: Option<String>,
     has_record: bool,
     builtin: bool,
+    /// The reach table states this vendor's endpoint, so a record needs
+    /// only its key field (the spawn doors fill the rest).
+    reach_endpoint: bool,
 }
 
 /// The URL's host part, lowercase, for the catalog host match.
@@ -655,6 +658,7 @@ fn facts_for<'a>(
         && record_protocol.as_deref() != Some("openai")
         && vendor.and_then(|v| v.openai.as_ref()).is_some();
     let has_record = record.is_some();
+    let any_record = record;
     let record = record.filter(|_| !openai_beneath);
     let endpoint_protocol = if openai_beneath {
         "openai"
@@ -685,10 +689,18 @@ fn facts_for<'a>(
             .and_then(|cp| cp.api.clone())
             .map(|api| api.strip_suffix("/v1").unwrap_or(api.as_str()).to_string())
     });
-    let key_env = rec("api_key_env")
+    // The key belongs to the vendor, not the protocol: any record's key
+    // fields win, as in codex_route.rs.
+    let key_rec = |k: &str| {
+        any_record
+            .and_then(|r| r.get(k))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let key_env = key_rec("api_key_env")
         .or_else(|| ven("key_env"))
         .or_else(|| linked.and_then(|cp| cp.env.first().cloned()));
-    let key_file = rec("api_key_file").or_else(|| ven("key_file"));
+    let key_file = key_rec("api_key_file").or_else(|| ven("key_file"));
     if protocol.is_none() {
         return None;
     }
@@ -700,6 +712,7 @@ fn facts_for<'a>(
             key_file,
             has_record,
             builtin: vendor.map(|v| v.builtin).unwrap_or(false),
+            reach_endpoint: ven("base_url").is_some(),
         },
         linked,
     ))
@@ -800,9 +813,15 @@ fn rows_for_provider(
         ModelState::Unreachable { reason }
     } else if !has_access {
         let base = facts.base_url.clone().unwrap_or_default();
-        let cmd = format!(
-            "fno config set model_routing.providers.{provider}.protocol={protocol} model_routing.providers.{provider}.base_url={base} model_routing.providers.{provider}.api_key_env={key_env_s}"
-        );
+        // A reach vendor's record needs only its key: both spawn doors fill
+        // the endpoint, and a protocol field would close the other lane.
+        let cmd = if facts.reach_endpoint {
+            format!("fno config set model_routing.providers.{provider}.api_key_env={key_env_s}")
+        } else {
+            format!(
+                "fno config set model_routing.providers.{provider}.protocol={protocol} model_routing.providers.{provider}.base_url={base} model_routing.providers.{provider}.api_key_env={key_env_s}"
+            )
+        };
         let mut steps = vec![cmd];
         if !key_env_s.is_empty() && !key_present(&key_env_s, key_file.as_deref()) {
             steps.push(format!("export {key_env_s}=<your key>"));
@@ -1239,10 +1258,10 @@ mod tests {
         let ModelState::NoKey { steps, .. } = &row.state else {
             panic!("expected NoKey, got {:?}", row.state);
         };
-        assert!(
-            steps[0].contains("protocol=anthropic")
-                && steps[0].contains("base_url=https://openrouter.ai/api "),
-            "{steps:?}"
+        // The consent is one key field: a protocol field would close codex.
+        assert_eq!(
+            steps[0],
+            "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
         );
         // codex routes openai: a keyed openai record is Ready, an
         // anthropic-only vendor is Unreachable by protocol.
@@ -1278,9 +1297,9 @@ mod tests {
             panic!("expected NoKey, got {:?}", row.state);
         };
         assert_eq!(key_env, "OPENROUTER_API_KEY");
-        assert!(
-            steps[0].contains("base_url=https://openrouter.ai/api/v1 "),
-            "{steps:?}"
+        assert_eq!(
+            steps[0],
+            "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
         );
     }
 
