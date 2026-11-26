@@ -1418,6 +1418,71 @@ fn hook_budget_claude_pretool_gate() {
     }
 }
 
+/// A Bash command that invokes a large repo script through an interpreter:
+/// the contents join the scanned surface, so this case pins the per-call
+/// work that scan adds (one bounded read per script, target dedupe) against
+/// the same budget as a plain allow. The fixture repo is its own directory:
+/// the shared bench repo stays untouched.
+#[test]
+#[ignore]
+fn hook_budget_pretool_gate_large_script() {
+    let base = std::env::temp_dir().join(format!("fno-hook-latency-gwg-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("tools")).unwrap();
+    write(
+        &base.join("generated-artifacts.tsv"),
+        "docs/gen.md\tdocs/gen.src\tmake gen\n",
+    );
+    write(&base.join("tools/big.py"), &{
+        // Many write calls toward non-manifest paths: extraction and dedupe
+        // run at full width while every target resolves no manifest row.
+        let mut body = String::from("import sys\n");
+        for i in 0..294 {
+            body.push_str(&format!("open('out/file_{i}.txt', 'w').write('x')\n"));
+        }
+        body.push_str(&"# padding\n".repeat(4000));
+        body
+    });
+    let git = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&base)
+        .output()
+        .expect("git init");
+    assert!(git.status.success(), "fixture git init failed");
+    let payload = json!({
+        "session_id": VISITOR_SID,
+        "cwd": base.display().to_string(),
+        "transcript_path": "",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "python3 tools/big.py" }
+    });
+    run_fixture(
+        "hook_budget_pretool_gate_large_script",
+        "hooks/pretool-gate.sh",
+        &FixtureSpec {
+            payload,
+            manifest: "",
+            claims: &[],
+            extra_env: &[],
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
+            allowed_execs: &["bash", "fno-agent", "git"],
+            max_git: Some(5),
+            normalize_runner: true,
+        },
+        |code, stdout, stderr| {
+            assert_eq!(code, 0, "{stderr}");
+            assert_eq!(
+                stdout.trim(),
+                "{}",
+                "a large script over non-manifest paths must allow: {stdout} {stderr}"
+            );
+        },
+    );
+    let _ = fs::remove_dir_all(&base);
+}
+
 fn assert_bash_pretooluse_dispatch_order() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo = repo_root();
