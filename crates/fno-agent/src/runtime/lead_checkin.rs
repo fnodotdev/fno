@@ -1384,7 +1384,7 @@ fn collect_readings(
                 .iter()
                 .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(str::to_string))
                 .collect();
-            review_board::reading(&rows, &scope, &members)
+            Ok(review_board::reading(&rows, &scope, &members))
         }
     });
     // The two input pseudos spawn with the leaves and await at their declared
@@ -3706,16 +3706,16 @@ mod tests {
         ];
         let line = |scope, kids: &[&str]| {
             let members = kids.iter().map(|k| k.to_string()).collect();
-            let value = review_board::reading(&boards, scope, &members).unwrap();
+            let value = review_board::reading(&boards, scope, &members);
             review_board::lines(&[Reading::took("review_board", value)])
         };
         assert_eq!(
             line("x-epic", &["x-kid"]),
             vec!["review_board: new".to_string()]
         );
-        assert!(
-            line("x-none", &[])[0].starts_with("review_board: none: make one from the Gus or Lara")
-        );
+        assert!(line("x-none", &[])
+            .first()
+            .is_some_and(|l| l.starts_with("review_board: none: make one from the Gus or Lara")));
     }
 
     /// One escalation note's frontmatter plus stub sections.

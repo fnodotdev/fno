@@ -14,7 +14,7 @@ pub(super) fn reading(
     rows: &[Value],
     scope: &str,
     members: &std::collections::HashSet<String>,
-) -> Result<Value, String> {
+) -> Value {
     let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
     let mut newest: Option<(String, String)> = None;
     for row in rows {
@@ -39,7 +39,7 @@ pub(super) fn reading(
             }
         }
     }
-    Ok(json!({ "slug": newest.map(|(_, slug)| slug) }))
+    json!({ "slug": newest.map(|(_, slug)| slug) })
 }
 
 pub(super) fn lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
