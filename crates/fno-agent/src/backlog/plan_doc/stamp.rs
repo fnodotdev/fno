@@ -83,7 +83,80 @@ fn plan_expected_url_count(fields: &Fields) -> Option<i64> {
 /// wave is unshipped.
 pub(crate) fn unshipped_waves(fields: &Fields, plan_path: &Path) -> bool {
     let expected = declared_ships(fields, plan_path);
-    expected > 1 && (plan_urls(fields).len() as i64) < expected
+    expected > 1 && (shipped_urls(fields, plan_path).len() as i64) < expected
+}
+
+/// The urls from frontmatter, else from the `## Gate records` fence.
+fn shipped_urls(fields: &Fields, plan_path: &Path) -> Vec<String> {
+    if fields.contains_key("urls") {
+        return plan_urls(fields);
+    }
+    std::fs::read_to_string(plan_path)
+        .ok()
+        .and_then(|t| super::records::body_list(&t, "urls").ok().flatten())
+        .unwrap_or_default()
+}
+
+/// The list keys the stamp writes. They live in the `## Gate records` fence
+/// unless a legacy plan still holds them in frontmatter.
+const BODY_LISTS: [&str; 2] = ["urls", "session_ids"];
+
+/// Overlay the fence's urls and session_ids onto `fields`, so every reader
+/// below sees one map. Returns the keys that live, or will live, in the body.
+fn overlay_body_lists(fields: &mut Fields, rest: &str) -> Result<Vec<&'static str>, String> {
+    // A legacy plan keeps both lists in frontmatter until the migration runs.
+    let legacy = BODY_LISTS.iter().any(|k| fields.contains_key(k));
+    let mut body_keys = Vec::new();
+    for key in BODY_LISTS {
+        let body = super::records::body_list(rest, key).map_err(|e| format!("error: {e}"))?;
+        match (body, fields.contains_key(key)) {
+            (Some(_), true) => {
+                let both = super::records::RecordsError::BothPlaces(key.to_string());
+                return Err(format!("error: {both}"));
+            }
+            (Some(items), false) => {
+                fields.insert(key, Fv::BlockList(items));
+                body_keys.push(key);
+            }
+            (None, true) => {}
+            (None, false) if !legacy => body_keys.push(key),
+            (None, false) => {}
+        }
+    }
+    Ok(body_keys)
+}
+
+/// Move the body keys out of `fields` into the record fence of `rest`. The
+/// newest url also stays as a scalar `pr_url`, the one link Obsidian shows.
+fn split_body_lists(
+    fields: &Fields,
+    rest: &str,
+    body_keys: &[&str],
+) -> Result<(Fields, String), String> {
+    let mut fm = fields.clone();
+    let mut blocks = Vec::new();
+    for key in body_keys {
+        let Some(value) = fm.get(key).cloned() else {
+            continue;
+        };
+        fm.remove(key);
+        let items = match value {
+            Fv::List(items) | Fv::BlockList(items) => items,
+            Fv::Scalar(s) if !s.is_empty() => vec![s],
+            _ => Vec::new(),
+        };
+        if *key == "urls" {
+            if let Some(last) = items.last() {
+                fm.insert("pr_url", Fv::Scalar(last.clone()));
+            }
+        }
+        blocks.push((*key, super::records::list_block(key, &items)));
+    }
+    if blocks.is_empty() {
+        return Ok((fm, rest.to_string()));
+    }
+    let rest = super::records::set_blocks(rest, &blocks).map_err(|e| format!("error: {e}"))?;
+    Ok((fm, rest))
 }
 
 /// The ships a plan declares: expected_url_count when well-formed, else the
@@ -195,6 +268,10 @@ fn do_stamp(
         Ok(ok) => ok,
         Err(e) => return OpResult::fail(1, format!("error: {e}")),
     };
+    let body_keys = match overlay_body_lists(&mut fields, &rest) {
+        Ok(keys) => keys,
+        Err(e) => return OpResult::fail(1, e),
+    };
     let now_utc = now_stamp();
     let status_from: Option<String> = match fields.get("status") {
         Some(Fv::Scalar(s)) => Some(s.clone()),
@@ -281,7 +358,11 @@ fn do_stamp(
     if dry_run {
         return OpResult::ok();
     }
-    if let Err(e) = codec::write_plan_file(&target, &fields, &rest) {
+    let (fm, rest) = match split_body_lists(&fields, &rest, &body_keys) {
+        Ok(split) => split,
+        Err(e) => return OpResult::fail(1, e),
+    };
+    if let Err(e) = codec::write_plan_file(&target, &fm, &rest) {
         return OpResult::fail(1, format!("error: {e}"));
     }
     emit_plan_event(
@@ -355,6 +436,12 @@ fn do_graduate(plan_path: &Path, dry_run: bool, events_path: Option<&Path>) -> O
         Ok(ok) => ok,
         Err(e) => return OpResult::fail(1, format!("error: {e}")),
     };
+    // Read the fence's lists; the write below takes them out again, so the
+    // fence keeps its bytes.
+    let body_keys = match overlay_body_lists(&mut fields, &rest) {
+        Ok(keys) => keys,
+        Err(e) => return OpResult::fail(1, e),
+    };
     let status = match fields.get("status") {
         Some(Fv::Scalar(s)) if !s.is_empty() => Some(s.clone()),
         _ => None,
@@ -421,7 +508,11 @@ fn do_graduate(plan_path: &Path, dry_run: bool, events_path: Option<&Path>) -> O
         if dry_run {
             return OpResult::ok();
         }
-        if let Err(e) = codec::write_plan_file(&target, &fields, &rest) {
+        let mut fm = fields.clone();
+        for key in &body_keys {
+            fm.remove(key);
+        }
+        if let Err(e) = codec::write_plan_file(&target, &fm, &rest) {
             return OpResult::fail(1, format!("error: {e}"));
         }
         let mut data = stamp_event_data(
@@ -629,5 +720,56 @@ mod tests {
         );
         assert_eq!(r.exit, 0);
         assert_eq!(std::fs::read_to_string(&doc).unwrap(), before);
+        // AC4-HP: the lists land in the record fence, frontmatter keeps only
+        // the scalar pr_url.
+        let fm = &before[..before[3..].find("\n---").unwrap() + 3];
+        assert!(
+            !fm.contains("urls") && !fm.contains("session_ids"),
+            "{before}"
+        );
+        assert!(fm.contains("pr_url: https://x/pr/1"), "{before}");
+        assert!(
+            before.contains("```yaml\nurls:\n  - https://x/pr/1\nsession_ids:\n  - s1\n```"),
+            "{before}"
+        );
+        // A second ship appends inside the fence.
+        let r = cmd_stamp(
+            &doc,
+            "s2",
+            &["https://x/pr/2".to_string()],
+            None,
+            false,
+            None,
+        );
+        assert_eq!(r.exit, 0, "{}", r.message);
+        let text = std::fs::read_to_string(&doc).unwrap();
+        assert!(text.contains("pr_url: https://x/pr/2"), "{text}");
+        assert!(
+            text.contains(
+                "urls:\n  - https://x/pr/1\n  - https://x/pr/2\nsession_ids:\n  - s1\n  - s2\n```"
+            ),
+            "{text}"
+        );
+        // AC4-ERR: a legacy plan appends in frontmatter and never adds a copy.
+        std::fs::write(
+            &doc,
+            "---\nstatus: draft\nurls: [https://x/pr/1]\n---\n# body\n",
+        )
+        .unwrap();
+        let r = cmd_stamp(
+            &doc,
+            "s3",
+            &["https://x/pr/3".to_string()],
+            None,
+            false,
+            None,
+        );
+        assert_eq!(r.exit, 0, "{}", r.message);
+        let text = std::fs::read_to_string(&doc).unwrap();
+        assert!(
+            text.contains("urls: [https://x/pr/1, https://x/pr/3]"),
+            "{text}"
+        );
+        assert!(!text.contains("## Gate records"), "{text}");
     }
 }

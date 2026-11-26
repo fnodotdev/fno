@@ -768,9 +768,13 @@ pub(crate) fn draft(arg: &str, mode: &str, rewrite: bool, no_emit: bool, root: &
     };
     // Author-set values win; a default fills only an unset or empty key.
     let fm = &doc.frontmatter;
-    if !truthy(fm.get("kill_criteria")) {
-        fields.insert("kill_criteria", Fm::Raw(DEFAULT_KILL_CRITERIA.into()));
-    }
+    // kill_criteria lives in the `## Gate records` fence; a legacy frontmatter
+    // value still counts as set, so no second copy lands.
+    let lifted = match doc.validation_map() {
+        Ok(m) => m,
+        Err(e) => return (3, format!("## Gate records: {e}")),
+    };
+    let needs_kill = !truthy(lifted.get("kill_criteria"));
     if !truthy(fm.get("execution_mode")) {
         fields.insert("execution_mode", Fm::Scalar("mixed".into()));
     }
@@ -781,7 +785,15 @@ pub(crate) fn draft(arg: &str, mode: &str, rewrite: bool, no_emit: bool, root: &
     if rewrite {
         body = remove_blueprint_sections(&body);
     }
-    let proposed = render(&fields, &append_sections(&body, &sections));
+    let mut full_body = append_sections(&body, &sections);
+    if needs_kill {
+        let block = format!("kill_criteria:\n{DEFAULT_KILL_CRITERIA}");
+        full_body = match super::records::set_blocks(&full_body, &[("kill_criteria", block)]) {
+            Ok(b) => b,
+            Err(e) => return (3, format!("## Gate records: {e}")),
+        };
+    }
+    let proposed = render(&fields, &full_body);
     if let Some(refusal) = schema_refusal(&proposed) {
         return (3, refusal);
     }
@@ -1018,7 +1030,12 @@ mod tests {
         );
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("status: design"));
-        assert!(out.contains("kill_criteria:\n  - name: iteration_ceiling"));
+        // AC7-HP: the default kill_criteria lands in the record fence.
+        let fm_end = out[3..].find("\n---").unwrap();
+        assert!(!out[..fm_end].contains("kill_criteria"), "{out}");
+        assert!(
+            out.contains("## Gate records\n\n```yaml\nkill_criteria:\n  - name: iteration_ceiling")
+        );
         let qs = out.find("## Open Questions").unwrap();
         let es = out.find("## Execution Strategy").unwrap();
         assert!(qs < es && es < out.find("## References").unwrap());
