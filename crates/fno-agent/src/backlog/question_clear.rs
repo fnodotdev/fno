@@ -1687,6 +1687,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             // A titled lead rules a reversible question inside its scope,
             // the asker's liveness aside. The deny classes stay the user's.
             let scope_lead = !own_ask
+                && !lead_withdraw
                 && req.answer.is_some()
                 && authority == Some("role")
                 && caller.teamed
