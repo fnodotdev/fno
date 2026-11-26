@@ -493,7 +493,7 @@ Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` ga
 
 The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin. Two readings are pinned. A fresh round runs FIRST-ROUND SCOPE. The reviewer never reads prior rounds' findings and never narrows to the incremental delta. The fresh marker therefore never rides a round that reviewed only part of the diff. And `execution_context=fork` names not-the-builder's-context. It never means an Agent-tool fork, which inherits the builder's whole conversation. The fresh dispatch is a subagent that starts empty.
 
-The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Its designed readers are setup, for the install offer, and the lane, for the fresh-vs-self pick. None ships here. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
+Each harness row now carries a `fresh_review` field (`native`, `package`, or `none`) in `harness_capabilities.toml`. Its readers are still pending: setup, for the install offer, and the lane, for the fresh-vs-self pick. Until they land, `--fresh` is explicit, and the fallback above is the whole wiring.
 
 ## The pass condition and the four verdict states
 

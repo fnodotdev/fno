@@ -5,6 +5,9 @@
 map_version = 27
 
 [harness.claude]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "native"
 # THE DELIVERED-MAIL HEADER FORM. Every delivered mail opens with one
 # backticked header line. `mail_header_at = true` renders the sender as the
 # `@name` mention form; `false` renders plain `name`, for a harness whose
@@ -256,6 +259,9 @@ state = "native"
 state = "native"
 
 [harness.codex]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 # The provider goal keeps a Codex lead working between wakes. It stays
 # while mail to an idle thread can fail to start a turn.
@@ -483,6 +489,9 @@ state = "native"
 state = "native"
 
 [harness.gemini]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 permission_bypass = ["--yolo"]
 # No efforts key: the spawn refuses a gemini effort. permission_modes: the
@@ -585,6 +594,9 @@ state = "absent"
 state = "capable"
 
 [harness.agy]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 # agy documents a recurring `schedule` tool (internal/agy/docs/Hookslink.md:135).
 beat = "schedule"
@@ -760,6 +772,9 @@ takes_add_dir = true
 clear_modal = ["trust (?:this )?folder|do you trust", "\r"]
 
 [harness.opencode]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "package"
 mail_header_at = true
 beat = "daemon"
 permission_bypass = ["--dangerously-skip-permissions"]
@@ -970,6 +985,9 @@ measured_by = { reader = "daemon-kept attach journey", date = "2026-09-03" }
 # identity is the pair (cwd, session_id) and never the id alone. A resume issued
 # from the canonical checkout will not see a session started in a worktree.
 [harness.pi]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "package"
 mail_header_at = true
 # pi ships NO permission popups. Its own docs/usage.md says so in as many
 # words, and `pi --help` carries no bypass flag: `--approve`/`-a` trusts
@@ -1211,6 +1229,9 @@ resume_refusal = "is not supported on the pi thread lane yet; the keeper row res
 #            claude-shaped {decision: "block", reason} (shared-events.ts
 #            SessionStopEventResult). omp has no `agent_settled`.
 [harness.omp]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 # `--auto-approve`/`--yolo` and `--approval-mode always-ask|always-ask-cached|
 # write|yolo` (cli/args.ts, cli/flag-tables.ts). Unlike pi, omp ships an
@@ -1617,6 +1638,9 @@ takes_model = true
 takes_add_dir = true
 
 [harness.grok]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 permission_bypass = ["--always-approve"]
 # permission_modes: grok's own --help (1.0.13) names this set for
@@ -1785,6 +1809,9 @@ takes_effort = true
 # journey. No keeper arm = the thread substrate refuses with the TUI-dead
 # evidence.
 [harness.zcode]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 permission_bypass = ["--mode=yolo"]
 # permission_modes: zcode's own --mode values (zcode-cli arguments; the
@@ -1903,6 +1930,9 @@ measured_by = { reader = "session-id resume journey", version = "3.14.3", date =
 # declares `footnote/author: agent`. The id is footnote's own fno_id,
 # minted before the first record, so the binding is preassigned.
 [harness.footnote]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 permission_bypass = []
 efforts = []
@@ -1997,6 +2027,9 @@ state = "capable"
 # `muse exec --help`, the exported MSP schema, or an echo-provider probe
 # (2026-10-24, no model spend).
 [harness.muse]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 # A text part reads `@relative/path` as a file mention (schema TurnInputPart),
 # so the mail header names the sender plainly.
 mail_header_at = false
