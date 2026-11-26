@@ -80,6 +80,7 @@ pub mod text_or_file;
 pub mod trusted_config;
 pub mod version;
 
+pub mod connector_gate;
 pub mod eval;
 pub mod gate;
 pub mod runtime;
