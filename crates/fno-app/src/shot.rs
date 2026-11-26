@@ -715,7 +715,7 @@ unsafe fn tap_window_point(w: *mut AnyObject, tx: f64, ty: f64) {
             location: at,
             modifierFlags: 0usize,
             timestamp: 0f64,
-            windowNumber: num as isize,
+            windowNumber: num,
             context: std::ptr::null_mut::<AnyObject>(),
             eventNumber: 0isize,
             clickCount: 1isize,
