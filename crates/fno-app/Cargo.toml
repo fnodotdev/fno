@@ -42,10 +42,11 @@ serde = { version = "1", features = ["derive"] }
 # weekly crates.io snapshot of Zed main. Pinned exact, because any snapshot
 # may break the API. The fallback, if gpui-pre stops publishing, is a git rev
 # pin on the same Zed commit (0.3.14 is zed@f126950).
-gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false, features = ["font-kit"] }
+gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false }
 # The platform layer gpui-pre splits out: gpui_platform::application() opens
-# the macOS app.
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14" }
+# the macOS app. `font-kit` lives here, not on gpui: without it the macOS
+# platform builds no text system and paints no glyphs.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14", features = ["font-kit"] }
 # Chat mode's markdown: gpui ships no markdown element.
 pulldown-cmark = { version = "0.13", default-features = false }
 # The chat composer deletes by grapheme.
