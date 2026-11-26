@@ -178,12 +178,29 @@ pub(crate) fn emit_guard_decision(cwd: &Path, guard: &str, tool: &str, denied: b
 /// (the harness prompted the person) or `override` (the person approved an
 /// ask and the call ran).
 pub(crate) fn emit_guard_row(cwd: &Path, guard: &str, tool: &str, decision: &str) {
+    emit_guard_row_reason(cwd, guard, tool, decision, "");
+}
+
+/// The row with a decision and the reason a later reader classifies the
+/// call by. An empty reason keeps the old three-key shape, so existing
+/// guards' rows stay byte-identical.
+pub(crate) fn emit_guard_row_reason(
+    cwd: &Path,
+    guard: &str,
+    tool: &str,
+    decision: &str,
+    reason: &str,
+) {
     let path =
         crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
+    let mut data = json!({"guard": guard, "decision": decision, "tool": tool});
+    if !reason.is_empty() {
+        data["reason"] = json!(reason);
+    }
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
         "type": "guard_decision",
-        "data": {"guard": guard, "decision": decision, "tool": tool},
+        "data": data,
         "source": "hook"
     });
     let deferred = GUARD_ROWS.with(|rows| match rows.borrow_mut().as_mut() {
