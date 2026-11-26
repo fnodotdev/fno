@@ -53,6 +53,9 @@ pub(crate) mod de;
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
 
+#[path = "lead_checkin_review_board.rs"]
+mod review_board;
+
 #[path = "lead_checkin_rate_limits.rs"]
 mod rate_limits;
 
@@ -1368,6 +1371,22 @@ fn collect_readings(
     });
     let h_parked = spawn_reading(beat_started, "parked", || r_parked());
     let h_prompt_parked = spawn_reading(beat_started, "prompt_parked", || prompt_parked::reading());
+    let h_review_board = spawn_reading(beat_started, "review_board", {
+        let (rows, scope, folded) = (rows.clone(), scope.clone(), folded.clone());
+        move || {
+            let members: std::collections::HashSet<String> = folded
+                .as_ref()
+                .ok()
+                .and_then(|f| f.pointer("/fold"))
+                .map(|f| de::parse::<de::FoldView>(f))
+                .unwrap_or_default()
+                .nodes
+                .iter()
+                .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(str::to_string))
+                .collect();
+            Ok(review_board::reading(&rows, &scope, &members))
+        }
+    });
     // The two input pseudos spawn with the leaves and await at their declared
     // positions: their graph scans overlap the leaf readers instead of
     // front-loading the beat's serial path.
@@ -1590,6 +1609,7 @@ fn collect_readings(
     h_self_hold.collect_into(&mut readings, beat_started);
     h_parked.collect_into(&mut readings, beat_started);
     h_prompt_parked.collect_into(&mut readings, beat_started);
+    h_review_board.collect_into(&mut readings, beat_started);
 
     readings
 }
@@ -2459,6 +2479,7 @@ fn render_lines_with(
     lines.extend(posture::lines(readings));
     lines.extend(peer_blocked::lines(readings));
     lines.extend(prompt_parked::lines(readings));
+    lines.extend(review_board::lines(readings));
     lines.extend(crate::backlog::attention_ledger::checkin_lines(readings));
 
     match failed("refusal_rate") {
@@ -3676,6 +3697,25 @@ mod tests {
             assert!(err.starts_with("unreadable ("), "{err}");
         });
         let _ = std::fs::remove_dir_all(&base);
+
+        // The review-board reading: newest slug on the scope or a child, else the remedy line.
+        let note = |ts: &str, text: &str| json!({"ts": ts, "text": text});
+        let boards = vec![
+            json!({"id": "x-epic", "progress_notes": [note("2026-11-01", "Review board: old")]}),
+            json!({"id": "x-kid", "progress_notes": [note("2026-11-02", "Review board: new")]}),
+        ];
+        let line = |scope, kids: &[&str]| {
+            let members = kids.iter().map(|k| k.to_string()).collect();
+            let value = review_board::reading(&boards, scope, &members);
+            review_board::lines(&[Reading::took("review_board", value)])
+        };
+        assert_eq!(
+            line("x-epic", &["x-kid"]),
+            vec!["review_board: new".to_string()]
+        );
+        assert!(line("x-none", &[])
+            .first()
+            .is_some_and(|l| l.starts_with("review_board: none: make one from the Gus or Lara")));
     }
 
     /// One escalation note's frontmatter plus stub sections.
