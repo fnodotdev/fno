@@ -261,12 +261,6 @@ pub(crate) fn fno_agent_commands(sources: &AgentSources) -> Result<BTreeSet<Stri
             );
         }
     }
-    let retired = braced_region(
-        &text,
-        AGENTS_SOURCE_REL,
-        "fn retired_command_pointer(command:",
-    )?;
-    commands.extend(arm.captures_iter(retired).map(|c| c[1].to_string()));
     let request = braced_region(&text, AGENTS_SOURCE_REL, "let method = match command")?;
     let lines: Vec<&str> = request.lines().collect();
     commands.extend(arms_at_top_level(&lines, &arm));
@@ -453,6 +447,43 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
     ))
 }
 
+/// The fno-agent words an fno root answers by its own name, with no menu
+/// row: the client's front doors and the help and version every binary has.
+const ROOT_SPELLED: &[&str] = &["backlog", "do", "help", "pr", "version"];
+
+/// The client word each `fno agent` row forwards to.
+pub(crate) fn menu_forwarded() -> BTreeSet<String> {
+    crate::agents_menu::walk(&crate::agents_menu::ROOT)
+        .into_iter()
+        .filter_map(|(_, node)| node.legacy.first())
+        .map(|word| crate::agents_client_route::client_word(word).to_string())
+        .collect()
+}
+
+/// Every fno-agent word needs an fno spelling: an `fno agent` row that
+/// forwards to it, or an fno root that answers it by name. The refusal names
+/// each word with none.
+pub(crate) fn check_homes(
+    words: &BTreeSet<String>,
+    forwarded: &BTreeSet<String>,
+) -> Result<(), Vec<String>> {
+    let homeless: Vec<String> = words
+        .iter()
+        .filter(|w| !forwarded.contains(*w) && !ROOT_SPELLED.contains(&w.as_str()))
+        .map(|w| {
+            format!(
+                "fno-agent `{w}` has no fno spelling. Add an `fno agent` row whose legacy \
+                 word is `{w}` (crates/fno/src/cli/agents_menu.rs), or delete its arm."
+            )
+        })
+        .collect();
+    if homeless.is_empty() {
+        Ok(())
+    } else {
+        Err(homeless)
+    }
+}
+
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
 Counts every command, hidden included, at the first three levels of fno and
@@ -485,7 +516,10 @@ pub fn run(args: &[std::ffi::OsString]) -> i32 {
             return 2;
         }
     };
-    match check(&counts, &inputs.debt) {
+    let homes = fno_agent_commands(&inputs.agents)
+        .map_err(|e| vec![e])
+        .and_then(|words| check_homes(&words, &menu_forwarded()));
+    match check(&counts, &inputs.debt).and_then(|line| homes.map(|()| line)) {
         Ok(line) => {
             println!("{line}");
             0
@@ -551,7 +585,6 @@ mod tests {
             native_tree: native,
             agents: AgentSources {
                 client: "async fn run(\n    args: X,\n    timing: Y,\n) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
-                     fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
                      let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n\
                      fn main() { if args.first().map(String::as_str) == Some(\"early\") {} }\n"
                     .into(),
@@ -573,7 +606,7 @@ mod tests {
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got.get("fno-agent"), Some(&12), "{got:?}");
+        assert_eq!(got.get("fno-agent"), Some(&11), "{got:?}");
         // A door table whose marker moved refuses by file and marker, never
         // a silent zero for its words.
         inputs.agents.tables[0].2 = "pub fn renamed() {}".into();
@@ -587,5 +620,14 @@ mod tests {
         assert!(got["inbox"] >= 2, "{got:?}");
         assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agent fleet"));
+
+        // A client word with no fno spelling refuses by name; a menu-forwarded
+        // word and a root-spelled word pass.
+        let words: BTreeSet<String> = ["zz-homeless", "census", "help"].map(String::from).into();
+        let homes = check_homes(&words, &BTreeSet::from(["census".to_string()])).unwrap_err();
+        assert!(
+            homes.len() == 1 && homes[0].contains("`zz-homeless`"),
+            "{homes:?}"
+        );
     }
 }

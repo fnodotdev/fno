@@ -54,15 +54,12 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "detect",
     "digest",
     "distress-scan",
-    "drive",
     "drive-authority",
     "evals-macro",
     "evidence-gate",
     "finalize",
     "fleet-incident",
-    "grid",
     "help",
-    "host",
     "judge",
     "kill-check",
     "lead-checkin",
@@ -91,7 +88,6 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "honesty-sweep",
     "prove-it-verdicts",
     "test-run",
-    "promote",
     "publish-review",
     "reap",
     "roster-reap",
@@ -565,8 +561,7 @@ async fn run_daemon_command(
         }
     }
 
-    // Intercept `spawn` only: `host` and `promote` also map to agent.spawn
-    // and fall through to the daemon RPC unchanged.
+    // Intercept `spawn` only; every other method falls through to the daemon RPC.
     let mut lease = SpawnLease::default();
     if method == "agent.spawn" && command == "spawn" {
         fno_agent::spawn::watcher_probe::probe_client_spawn(&params);
@@ -2587,33 +2582,6 @@ fn unresolvable_ask_exit(params: &Value, name: &str) -> i32 {
     };
     eprintln!("{}", msg);
     2
-}
-
-/// One-line pointers for the commands retired at G4: the grid, the
-/// WebSocket drive surface, and the interactive daemon PTY hosting behind
-/// `host`/`promote` moved to the mux. Returns `None` for a live command. Callers
-/// print the pointer and exit non-zero so a script never reads a retired command
-/// as a silent success (AC5-EDGE).
-fn retired_command_pointer(command: &str) -> Option<&'static str> {
-    match command {
-        "grid" => Some(
-            "fno agent grid was retired at G4: agent panes now live in the mux. \
-             Open `fno mux`, or script panes with `fno mux pane ls|read|run|send|wait|kill`.",
-        ),
-        "drive" => Some(
-            "fno agent drive was retired at G4: drive an agent pane in the mux. \
-             Use `fno mux pane send <pane> --raw ...` for keystrokes (without --raw the payload is wrapped in an <fno_mail> envelope), or open `fno mux` and type into the pane.",
-        ),
-        "host" => Some(
-            "fno agent host was retired at G4: open `fno mux` (the spawn command \
-             launches in the mux itself; the lane template owns the placement).",
-        ),
-        "promote" => Some(
-            "fno agent promote is now fno agent hq promote <session> --scope <scope>; \
-             the old pane command was retired at G4 (a spawn lands in the mux by default).",
-        ),
-        _ => None,
-    }
 }
 
 /// Dispatch `fno-agent status`: probe an already-running daemon and print its

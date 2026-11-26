@@ -117,7 +117,6 @@ fno-agent do ci
 fno-agent do diff
 fno-agent do pr
 fno-agent do show
-fno-agent drive
 fno-agent drive-authority
 fno-agent evals
 fno-agent evals-arm
@@ -134,7 +133,6 @@ fno-agent fleet-task
 fno-agent gh
 fno-agent gh-adapter
 fno-agent gh-cache
-fno-agent grid
 fno-agent harness-beat
 fno-agent harness-matrix
 fno-agent harness-probe
@@ -142,7 +140,6 @@ fno-agent harness-roster
 fno-agent help
 fno-agent honesty-sweep
 fno-agent hook
-fno-agent host
 fno-agent intel
 fno-agent judge
 fno-agent kill-check
@@ -207,7 +204,6 @@ fno-agent pr-verify
 fno-agent pr-watch
 fno-agent pr-worktree
 fno-agent probe-run
-fno-agent promote
 fno-agent prove-it-verdicts
 fno-agent provider-cap
 fno-agent publish-review

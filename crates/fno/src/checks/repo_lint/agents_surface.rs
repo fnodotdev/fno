@@ -237,8 +237,8 @@ impl AgentsSurface {
             if !self.top.contains(command) {
                 failures.push(format!(
                     "agents-surface: the refusal names `{command}` but no dispatch arm answers it. \
-                     A refused command must never read as registered: restore the arm, remove \
-                     the spelling from ALL_CLIENT_ACTIONS, or land it in the retired pointer."
+                     A refused command must never read as registered: restore the arm, or \
+                     remove the spelling from ALL_CLIENT_ACTIONS."
                 ));
             }
         }
@@ -366,6 +366,10 @@ mod tests {
             "the claim sweep specimen row is missing: {:?}",
             surface.claim_ops
         );
+        // Every word the live client answers has an fno spelling.
+        if let Err(homeless) = menu_caps::check_homes(&surface.top, &menu_caps::menu_forwarded()) {
+            panic!("homeless fno-agent words:\n  {}", homeless.join("\n  "));
+        }
         let hidden_text = std::fs::read_to_string(root.join(HIDDEN_REL))
             .unwrap_or_else(|e| panic!("agents-surface: cannot read {HIDDEN_REL}: {e}"));
         let rows = hidden_rows(&hidden_text).unwrap();

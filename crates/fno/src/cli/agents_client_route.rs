@@ -70,6 +70,18 @@ pub fn classify(args: &[OsString]) -> Option<Route> {
     }))
 }
 
+/// The client word `agents <word>` reaches: the head of its mapped argv, or
+/// the word itself.
+pub fn client_word(word: &str) -> &str {
+    if word == "harness" {
+        return "harness-probe";
+    }
+    MAPPED
+        .iter()
+        .find(|(from, _)| *from == word)
+        .map_or(word, |(_, to)| to[0])
+}
+
 fn prefixed(prefix: &[&str], rest: &[OsString]) -> Vec<OsString> {
     prefix
         .iter()
