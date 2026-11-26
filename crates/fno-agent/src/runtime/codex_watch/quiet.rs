@@ -1219,74 +1219,6 @@ mod tests {
         )
     }
 
-    fn transcript_with(rows: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        std::fs::write(&path, rows.join("\n")).unwrap();
-        (dir, path)
-    }
-
-    #[test]
-    fn an_open_tool_call_reads_not_quiet_until_its_own_timeout_then_quiet() {
-        // The Bash call opens at T with a 10-minute timeout and no result
-        // row: the worker is inside a foreground wait. Past the timeout the
-        // call is stale and the ladder reads the worker quiet again.
-        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
-            .unwrap()
-            .timestamp();
-        let (_dir, path) = transcript_with(&[
-            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_open","name":"Bash","input":{"command":"rest-loop","timeout":600000}}]}}"#,
-        ]);
-        let tail = tail(&path, None).unwrap();
-        assert!(
-            tail.call_open(opened + 60),
-            "an open call inside its timeout is not quiet"
-        );
-        assert!(
-            tail.call_open(opened + 599),
-            "the call still holds one second before its bound"
-        );
-        assert!(
-            !tail.call_open(opened + 601),
-            "the same call past its timeout reads quiet"
-        );
-    }
-
-    #[test]
-    fn a_closed_tool_call_never_holds_the_ladder() {
-        let (_dir, path) = transcript_with(&[
-            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_done","name":"Bash","input":{"command":"ls","timeout":600000}}]}}"#,
-            r#"{"type":"user","timestamp":"2026-11-25T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_done","content":"ok"}]}}"#,
-        ]);
-        let tail = tail(&path, None).unwrap();
-        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
-            .unwrap()
-            .timestamp();
-        assert!(
-            !tail.call_open(opened + 60),
-            "a call with a result is not open"
-        );
-    }
-
-    #[test]
-    fn a_codex_function_call_without_output_reads_not_quiet_inside_its_timeout() {
-        let (_dir, path) = transcript_with(&[
-            r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{\"command\":[\"sleep\",\"900\"],\"timeout_ms\":1200000}"}}"#,
-        ]);
-        let tail = tail(&path, None).unwrap();
-        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
-            .unwrap()
-            .timestamp();
-        assert!(
-            tail.call_open(opened + 900),
-            "a codex call inside its timeout is not quiet"
-        );
-        assert!(
-            !tail.call_open(opened + 1201),
-            "past its timeout it reads quiet"
-        );
-    }
-
     #[test]
     fn quota_tail_holds_only_for_a_future_reset() {
         // The verdict scan and the stamp parse run over the in-memory lines:
@@ -1447,6 +1379,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tail(&path, None).unwrap().activity, 1767226500);
+        // An open tool call inside its own timeout holds the ladder: the
+        // worker is inside a foreground wait. Past the timeout it reads quiet.
+        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        let open_dir = tempfile::tempdir().unwrap();
+        let open_path = open_dir.path().join("session.jsonl");
+        std::fs::write(&open_path, r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_open","name":"Bash","input":{"command":"rest-loop","timeout":600000}}]}}"#).unwrap();
+        let open = tail(&open_path, None).unwrap();
+        assert!(
+            open.call_open(opened + 60),
+            "an open call inside its timeout is not quiet"
+        );
+        assert!(
+            open.call_open(opened + 599),
+            "the call still holds before its bound"
+        );
+        assert!(
+            !open.call_open(opened + 601),
+            "the same call past its timeout reads quiet"
+        );
+        // A closed call (a tool_result row) never holds the ladder.
+        std::fs::write(&open_path, concat!(
+            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_done","name":"Bash","input":{"command":"ls","timeout":600000}}]}}"#, "
+",
+            r#"{"type":"user","timestamp":"2026-11-25T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_done","content":"ok"}]}}"#
+        )).unwrap();
+        assert!(
+            !tail(&open_path, None).unwrap().call_open(opened + 60),
+            "a call with a result is not open"
+        );
+        // Codex: a function_call with no output is open until its timeout_ms.
+        std::fs::write(&open_path, r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{"command":["sleep","900"],"timeout_ms":1200000}"}}"#).unwrap();
+        let codex = tail(&open_path, None).unwrap();
+        assert!(
+            codex.call_open(opened + 900),
+            "a codex call inside its timeout is not quiet"
+        );
+        assert!(
+            !codex.call_open(opened + 1201),
+            "past its timeout it reads quiet"
+        );
     }
 
     #[test]
@@ -1829,12 +1803,9 @@ mod tests {
             &[],
             watch.expires_at_ms + WATCH_LINGER_MS
         ));
-    }
 
-    #[test]
-    fn a_declared_watch_shields_the_seat_whatever_runs_the_wait() {
         // The shield keys on the declared `<watching>` row, never on the
-        // runner. A `fno do pr wait` watch and a background REST loop that
+        // runner: a `fno do pr wait` watch and a background REST loop that
         // the worker declares write the same row, so both must shield.
         let now = 1_000_000;
         for runner_task in [None, Some("bash-rest-loop")] {
