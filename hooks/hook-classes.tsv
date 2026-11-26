@@ -6,6 +6,7 @@ claude	PreToolUse	worktree-write-protect.sh	block	open
 claude	PreToolUse	plan-location-guard.sh	block	open
 claude	PreToolUse	review-hold.sh	block	open
 claude	PermissionRequest	worktree-relocation-allow.sh	block	closed
+claude	PermissionRequest	session-state.sh	wait	-
 claude	Notification	session-state.sh	wait	-
 claude	UserPromptSubmit	session-state.sh	wait	-
 claude	UserPromptSubmit	session-join-prompt.sh	wait	-
@@ -26,6 +27,7 @@ claude	PostModelSwitch	session-state.sh	wait	-
 claude	StopFailure	target-stopfailure.sh	wait	-
 claude	PostToolUse	format-on-edit.sh	wait	-
 claude	PostToolUse	edit-integrity.sh	wait	-
+claude	PostToolUse	session-state.sh	wait	-
 claude	PostToolUse	spend-drift-monitor.sh	wait	-
 claude	PostToolUse	claim-heartbeat.sh	wait	-
 claude	PostToolUse	friction-offer-inject.sh	wait	-

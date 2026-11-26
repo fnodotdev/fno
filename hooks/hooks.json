@@ -63,6 +63,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PermissionRequest",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Notification": [
@@ -198,6 +208,11 @@
       {
         "matcher": "",
         "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PostToolUse",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""

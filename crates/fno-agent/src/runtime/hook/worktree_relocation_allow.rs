@@ -44,7 +44,8 @@ struct ToolInput {
 
 /// Entry: read one PermissionRequest payload, decide, print, always exit 0.
 pub fn run(_args: &[String]) -> i32 {
-    let payload: Payload = serde_json::from_str(super::read_stdin().trim()).unwrap_or_default();
+    let raw = super::read_stdin();
+    let payload: Payload = serde_json::from_str(raw.trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
     let own = own_worktree(&payload.session_id, &cwd);
     let allowed = own.as_deref().is_some_and(|own| allows(&payload, own));
@@ -61,6 +62,13 @@ pub fn run(_args: &[String]) -> i32 {
         println!("{out}");
         0
     } else {
+        // The prompt stays up, so this leg reports it as blocked: the generic
+        // claude PermissionRequest report skips EnterWorktree.
+        let footnote = std::env::var("FNO_HARNESS_NAME").is_ok_and(|h| h == "footnote");
+        let whole = serde_json::from_str::<serde_json::Value>(raw.trim());
+        if let (false, "EnterWorktree", Ok(whole)) = (footnote, payload.tool_name.as_str(), whole) {
+            super::session_state::process("claude", "PermissionRequest", &whole);
+        }
         super::emit_allow()
     }
 }
