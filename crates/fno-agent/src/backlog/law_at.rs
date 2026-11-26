@@ -273,19 +273,20 @@ mod tests {
             fires_with(&[journal.clone()], hour_ago, &HashMap::new()),
             Value::Null
         );
-        let span = |law: Option<&str>, event: &str, sid: &str| {
+        let span = |n: u8, law: Option<&str>, event: &str, sid: &str| {
             json!({
                 "ts": chrono::Utc::now().to_rfc3339(), "type": "decision_span", "source": "target",
                 "data": {"span_kind": "rule", "rule": "r", "law": law, "event": event,
-                         "verdict": "warn", "trace": {"actor_session": sid}},
+                         "verdict": "warn", "trace": {"trace_id": "none", "span_id": format!("s-{n}"), "actor_kind": "worker",
+                                   "comms": "chat", "actor_session": sid}},
             })
             .to_string()
         };
         for line in [
-            span(Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
-            span(Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
-            span(Some("d-e952ed19"), "prompt", "ffff0000-0000"),
-            span(None, "pre-tool", "ffff0000-0000"),
+            span(1, Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
+            span(2, Some("d-e952ed19"), "door:send", "a1b2c3d4-0000"),
+            span(3, Some("d-e952ed19"), "prompt", "ffff0000-0000"),
+            span(4, None, "pre-tool", "ffff0000-0000"),
         ] {
             crate::event_store::append_envelope(&journal, &line, None).unwrap();
         }

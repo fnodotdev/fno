@@ -1076,7 +1076,8 @@ mod tests {
         ] {
             let envelope = serde_json::json!({
                 "ts": ts, "type": "decision_span", "source": "target",
-                "data": {"span_kind": "rule", "rule": rule, "verdict": verdict, "event": "pre-tool"},
+                "data": {"span_kind": "rule", "rule": rule, "verdict": verdict, "event": "pre-tool",
+                         "trace": {"trace_id": "none", "span_id": rule.to_string() + verdict, "actor_kind": "worker", "comms": "chat"}},
             });
             crate::event_store::append_envelope(&journal, &envelope.to_string(), None).unwrap();
         }
