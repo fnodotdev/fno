@@ -2048,9 +2048,11 @@ fn launch_head(
     let lane = match launch_lane(p.repo, &lane, false, false, d.now, d.room) {
         Ok(lane) => lane,
         Err(cause) => {
+            // post_status cuts the text at 140 characters, so the clearing
+            // hint leads and the cause follows.
             finish(
                 "failure",
-                &format!("head lane refused: {cause}. Clear: declare the lane in routing.models or set evals.gate.lane to a declared lane."),
+                &format!("head lane refused, clear by declaring it in routing.models: {cause}"),
                 DONE.into(),
             );
             return format!("head {} lane refused", short(&pr.sha));
@@ -3138,6 +3140,10 @@ mod tests {
         assert!(w.spawns.borrow().is_empty(), "no doomed launch");
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.starts_with("failure head lane refused"), "{post}");
+        assert!(
+            post.contains("routing.models"),
+            "clearing hint kept: {post}"
+        );
         assert!(post.contains("unknown lane 'no-such-lane'"), "{post}");
     }
 
