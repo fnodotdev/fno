@@ -55,7 +55,7 @@ The sample file is JSONL, with one line per hand-checked row: `{"key": "...", "f
 
 The value check finds the row for each sampled key. It compares every contract field after normalization. The receipt gives each field's hits, its accuracy and a 95% Wilson interval. If the mismatch total is above `max_mismatches`, the value check fails.
 
-If a sampled key has no row or more than one row, the completeness check fails. If you pass `--source-count` and the row count differs from it, the completeness check also fails.
+If a sampled key has no row or more than one row, the completeness check fails. It also reads every row, sampled or not. If any row has every contract field blank, the check fails and names the row in `first_empty_rows`. If you pass `--source-count` and the row count differs from it, the completeness check also fails.
 
 If any row, sampled or not, has a blank source document field or a blank code version field, the provenance check fails.
 
@@ -73,7 +73,7 @@ A dropped page of k rows out of N holds one of n sampled keys with probability 1
 
 - `wrong-field` swaps two contract fields on every row. A parser mapping bug does the same.
 - `dropped-page` removes `page_size` rows in a row.
-- `stale-session` blanks every field except the key, from an offset to the end. A blocked or expired session tail looks like this.
+- `stale-session` blanks every contract field from an offset to the end. The key and the provenance fields stay. A blocked or expired session tail looks like this.
 
 With `--mutate`, two things must be true for exit 0. The clean run passes, and the gate rejects every seeded defect. A gate that refuses everything cannot read green, because its clean run fails.
 

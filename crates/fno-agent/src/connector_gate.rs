@@ -386,17 +386,20 @@ fn check(
         failed.push("sample_size");
     }
 
+    let mut by_key: std::collections::HashMap<String, Vec<&Row>> = Default::default();
+    for r in rows {
+        by_key
+            .entry(text(r.get(&contract.key)))
+            .or_default()
+            .push(r);
+    }
     let mut missing = Vec::new();
     let mut duplicate = Vec::new();
     let mut matched: Vec<(&SampleLine, &Row)> = Vec::new();
     for s in sample {
-        let hits: Vec<&Row> = rows
-            .iter()
-            .filter(|r| text(r.get(&contract.key)) == s.key)
-            .collect();
-        match hits.as_slice() {
+        match by_key.get(&s.key).map(Vec::as_slice).unwrap_or_default() {
             [] => missing.push(s.key.clone()),
-            [one] => matched.push((s, one)),
+            [one] => matched.push((s, *one)),
             _ => duplicate.push(s.key.clone()),
         }
     }
@@ -440,12 +443,25 @@ fn check(
         let k = contract.page_size.min(rows.len()) as f64;
         1.0 - (1.0 - k / rows.len() as f64).powi(n as i32)
     });
-    let complete_ok = missing.is_empty() && duplicate.is_empty() && count_check != "mismatch";
+    let blank = |r: &Row, field: &str| text(r.get(field)).trim().is_empty();
+    // A row with every contract field blank is a husk: a blocked or expired
+    // response the connector kept. Unsampled husks are invisible to the
+    // value check, so this one reads every row.
+    let empty: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| {
+            let mut data = contract.fields.iter().filter(|f| f.name != contract.key);
+            data.all(|f| blank(r, &f.name))
+        })
+        .map(|(i, _)| i + 1)
+        .collect();
+    let complete_ok =
+        missing.is_empty() && duplicate.is_empty() && empty.is_empty() && count_check != "mismatch";
     if !complete_ok {
         failed.push("completeness");
     }
 
-    let blank = |r: &Row, field: &str| text(r.get(field)).trim().is_empty();
     let unproven: Vec<usize> = rows
         .iter()
         .enumerate()
@@ -478,6 +494,8 @@ fn check(
             "count_check": count_check,
             "missing_keys": missing,
             "duplicate_keys": duplicate,
+            "empty_rows": empty.len(),
+            "first_empty_rows": empty.iter().take(10).collect::<Vec<_>>(),
             "dropped_page_detection_bound": bound,
             "page_size": contract.page_size,
         },
@@ -537,15 +555,15 @@ fn mutate(contract: &Contract, rows: &[Row], class: &str, seed: u64) -> Vec<Row>
             let at = (next(&mut state) as usize) % (out.len() - k + 1);
             out.drain(at..at + k);
         }
-        // A blocked or expired session tail: rows keep their keys, every
-        // other cell comes back blank.
+        // A blocked or expired session tail: rows keep their key and the
+        // provenance the connector stamps, and every contract cell comes
+        // back blank. Keeping provenance means only the data checks can
+        // catch it.
         _ => {
             let at = (next(&mut state) as usize) % out.len();
             for r in &mut out[at..] {
-                for (name, v) in r.iter_mut() {
-                    if *name != contract.key {
-                        *v = Value::String(String::new());
-                    }
+                for f in contract.fields.iter().filter(|f| f.name != contract.key) {
+                    r.insert(f.name.clone(), Value::String(String::new()));
                 }
             }
         }
