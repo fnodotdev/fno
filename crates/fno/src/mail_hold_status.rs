@@ -7,7 +7,6 @@
 
 use fno_mail::hold::{Hold, HoldClock, HoldStore, SetBy};
 use fno_mail::session::SessionId;
-use serde_json::Value;
 
 use crate::self_identity::{resolve_self_identity, OwnedDisposition};
 
@@ -71,6 +70,25 @@ fn identity_key(session_id: &str) -> String {
     }
 }
 
+/// The registry rows, under `agents` or the older `entries` key.
+#[derive(serde::Deserialize)]
+struct RegistryDoc {
+    #[serde(default, alias = "entries")]
+    agents: Vec<RegistryRow>,
+}
+
+#[derive(serde::Deserialize)]
+struct RegistryRow {
+    #[serde(default)]
+    harness_session_id: Option<String>,
+    #[serde(default)]
+    short_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    delivery_policy: Option<String>,
+}
+
 /// True when exactly one registry row answers to `session_id` and that row
 /// carries the mail-only capability. A multi-match or unreadable registry
 /// reads as no capability, as fno-agent's own read does.
@@ -78,34 +96,21 @@ fn mail_only_row(session_id: &str) -> bool {
     let Ok(text) = crate::ui::agents_view::registry_text() else {
         return false;
     };
-    let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+    let Ok(doc) = serde_json::from_str::<RegistryDoc>(&text) else {
         return false;
     };
     let wanted = identity_key(session_id);
-    let rows: Vec<&Value> = doc
-        .get("agents")
-        .or_else(|| doc.get("entries"))
-        .and_then(Value::as_array)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter(|e| {
-                    let sid_hit = e
-                        .get("harness_session_id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|sid| {
-                            let key = identity_key(sid);
-                            key == wanted || key.get(..8) == Some(wanted.as_str())
-                        });
-                    let text_hit =
-                        |field: &str| e.get(field).and_then(Value::as_str) == Some(session_id);
-                    sid_hit || text_hit("short_id") || text_hit("name")
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    match rows.as_slice() {
-        [only] => only.get("delivery_policy").and_then(Value::as_str) == Some(MAIL_ONLY),
+    let mut hits = doc.agents.iter().filter(|row| {
+        let sid_hit = row.harness_session_id.as_deref().is_some_and(|sid| {
+            let key = identity_key(sid);
+            key == wanted || key.get(..8) == Some(wanted.as_str())
+        });
+        sid_hit
+            || row.short_id.as_deref() == Some(session_id)
+            || row.name.as_deref() == Some(session_id)
+    });
+    match (hits.next(), hits.next()) {
+        (Some(only), None) => only.delivery_policy.as_deref() == Some(MAIL_ONLY),
         _ => false,
     }
 }
