@@ -88,6 +88,7 @@ pub mod runtime;
 // proc_table and the identity modules name each other), so each is
 // re-exported at the lib root under the name its copy carries in fno.
 pub use eval::proc_table;
+pub use runtime::bus_read;
 pub use runtime::identity_markers;
 pub use runtime::pid;
 pub use spawn::self_identity;
