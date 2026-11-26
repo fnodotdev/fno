@@ -22,7 +22,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--provider/-P` is retired. Name a model vendor through `--route provider/model`. The CLI binary is `--harness/-H`.
 
-`--route provider/model` bypasses the `--role` table and wins over any configured lane. It fails closed: an unknown provider, a non-anthropic protocol, or a missing key refuses the spawn. claude only.
+`--route provider/model` bypasses the `--role` table and wins over any configured lane. It fails closed: an unknown provider, a protocol the harness does not speak, or a missing key refuses the spawn. Claude takes an anthropic route. Codex takes an openai route on `--as headless` only.
 
 `--role` selects a routing role. If configuration names a secondary provider, the auxiliary roles (coordinate, tidy, orient, consolidate, post-merge) and the delivery lane route to it. Production roles and the default stay primary.
 

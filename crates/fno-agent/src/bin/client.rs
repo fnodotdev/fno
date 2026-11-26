@@ -2472,9 +2472,10 @@ fn launch_codex_headless(call: &SpawnCall<'_>) -> Option<i32> {
         false,
         call.timeout,
         None,
-        None,
+        call.route.and_then(|r| r.effort.as_deref()),
         None,
         call.harness_args,
+        call.route.and_then(|r| r.codex.as_ref()),
     );
     if let Some(receipt) = daemon_receipt.as_ref() {
         fno_agent::codex_ask::append_daemon_receipt(&mut outcome, receipt);
