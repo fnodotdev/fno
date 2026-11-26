@@ -76,7 +76,7 @@ pub fn run(rest: &[String]) -> i32 {
         "seed-provenance" => seed_provenance::run(&rest[1..]),
         "team" => team::run_team(&rest[1..]),
         "withdraw" => withdraw::run(&rest[1..]),
-        "sent" => crate::mail_sent_env::run_sent(&rest[1..]),
+        "sent" => crate::mail_sent_env::run_sent(rest.get(1..).unwrap_or_default()),
         "send" => send::run(&rest[1..]),
         "reply" => reply::run(&rest[1..]),
         "pane-prepare" => pane_prepare::run(&rest[1..]),

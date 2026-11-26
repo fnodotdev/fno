@@ -173,7 +173,9 @@ pub(crate) fn nag_line(bus: &Path, handle: &str) -> Option<String> {
     }
     let n = unclaimed.len();
     let noun = if n == 1 { "message" } else { "messages" };
-    let age_min = age_minutes(&str_field(&unclaimed[0], "ts", ""), now);
+    let age_min = unclaimed
+        .first()
+        .map_or(0, |m| age_minutes(&str_field(m, "ts", ""), now));
     let first = defanged.first().map(String::as_str).unwrap_or("?");
     // An unshown recipient carries no read, so it never earns a liveness claim.
     let states: Vec<RecipientLiveness> = if extra > 0 {

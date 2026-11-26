@@ -17,7 +17,6 @@ use crate::mail_sent_core::{
 use crate::self_identity::resolve_self_identity;
 use serde_json::Value;
 
-const PROJECTS_DIR_ENV: &str = "FNO_CLAUDE_PROJECTS_DIR";
 const CODEX_SESSIONS_DIR_ENV: &str = "FNO_CODEX_SESSIONS_DIR";
 
 /// Run the leaf and return its exit code.
@@ -28,7 +27,7 @@ pub fn run(args: &[String]) -> i32 {
     let hash = move |token: &str| mail_hash(&database, token);
     let env = SentEnv {
         bus: &bus,
-        claude_projects: claude_projects_dir(),
+        claude_projects: crate::transcript_tail::claude_projects_dir(),
         codex_sessions: codex_sessions_dir(),
         unclaimed_ttl: inbox_ttl("inbox.unclaimed_ttl", DEFAULT_UNCLAIMED_TTL),
         abandon_ttl: inbox_ttl("inbox.landed_abandon_ttl", DEFAULT_LANDED_ABANDON_TTL),
@@ -54,16 +53,6 @@ fn inbox_ttl(key: &str, default: i64) -> i64 {
     )
     .and_then(|v| v.as_integer())
     .unwrap_or(default)
-}
-
-fn claude_projects_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os(PROJECTS_DIR_ENV) {
-        return PathBuf::from(v);
-    }
-    if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
-        return PathBuf::from(v).join("projects");
-    }
-    home().join(".claude").join("projects")
 }
 
 fn codex_sessions_dir() -> PathBuf {

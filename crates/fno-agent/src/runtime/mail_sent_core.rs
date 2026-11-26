@@ -127,57 +127,16 @@ pub fn run_sent(
         (msgs, unclaimed_ids)
     };
 
-    // `claimed`: durable cursor read past this row. A hosted row has none,
-    // so it reports null; a typed row can never be drained, so it reports
-    // false even though it is excluded from the unclaimed scan.
-    let claimed_flag = |m: &Value| -> Option<bool> {
-        let d = delivery_of(m);
-        if d == HOSTED_DELIVERY {
-            None
-        } else if d == TYPED_DELIVERY {
-            Some(false)
-        } else {
-            Some(!unclaimed_ids.contains(&str_field(m, "id", "?")))
-        }
-    };
     let landed_flag = landed_states(env, &all, &msgs, None);
+    let view = View {
+        all: &all,
+        landed: &landed_flag,
+        unclaimed_ids: &unclaimed_ids,
+        now,
+    };
 
     if json_out || !std::io::stdout().is_terminal() {
-        let rows: Vec<Value> = msgs
-            .iter()
-            .map(|m| {
-                let id = str_field(m, "id", "?");
-                let mut delivery_state = newest_state(&all, &id);
-                // A transcript hit is the turn record too, not only a landed row.
-                if !delivery_state.is_accepted() && landed_flag.get(&id) == Some(&Some(true)) {
-                    delivery_state = fno_mail::state::DeliveryState::AcceptedNewTurn {
-                        evidence: fno_mail::state::Evidence {
-                            record: "landed".into(),
-                            ..Default::default()
-                        },
-                    };
-                }
-                json!({
-                    "id": id,
-                    "state": delivery_state.word(),
-                    "state_detail": fno_mail::state::detail(&delivery_state),
-                    "to": str_field(m, "to", ""),
-                    "to_kind": at(m, "to_kind").cloned().unwrap_or(Value::Null),
-                    "kind": str_field(m, "kind", ""),
-                    "ts": str_field(m, "ts", ""),
-                    "delivery": delivery_of(m).to_string(),
-                    "claimed": claimed_flag(m),
-                    // A typed row is neither claimed nor claimABLE: it is
-                    // excluded from the unclaimed scan, withdraw refuses it,
-                    // and the recipient cannot drain it.
-                    "claimable": delivery_of(m) != TYPED_DELIVERY,
-                    "landed": landed_flag.get(&id).cloned().flatten().map(Value::from).unwrap_or(Value::Null),
-                    // The stored envelope, wrapper included: a sender judges a
-                    // stale message by its words before withdrawing it.
-                    "body": str_field(m, "body", ""),
-                })
-            })
-            .collect();
+        let rows: Vec<Value> = msgs.iter().map(|m| view.json_row(m)).collect();
         println!(
             "{}",
             serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
@@ -191,37 +150,7 @@ pub fn run_sent(
         return 0;
     }
     for m in &msgs {
-        let id = str_field(m, "id", "?");
-        let delivery_state = newest_state(&all, &id);
-        let state = match delivery_of(m) {
-            HOSTED_DELIVERY => match landed_flag.get(&id).cloned().flatten() {
-                Some(true) => "landed".to_string(),
-                Some(false) => format!(
-                    "handed {}m ago, not in transcript",
-                    age_minutes(&str_field(m, "ts", ""), now)
-                ),
-                _ => "handed, landing unknown".to_string(),
-            },
-            // `typed`: a PTY prompt can discard bytes, so never claim it was
-            // consumed.
-            TYPED_DELIVERY => "typed (unconfirmed)".to_string(),
-            _ => {
-                if claimed_flag(m).unwrap_or(false) {
-                    "claimed".to_string()
-                } else {
-                    "UNCLAIMED".to_string()
-                }
-            }
-        };
-        let lane = text(m, "to_kind").filter(|s| !s.is_empty()).unwrap_or("?");
-        println!(
-            "{}  -> {}  [{lane}/{}]  {}  {} ({state})",
-            id,
-            str_field(m, "to", ""),
-            delivery_of(m),
-            str_field(m, "ts", ""),
-            fno_mail::state::receipt(&delivery_state, ""),
-        );
+        println!("{}", view.table_line(m));
     }
     println!(
         "\nunclaimed means the recipient never read it. Wake it first - \
@@ -230,6 +159,89 @@ pub fn run_sent(
          fno agent mail withdraw <id>"
     );
     0
+}
+
+/// What the renderers read beside the listed rows.
+struct View<'a> {
+    all: &'a [Value],
+    landed: &'a HashMap<String, Option<bool>>,
+    unclaimed_ids: &'a HashSet<String>,
+    now: i64,
+}
+
+impl View<'_> {
+    /// `claimed`: durable cursor read past this row. A hosted row has none,
+    /// so it reports null; a typed row can never be drained, so it reports
+    /// false even though it is excluded from the unclaimed scan.
+    fn claimed(&self, m: &Value) -> Option<bool> {
+        match delivery_of(m) {
+            HOSTED_DELIVERY => None,
+            TYPED_DELIVERY => Some(false),
+            _ => Some(!self.unclaimed_ids.contains(&str_field(m, "id", "?"))),
+        }
+    }
+
+    fn json_row(&self, m: &Value) -> Value {
+        let id = str_field(m, "id", "?");
+        let mut delivery_state = newest_state(self.all, &id);
+        // A transcript hit is the turn record too, not only a landed row.
+        if !delivery_state.is_accepted() && self.landed.get(&id) == Some(&Some(true)) {
+            delivery_state = fno_mail::state::DeliveryState::AcceptedNewTurn {
+                evidence: fno_mail::state::Evidence {
+                    record: "landed".into(),
+                    ..Default::default()
+                },
+            };
+        }
+        json!({
+            "id": id,
+            "state": delivery_state.word(),
+            "state_detail": fno_mail::state::detail(&delivery_state),
+            "to": str_field(m, "to", ""),
+            "to_kind": at(m, "to_kind").cloned().unwrap_or(Value::Null),
+            "kind": str_field(m, "kind", ""),
+            "ts": str_field(m, "ts", ""),
+            "delivery": delivery_of(m).to_string(),
+            "claimed": self.claimed(m),
+            // A typed row is neither claimed nor claimABLE: it is excluded
+            // from the unclaimed scan, withdraw refuses it, and the
+            // recipient cannot drain it.
+            "claimable": delivery_of(m) != TYPED_DELIVERY,
+            "landed": self.landed.get(&id).cloned().flatten().map(Value::from).unwrap_or(Value::Null),
+            // The stored envelope, wrapper included: a sender judges a stale
+            // message by its words before withdrawing it.
+            "body": str_field(m, "body", ""),
+        })
+    }
+
+    fn table_line(&self, m: &Value) -> String {
+        let id = str_field(m, "id", "?");
+        let delivery_state = newest_state(self.all, &id);
+        let state = match delivery_of(m) {
+            HOSTED_DELIVERY => match self.landed.get(&id).cloned().flatten() {
+                Some(true) => "landed".to_string(),
+                Some(false) => format!(
+                    "handed {}m ago, not in transcript",
+                    age_minutes(&str_field(m, "ts", ""), self.now)
+                ),
+                _ => "handed, landing unknown".to_string(),
+            },
+            // `typed`: a PTY prompt can discard bytes, so never claim it was
+            // consumed.
+            TYPED_DELIVERY => "typed (unconfirmed)".to_string(),
+            _ if self.claimed(m).unwrap_or(false) => "claimed".to_string(),
+            _ => "UNCLAIMED".to_string(),
+        };
+        let lane = text(m, "to_kind").filter(|s| !s.is_empty()).unwrap_or("?");
+        format!(
+            "{}  -> {}  [{lane}/{}]  {}  {} ({state})",
+            id,
+            str_field(m, "to", ""),
+            delivery_of(m),
+            str_field(m, "ts", ""),
+            fno_mail::state::receipt(&delivery_state, ""),
+        )
+    }
 }
 
 /// The nag predicate: sent by this handle, not retracted, not already proven
@@ -608,7 +620,11 @@ pub fn dedupe_last_wins(msgs: Vec<Value>) -> Vec<Value> {
     for m in msgs {
         let id = str_field(&m, "id", "?");
         match index.get(&id) {
-            Some(i) => out[*i] = m,
+            Some(i) => {
+                if let Some(slot) = out.get_mut(*i) {
+                    *slot = m;
+                }
+            }
             None => {
                 index.insert(id, out.len());
                 out.push(m);
