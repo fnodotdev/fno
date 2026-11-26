@@ -102,6 +102,7 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
     fno_proto::feed::grammar::set_sequential_tail(super::node_ref::is_sequential_tail);
     let items = start_read(home).and_then(finish_read).unwrap_or_default();
     let held = Arc::new(RwLock::new(Arc::new(Held { items, stamp: 1 })));
+    crate::runtime::page_relief::relieve_now();
     {
         let held = Arc::clone(&held);
         let home = home.clone();
@@ -114,6 +115,7 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
                 };
                 stamp += 1;
                 swap_in(&held, stamp, || finish_read(read));
+                crate::runtime::page_relief::relieve_now();
             }
         });
     }
