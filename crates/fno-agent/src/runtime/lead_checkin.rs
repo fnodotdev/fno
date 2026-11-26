@@ -1293,7 +1293,13 @@ fn collect_readings(
     });
     let h_law_fires = spawn_reading(beat_started, "law_fires", {
         let events_paths = events_paths.clone();
-        move || Ok(crate::law_at::fires_at_actions(&events_paths))
+        let since = since.clone();
+        move || {
+            Ok(crate::law_at::fires_at_actions(
+                &events_paths,
+                since.as_deref(),
+            ))
+        }
     });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {

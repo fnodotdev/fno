@@ -154,18 +154,23 @@ struct SpanTrace {
 }
 
 /// The lead check-in's `law_fires` reading: the laws that fired at an
-/// action (a pre-tool call or a door) over the last 24h, or null when none
-/// did, so a quiet beat prints no line.
-pub fn fires_at_actions(events_paths: &[PathBuf]) -> Value {
-    fires_with(events_paths, &crate::numbers::labels())
+/// action (a pre-tool call or a door) since the previous beat's `ts` (24h
+/// with no previous beat), or null when none did, so a quiet beat prints
+/// no line.
+pub fn fires_at_actions(events_paths: &[PathBuf], since: Option<&str>) -> Value {
+    let since_ms = since
+        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+        .map(|t| t.timestamp_millis())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() - LOOKBACK_MS);
+    fires_with(events_paths, since_ms, &crate::numbers::labels())
 }
 
-/// The summary over the 24h window, laws by fire count, each named by its
+/// The summary over the window, laws by fire count, each named by its
 /// short number when it has one.
-fn fires_with(events_paths: &[PathBuf], labels: &HashMap<String, String>) -> Value {
+fn fires_with(events_paths: &[PathBuf], since_ms: i64, labels: &HashMap<String, String>) -> Value {
     let query = crate::event_store::EventQuery {
         types: vec!["decision_span".to_string()],
-        since_ms: Some(chrono::Utc::now().timestamp_millis() - LOOKBACK_MS),
+        since_ms: Some(since_ms),
         ..Default::default()
     };
     let mut seen = HashSet::new();
@@ -253,7 +258,11 @@ mod tests {
     fn law_fires_at_actions_count_per_law_and_a_quiet_window_is_null() {
         let td = tempfile::TempDir::new().unwrap();
         let journal = td.path().join("events.jsonl");
-        assert_eq!(fires_with(&[journal.clone()], &HashMap::new()), Value::Null);
+        let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
+        assert_eq!(
+            fires_with(&[journal.clone()], hour_ago, &HashMap::new()),
+            Value::Null
+        );
         let span = |law: Option<&str>, event: &str, sid: &str| {
             json!({
                 "ts": chrono::Utc::now().to_rfc3339(), "type": "decision_span", "source": "target",
@@ -272,9 +281,15 @@ mod tests {
         }
         let labels = HashMap::from([("d-e952ed19".to_string(), "D1051".to_string())]);
         assert_eq!(
-            fires_with(&[journal], &labels),
+            fires_with(&[journal.clone()], hour_ago, &labels),
             json!("D1051 x2 (sessions a1b2c3d4)"),
             "a prompt fire and a law-less rule are not law fires at an action"
+        );
+        let from_now = chrono::Utc::now().timestamp_millis() + 60_000;
+        assert_eq!(
+            fires_with(&[journal], from_now, &labels),
+            Value::Null,
+            "a fire before the previous beat is not reported again"
         );
     }
 }
