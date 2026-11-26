@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use crate::config_defaults::{global_config_path, lookup_value, project_config_path};
 use crate::config_doctor::{agents_registry_path, bus_dir, graph_json, Settings};
 use crate::mail_sent_core::{
-    landed_envelope, now_secs, run_sent, SentEnv, DEFAULT_LANDED_ABANDON_TTL, DEFAULT_UNCLAIMED_TTL,
+    canonical_handle, landed_envelope, now_secs, run_sent, SentEnv, DEFAULT_LANDED_ABANDON_TTL,
+    DEFAULT_UNCLAIMED_TTL,
 };
 use crate::self_identity::resolve_self_identity;
 use serde_json::Value;
@@ -43,17 +44,6 @@ pub fn run(args: &[String]) -> i32 {
         }
     };
     run_sent(args, &env, &handle, now_secs())
-}
-
-/// The handle a session id stamps into `from`: the first eight characters,
-/// lowercased unless the id is an opencode `ses_` id.
-fn canonical_handle(session_id: &str) -> String {
-    let head: String = session_id.chars().take(8).collect();
-    if session_id.starts_with("ses_") {
-        head
-    } else {
-        head.to_ascii_lowercase()
-    }
 }
 
 fn inbox_ttl(key: &str, default: i64) -> i64 {

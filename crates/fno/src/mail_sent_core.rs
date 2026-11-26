@@ -493,6 +493,18 @@ fn read_cursor(bus: &Path, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The handle a session id stamps into `from`: its first eight characters,
+/// lowercased unless the id is an opencode `ses_` id. The send path and this
+/// view must agree on it, so both read this one function.
+pub fn canonical_handle(session_id: &str) -> String {
+    let head: String = session_id.chars().take(8).collect();
+    if session_id.starts_with("ses_") {
+        head
+    } else {
+        head.to_ascii_lowercase()
+    }
+}
+
 /// One envelope key by name: the single place this module reads a field.
 fn at<'a>(m: &'a Value, key: &str) -> Option<&'a Value> {
     m.get(key)
