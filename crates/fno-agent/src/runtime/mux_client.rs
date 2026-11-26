@@ -45,13 +45,15 @@ fn warn_mux_dir_unset() {
     WARNED.call_once(|| {
         let home = crate::paths::AgentsHome::from_env();
         let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        let _ = emitter.emit(
-            "mux_dir_unset",
-            &serde_json::json!({
-                "env": MUX_DIR_ENV,
-                "effect": "in-process pane send and read answer nothing until the launcher exports it",
-            }),
-        );
+        emitter
+            .emit(
+                "mux_dir_unset",
+                &serde_json::json!({
+                    "env": MUX_DIR_ENV,
+                    "effect": "in-process pane send answers nothing until the launcher exports it",
+                }),
+            )
+            .ok();
     });
 }
 
