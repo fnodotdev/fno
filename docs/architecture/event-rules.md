@@ -72,7 +72,7 @@ The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt`
 
 The four doors ask the same way through `rules_source::rule`. The merge door reads one `door:merge` event per PR. The subject is `<owner/repo>#<n>`. The node comes from the body. A block holds the merge with blocker `rule`. The preview carries the same answer, so `fno do pr status` never says ready where merge refuses.
 
-The send door reads `door:send` with the recipient as subject. When the recipient is not session-id-shaped (a uuid or an 8-hex fno id), the subjects also carry `by-name:<recipient>`, so a rule can match a send by name. A block exits 3.
+The send door reads `door:send` with the recipient as subject. A recipient that is not a uuid or an 8-hex fno id is a name. For a name the subjects also carry `by-name:<recipient>`, so a rule can match a send by name. A block exits 3.
 
 The spawn gate reads `door:spawn` (harness, model, node, phase). A block refuses with exit 93 before any capacity math runs. `--force` does not clear a rule.
 
@@ -86,7 +86,7 @@ Two modes on the same door write and report. `{"mode":"rules-import","file":"<pa
 
 `{"mode":"rules-explain","event":{"kind":"pre-tool","tool":"Edit","paths":["cli/src/a.py"]}}` reads every live rule against that event. The event takes the `Event` fields. An event with no `project` takes the cwd's project. Each row carries a `status` and its `clauses`. The status is `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`, `retrieval` (tier 1, ranked only at a prompt or skill event) or `unevaluated` (tier 2). Each clause names one filter the rule sets, whether it held, and the event value it saw. The clauses are the ones `matches` uses, so a tier-0 `applies` row is exactly a rule `decide` fires. `rules-report` is the firing log: fires, blocks and warns per rule, and `never_fired` for the rest.
 
-The lead check-in reads the same spans. Its `law_fires` reading counts the spans that carry a `law` at a `pre-tool` or `door:*` event over the last 24h and prints one line, `law fires at actions: D1051 x2 (sessions a1b2c3d4)`, with at most five laws. A quiet window prints no line.
+The lead check-in reads the same spans. Its `law_fires` reading counts the spans that carry a `law` at a `pre-tool` or `door:*` event over the last 24h. It prints one line with at most five laws, such as `law fires at actions: D1051 x2 (sessions a1b2c3d4)`. A quiet window prints no line.
 
 ## Events
 
