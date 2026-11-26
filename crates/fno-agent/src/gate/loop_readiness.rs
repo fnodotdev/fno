@@ -556,7 +556,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_unreadable_leg_refuses_without_becoming_false_health() {
+    fn a_leg_refuses_without_becoming_false_health() {
         let snapshot = measure(
             ReadinessLeg::unreadable("probe failed"),
             ReadinessLeg::ready(),
@@ -567,6 +567,20 @@ mod tests {
         let refusal = admit(snapshot).unwrap_err();
         assert!(refusal.contains("machine"));
         assert!(refusal.contains("probe failed"));
+
+        // A restarted session passes the stop leg only through the
+        // predecessor ids its own row records.
+        let events = [
+            r#"{"type":"context_snapshot","data":{"harness":"claude","session_id":"old-1","entry_state":"startup","measurement_complete":true}}"#,
+            r#"{"type":"stop_decision","data":{"session_id":"old-1","correlation_id":"stop:old-1:1"}}"#,
+        ]
+        .join("\n");
+        let linked = stop_leg_from_events(&events, "claude", "new-2", &["old-1".to_string()]);
+        assert!(linked.state.is_ready());
+        let unlinked = stop_leg_from_events(&events, "claude", "new-2", &[]);
+        assert_eq!(unlinked.state, LegState::Blocked);
+        let reason = unlinked.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("session-hook-unobserved"));
     }
 
     #[test]
@@ -585,20 +599,5 @@ mod tests {
         let reason = missing.reason.as_deref().unwrap_or_default();
         assert!(reason.contains("plugin-missing"));
         assert!(reason.contains("fno config plugin install codex"));
-    }
-
-    #[test]
-    fn a_restarted_session_passes_only_through_its_rows_recorded_predecessor() {
-        let events = [
-            r#"{"type":"context_snapshot","data":{"harness":"claude","session_id":"old-1","entry_state":"startup","measurement_complete":true}}"#,
-            r#"{"type":"stop_decision","data":{"session_id":"old-1","correlation_id":"stop:old-1:1"}}"#,
-        ]
-        .join("\n");
-        let linked = stop_leg_from_events(&events, "claude", "new-2", &["old-1".to_string()]);
-        assert!(linked.state.is_ready());
-        let unlinked = stop_leg_from_events(&events, "claude", "new-2", &[]);
-        assert_eq!(unlinked.state, LegState::Blocked);
-        let reason = unlinked.reason.as_deref().unwrap_or_default();
-        assert!(reason.contains("session-hook-unobserved"));
     }
 }
