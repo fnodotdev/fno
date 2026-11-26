@@ -339,81 +339,79 @@ pub fn set_badge(_count: u32) {}
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use block::ConcreteBlock;
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::NSString;
-    use objc::class;
-    use objc::declare::ClassDecl;
-    use objc::msg_send;
-    use objc::runtime::{Class, Object, Sel};
-    use objc::sel;
-    use objc::sel_impl;
+    use std::ffi::{CStr, CString};
+
+    use block2::{Block, RcBlock};
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{class, msg_send, sel};
 
     use super::Kind;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-    fn ns(s: &str) -> id {
-        // SAFETY: alloc/init of NSString with a &str always yields a valid object.
-        unsafe { NSString::alloc(nil).init_str(s) }
+    type Id = *mut AnyObject;
+
+    const TX_IVAR: &CStr = c"_fno_tx";
+
+    fn ns(s: &str) -> Id {
+        // An interior NUL cannot reach a label or a sound name; it would
+        // only truncate the string.
+        let c = CString::new(s.replace('\0', "")).unwrap_or_default();
+        // SAFETY: stringWithUTF8String: copies the bytes, which live through
+        // the call; it returns an autoreleased NSString or nil.
+        unsafe { msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()] }
     }
 
     /// UserNotifications keys off a bundle id; a plain `cargo run` binary
     /// has none and the center raises on first use, so the leg skips itself.
     fn bundle_present() -> bool {
         // SAFETY: mainBundle and bundleIdentifier exist on every macOS and
-        // return objects (or nil) the id comparison handles.
+        // return objects (or nil) the null check handles.
         unsafe {
-            let bundle: id = msg_send![class!(NSBundle), mainBundle];
-            let bid: id = msg_send![bundle, bundleIdentifier];
-            bid != nil
+            let bundle: Id = msg_send![class!(NSBundle), mainBundle];
+            let bid: Id = msg_send![bundle, bundleIdentifier];
+            !bid.is_null()
         }
     }
 
     /// The UN didReceive method: on a plain click, read the pane id out of
     /// the content's userInfo and hand it to the click channel. The
-    /// completion block must always run (the runtime frees the response
-    /// only after it does); its invoke fn pointer sits at offset 16 of a
-    /// block literal (isa, flags, reserved, invoke, descriptor).
-    extern "C" fn did_receive(
-        this: &mut Object,
+    /// completion block must always run: the runtime frees the response
+    /// only after it does.
+    extern "C-unwind" fn did_receive(
+        this: &AnyObject,
         _cmd: Sel,
-        _center: id,
-        response: id,
-        completion: id,
+        _center: Id,
+        response: Id,
+        completion: &Block<dyn Fn()>,
     ) {
         // SAFETY: `response` is the object the notification center passed in;
         // every selector here exists on UNNotificationResponse's chain. The
-        // completion is a valid copied block whose invoke pointer sits at
-        // offset 16 of the literal; calling it fulfills the center's
-        // must-run contract.
+        // ivar was declared on this class with type usize and set at install.
         unsafe {
             let default_action = ns("com.apple.UNNotificationDefaultActionIdentifier");
-            let action: id = msg_send![response, actionIdentifier];
+            let action: Id = msg_send![response, actionIdentifier];
             let clicked: bool = msg_send![action, isEqualToString: default_action];
             if clicked {
-                let notification: id = msg_send![response, notification];
-                let request: id = msg_send![notification, request];
-                let content: id = msg_send![request, content];
-                let user_info: id = msg_send![content, userInfo];
-                let num: id = msg_send![user_info, objectForKey: ns("pane_id")];
-                if num != nil {
+                let notification: Id = msg_send![response, notification];
+                let request: Id = msg_send![notification, request];
+                let content: Id = msg_send![request, content];
+                let user_info: Id = msg_send![content, userInfo];
+                let num: Id = msg_send![user_info, objectForKey: ns("pane_id")];
+                if !num.is_null() {
                     let pane: i64 = msg_send![num, longLongValue];
-                    let tx: &usize = this.get_ivar("_fno_tx");
-                    let tx = &*(*tx as *const UnboundedSender<u64>);
+                    let ivar = this
+                        .class()
+                        .instance_variable(TX_IVAR)
+                        .expect("the delegate class declares the sender ivar");
+                    let tx = *ivar.load::<usize>(this) as *const UnboundedSender<u64>;
                     // A closed window loop has nowhere to put the click;
                     // dropping it is the correct handling.
-                    tx.send(pane as u64).ok();
+                    (*tx).send(pane as u64).ok();
                 }
             }
-            // The runtime frees the response only after the handler
-            // block runs; the dispatch block's invoke fn pointer
-            // sits at offset 16 of a block literal (isa, flags,
-            // reserved, invoke, descriptor).
-            let inv: extern "C" fn(*mut Object) =
-                std::mem::transmute(*(completion as *const *mut Object).offset(2));
-            inv(completion);
         }
+        completion.call(());
     }
 
     /// The delegate class: one registered subclass of NSObject carrying the
@@ -421,97 +419,101 @@ mod mac {
     /// boxed raw pointer. The delegate lives for the process (the center
     /// holds a strong reference and nothing drops the allocation), so
     /// nothing here ever drops the sender either.
-    fn click_delegate_class() -> &'static Class {
-        static CELL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-        // SAFETY: class registration runs once (OnceLock) and register()
-        // hands back a permanent Class pointer.
-        let ptr = *CELL.get_or_init(|| unsafe {
-            let mut decl = ClassDecl::new("FnoAppClickDelegate", class!(NSObject))
+    fn click_delegate_class() -> &'static AnyClass {
+        static CELL: std::sync::OnceLock<&'static AnyClass> = std::sync::OnceLock::new();
+        CELL.get_or_init(|| {
+            let mut decl = ClassBuilder::new(c"FnoAppClickDelegate", class!(NSObject))
                 .expect("register FnoAppClickDelegate once");
-            // macOS 26 renamed the delegate's completion label; register
-            // both spellings and let each system pick its own.
-            decl.add_method(
-                sel!(userNotificationCenter:didReceiveNotificationResponse:completionHandler:),
-                did_receive as extern "C" fn(&mut Object, Sel, id, id, id),
-            );
-            decl.add_method(
-                sel!(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:),
-                did_receive as extern "C" fn(&mut Object, Sel, id, id, id),
-            );
-            decl.add_ivar::<usize>("_fno_tx");
-            decl.register() as *const Class as usize
-        });
-        // SAFETY: the pointer came from register() above and classes live forever.
-        unsafe { &*(ptr as *const Class) }
+            let imp = did_receive as extern "C-unwind" fn(_, _, _, _, _);
+            // SAFETY: the method's signature matches the delegate selector's
+            // (receiver, _cmd, center, response, completion block).
+            unsafe {
+                // macOS 26 renamed the delegate's completion label; register
+                // both spellings and let each system pick its own.
+                decl.add_method(
+                    sel!(userNotificationCenter:didReceiveNotificationResponse:completionHandler:),
+                    imp,
+                );
+                decl.add_method(
+                    sel!(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:),
+                    imp,
+                );
+            }
+            decl.add_ivar::<usize>(TX_IVAR);
+            decl.register()
+        })
     }
 
     /// Install the delegate and ask for notification authorization once.
     /// `wants_auth` is the `app.alert_notification` switch: a user who
     /// turned the signal off never sees the permission dialog.
     pub fn install_click(wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedReceiver<u64>> {
+        if !bundle_present() {
+            return None;
+        }
         // SAFETY: every msg_send targets a class/singleton with the selector
-        // named; the center is nil-checked before use and the delegate is a
-        // freshly alloc/init'd instance of the class registered above.
+        // named; the center is null-checked before use and the delegate is a
+        // freshly alloc/init'd instance of the class registered above, whose
+        // ivar is declared as usize.
         unsafe {
-            if !bundle_present() {
+            let center: Id = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+            if center.is_null() {
                 return None;
             }
             let (tx, rx) = unbounded_channel();
             let cls = click_delegate_class();
-            let obj: *mut Object = msg_send![cls, alloc];
-            let obj: *mut Object = msg_send![obj, init];
+            let obj: Id = msg_send![cls, alloc];
+            let obj: Id = msg_send![obj, init];
             let boxed = Box::into_raw(Box::new(tx));
-            (*obj).set_ivar("_fno_tx", boxed as usize);
-            let center: id = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
-            if center == nil {
-                return None;
-            }
+            let ivar = cls
+                .instance_variable(TX_IVAR)
+                .expect("the delegate class declares the sender ivar");
+            *ivar.load_ptr::<usize>(&*obj) = boxed as usize;
             let _: () = msg_send![center, setDelegate: obj];
             if wants_auth {
-                let granted = ConcreteBlock::new(move |_ok: u8, _err: id| {
-                    // Denied shows nothing; the switch is the user's.
-                })
-                .copy();
+                // Denied shows nothing; the switch is the user's.
+                let granted = RcBlock::new(|_ok: Bool, _err: Id| {});
                 let _: () = msg_send![center,
-                    requestAuthorizationWithOptions: 4u64
-                    completionHandler: (&*granted as *const _ as *mut Object)
+                    requestAuthorizationWithOptions: 4usize,
+                    completionHandler: &*granted
                 ];
-                std::mem::forget(granted);
             }
             Some(rx)
         }
     }
 
     pub fn notify(title: &str, body: &str, pane_id: Option<u64>) {
+        if !bundle_present() {
+            return;
+        }
         // SAFETY: selectors on UNUserNotificationCenter/UNMutableNotificationContent
-        // exist on every macOS here; the center is nil-checked and the
+        // exist on every macOS here; the center is null-checked and the
         // macOS 26 scheduler spelling is respondsToSelector-gated.
         unsafe {
-            if !bundle_present() {
+            let center: Id = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
+            if center.is_null() {
                 return;
             }
-            let center: id = msg_send![class!(UNUserNotificationCenter), currentNotificationCenter];
-            if center == nil {
-                return;
-            }
-            let content: id = msg_send![class!(UNMutableNotificationContent), new];
+            let content: Id = msg_send![class!(UNMutableNotificationContent), new];
             let _: () = msg_send![content, setTitle: ns(title)];
             let _: () = msg_send![content, setBody: ns(body)];
             if let Some(pane) = pane_id {
-                let info: id = msg_send![class!(NSMutableDictionary), dictionaryWithCapacity: 1u64];
-                let num: id = msg_send![class!(NSNumber), numberWithLongLong: pane as i64];
-                let _: () = msg_send![info, setObject: num forKey: ns("pane_id")];
+                let info: Id =
+                    msg_send![class!(NSMutableDictionary), dictionaryWithCapacity: 1usize];
+                let num: Id = msg_send![class!(NSNumber), numberWithLongLong: pane as i64];
+                let _: () = msg_send![info, setObject: num, forKey: ns("pane_id")];
                 let _: () = msg_send![content, setUserInfo: info];
             }
             let nanos = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos().to_string())
                 .unwrap_or_default();
-            let request: id = msg_send![class!(UNNotificationRequest),
-                requestWithIdentifier: ns(&nanos)
-                content: content
-                trigger: nil
+            let request: Id = msg_send![class!(UNNotificationRequest),
+                requestWithIdentifier: ns(&nanos),
+                content: content,
+                trigger: std::ptr::null_mut::<AnyObject>()
             ];
+            let no_handler: Option<&Block<dyn Fn(Id)>> = None;
             // macOS 26 renamed the completion label on the scheduler; older
             // systems only carry the pre-rename spelling. Ask the center
             // which one it answers and send that, or skip rather than raise.
@@ -519,26 +521,30 @@ mod mac {
                 respondsToSelector: sel!(addNotificationRequest:withCompletionHandler:)
             ];
             if post26 {
-                let _: () =
-                    msg_send![center, addNotificationRequest: request withCompletionHandler: nil];
+                let _: () = msg_send![center,
+                    addNotificationRequest: request,
+                    withCompletionHandler: no_handler
+                ];
             } else {
-                let _: () =
-                    msg_send![center, addNotificationRequest: request completionHandler: nil];
+                let _: () = msg_send![center,
+                    addNotificationRequest: request,
+                    completionHandler: no_handler
+                ];
             }
         }
     }
 
     pub fn play(kind: Kind) {
+        let name = match kind {
+            Kind::Blocked => "Tink",
+            Kind::Done => "Glass",
+        };
         // SAFETY: NSSound responds to soundNamed: and play; soundNamed
         // returns nil for an unknown name and nil is checked.
         unsafe {
-            let name = match kind {
-                Kind::Blocked => "Tink",
-                Kind::Done => "Glass",
-            };
-            let sound: id = msg_send![class!(NSSound), soundNamed: ns(name)];
-            if sound != nil {
-                let _: () = msg_send![sound, play];
+            let sound: Id = msg_send![class!(NSSound), soundNamed: ns(name)];
+            if !sound.is_null() {
+                let _: bool = msg_send![sound, play];
             }
         }
     }
@@ -555,20 +561,20 @@ mod mac {
 
     pub fn set_badge(count: u32) {
         // SAFETY: sharedApplication/dockTile/setBadgeLabel exist on every
-        // macOS; each receiver is nil-checked before use.
+        // macOS; each receiver is null-checked before use.
         unsafe {
-            let app: id = msg_send![class!(NSApplication), sharedApplication];
-            if app == nil {
+            let app: Id = msg_send![class!(NSApplication), sharedApplication];
+            if app.is_null() {
                 return;
             }
-            let tile: id = msg_send![app, dockTile];
-            if tile == nil {
+            let tile: Id = msg_send![app, dockTile];
+            if tile.is_null() {
                 return;
             }
-            let label: id = if count > 0 {
+            let label: Id = if count > 0 {
                 ns(&count.to_string())
             } else {
-                nil
+                std::ptr::null_mut()
             };
             let _: () = msg_send![tile, setBadgeLabel: label];
         }
