@@ -210,7 +210,7 @@ const NARROWED_UPDATE: &str = "p";
 impl Change {
     fn to_json(&self) -> Value {
         let values = |row: &[SqlValue]| row.iter().map(SqlValue::to_hrana).collect::<Vec<_>>();
-        let op = if self.narrowed {
+        let op = if self.narrowed && self.op == Op::Update {
             NARROWED_UPDATE
         } else {
             self.op.code()
