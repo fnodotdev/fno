@@ -921,11 +921,11 @@ impl Ritual {
         None
     }
 
-    /// Sidecar-derived node id(s) for this PR when reconcile closed nothing:
-    /// the dominant path closes + stamps the node at the ship gate, so
-    /// `.closed[]` is empty and the scan recovers repo-scoped.
-    /// The PR's binding wins. Its head branch names the node when no binding
-    /// reads (a node closed without a PR link still ships through its branch).
+    /// Node id(s) for this PR when reconcile closed nothing: the dominant path
+    /// closes + stamps the node at the ship gate, so `.closed[]` is empty and
+    /// the scan recovers repo-scoped. A PR binding wins. Failing that, the
+    /// head branch names the node (a node closed without a PR link still
+    /// ships through its branch).
     fn recover_node_for_pr(&mut self) -> Vec<String> {
         let home = crate::paths::AgentsHome::from_env();
         let slug = self.resolve_origin_slug();
