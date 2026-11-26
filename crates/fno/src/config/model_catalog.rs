@@ -856,8 +856,14 @@ fn rows_for_provider(
         .into_iter()
         .map(|model| ModelChoice {
             name: model.clone(),
+            // A foreign vendor's model launches only through its route;
+            // the id alone reaches the harness's own vendor.
+            route: if native {
+                String::new()
+            } else {
+                format!("{provider}/{model}")
+            },
             model,
-            route: String::new(),
             provider: Some(provider.to_string()),
             state: state.clone(),
             key_env: facts.key_env.clone().filter(|k| !k.is_empty()),
