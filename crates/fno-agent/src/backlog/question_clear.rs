@@ -1685,12 +1685,15 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 };
             let denied = denied_class(question_event);
             // A titled lead rules a reversible question inside its scope,
-            // the asker's liveness aside. The deny classes stay the user's.
+            // the asker's liveness aside. The deny classes stay the user's,
+            // and so does a head-pinned approval, which only its asker moots.
             let scope_lead = !own_ask
                 && !lead_withdraw
                 && req.answer.is_some()
                 && authority == Some("role")
                 && caller.teamed
+                && crate::question_intake::str_field(question_event, "subject")
+                    .is_none_or(|subject| crate::question_sweep::head_scoped(subject).is_none())
                 && node.is_some_and(|node| scope_holds(req, &caller, node));
             if (holds_rung || scope_lead) && req.answer.is_some() && !user_lane {
                 if let Some(class) = &denied {
