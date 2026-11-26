@@ -461,16 +461,25 @@ fn paint_block_gutter(
     let width = m.cell.width * crate::mouse::GUTTER_WIDTH;
     let left = origin.x - m.cell.width * crate::mouse::GUTTER_LEFT;
     for b in &frame.blocks {
-        let hue = match (b.selected, b.exit) {
-            (true, _) => p.accent,
-            (false, Some(code)) if code != 0 => p.error,
-            _ => p.faint,
+        // A quiet block is dimmed, so the failed and the selected one stand
+        // out in either theme.
+        let (hue, dim) = match (b.selected, b.exit) {
+            (true, _) => (p.accent, false),
+            (false, Some(code)) if code != 0 => (p.error_mark, false),
+            _ => (p.faint, true),
+        };
+        // A quarter cell of gap above each bar marks where a block starts. A
+        // block cut off by the viewport top keeps its full bar.
+        let gap = if b.top > 0 {
+            m.cell.height * 0.25
+        } else {
+            px(0.0)
         };
         let rows = (b.bottom.saturating_sub(b.top) + 1) as f32;
-        let at = point(left, origin.y + m.cell.height * b.top as f32);
+        let at = point(left, origin.y + m.cell.height * b.top as f32 + gap);
         window.paint_quad(fill(
-            Bounds::new(at, size(width, m.cell.height * rows)),
-            color(hue, false),
+            Bounds::new(at, size(width, m.cell.height * rows - gap)),
+            color(hue, dim),
         ));
     }
 }

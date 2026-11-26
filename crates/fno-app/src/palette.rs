@@ -33,6 +33,10 @@ pub struct Palette {
     pub ok: u32,
     /// The status line's text when the connection has closed.
     pub error: u32,
+    /// The theme's error hue for a mark that is not text, lifted only to the
+    /// 3:1 a graphic needs on the ground. `error` is lifted to 4.5:1 on the
+    /// strongest fill, which on paper pulls the red toward the ink.
+    pub error_mark: u32,
     /// Secondary text: labels and facts. The values beside them keep `fg`.
     pub muted: u32,
     /// Tertiary text: column heads and key hints, the quietest level.
@@ -189,6 +193,7 @@ impl Palette {
             border: mix(bg, fg, 0.12),
             ok: on_fills(rgb_or(t.ok, 0x9cc49c)),
             error: on_fills(rgb_or(t.error, 0xe1a6a3)),
+            error_mark: mix_to_contrast(rgb_or(t.error, 0xe1a6a3), fg, bg, 3.0),
             // Secondary walks up from the ground, not down from the theme's
             // dim, so it sits well below `fg` and still reads 4.5:1.
             muted: on_fills(mix(bg, fg, 0.4)),

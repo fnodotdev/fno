@@ -541,10 +541,9 @@ impl Pane {
         self.blocks
             .iter()
             .filter_map(|b| {
-                let (first, last) = (
-                    b.start_abs.min(b.end_abs) - top,
-                    b.start_abs.max(b.end_abs) - top,
-                );
+                // `end_abs` is the row the next prompt lands on, so a block's
+                // own rows stop one short of it: two blocks never share a row.
+                let (first, last) = (b.start_abs - top, (b.end_abs - 1).max(b.start_abs) - top);
                 if last < 0 || first >= rows {
                     return None;
                 }
