@@ -88,6 +88,7 @@ crossing	crates/fno-agent/src/runtime/notify_dispatch.rs	let bin = crate::scrape
 crossing	crates/fno-agent/src/runtime/observer/mod.rs	let spawned = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agent/src/runtime/pane_stop.rs	let output = std::process::Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agent/src/runtime/pane_stop.rs	let mut child = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agent/src/runtime/peek.rs	let bin = crate::scrape::fno_bin();
 crossing	crates/fno-agent/src/runtime/recovery_sweep/live.rs	crate::scrape::fno_bin()
 crossing	crates/fno-agent/src/runtime/restart_run.rs	let mut kill = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agent/src/runtime/resume_wake.rs	let out = std::process::Command::new(crate::scrape::fno_bin())

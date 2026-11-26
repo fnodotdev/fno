@@ -1,4 +1,4 @@
-//! In-process mux pane client: one control round trip to the mux server's socket, no `fno mux pane` subprocess.
+//! In-process mux pane client: one control round trip to the mux server's socket, no `fno mux pane` subprocess. Send only: a read for a CLI caller needs the socket dir in a user shell, which only the daemon plist exports.
 //!
 //! The socket dir comes from `FNO_MUX_DIR` alone. The `fno` front door owns the full resolution (config state root, legacy fallback) and exports its answer where it launches the daemon. With the variable unset the client answers `None` and says so once through a `mux_dir_unset` event, so a missing export reads as a loud gap and never as a silent skip.
 
@@ -104,21 +104,6 @@ pub(crate) fn pane_send(session: Option<&str>, pane: u64, bytes: &[u8]) -> bool 
         ),
         Some(ServerMsg::Ok)
     )
-}
-
-/// The pane's rendered grid text; `None` on a dead pane, an unreachable server or an unset mux dir.
-pub(crate) fn pane_read(session: Option<&str>, pane: u64) -> Option<String> {
-    match round_trip(
-        session,
-        ControlCommand::PaneRead {
-            pane,
-            lines: None,
-            block: None,
-        },
-    )? {
-        ServerMsg::PaneText { text, .. } => Some(text),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
