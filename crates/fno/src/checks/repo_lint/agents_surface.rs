@@ -1,11 +1,9 @@
 //! The fno-agent binary's command surface for the command ratchet.
 //!
 //! Two independent readings of one surface, cross-checked:
-//! - the dispatch: every command the client answers, read from the dispatcher's
-//!   own source - the run-region scan menu-caps also counts with, the main()
-//!   argv doors, the gh transport door, the `family_doors` table, the
-//!   `pr_door`/`review_doors`/`client_transport`/`pr_closure` delegate
-//!   tables, and the claim family's op arms in `claim_commands.rs`;
+//! - the dispatch: every command the client answers, read by
+//!   `menu_caps::fno_agent_commands` (the one reading menu-caps counts with),
+//!   plus the claim family's op arms in `claim_commands.rs`;
 //! - the refusal: `ALL_CLIENT_ACTIONS`, the exact slice the
 //!   unknown-command error prints, so the refusal can never name a command
 //!   nothing dispatches.
@@ -29,13 +27,7 @@ use regex::Regex;
 
 use crate::menu_caps;
 
-const CLIENT_REL: &str = "crates/fno-agent/src/bin/client.rs";
-const FAMILY_DOORS_REL: &str = "crates/fno-agent/src/family_doors.rs";
 const CLAIM_COMMANDS_REL: &str = "crates/fno-agent/src/runtime/claim_commands.rs";
-const PR_DOOR_REL: &str = "crates/fno-agent/src/gate/pr_door.rs";
-const REVIEW_DOORS_REL: &str = "crates/fno-agent/src/gate/review_doors.rs";
-const TRANSPORT_REL: &str = "crates/fno-agent/src/client_transport.rs";
-const GH_ADAPTER_REL: &str = "crates/fno-agent/src/gate/pr_status/adapter.rs";
 pub const HIDDEN_REL: &str = "scripts/ci/agents-hidden-commands.tsv";
 
 /// Pinned sub-command seams: baseline rows the scanner asserts exist in the
@@ -67,8 +59,7 @@ const SEAMS: &[(&str, &str)] = &[
 
 /// One cross-checked reading of the binary's surface.
 pub struct AgentsSurface {
-    /// Every dispatched command: run-region arms, argv doors, delegate tables,
-    /// the gh door, plus the help/version spellings menu-caps inserts.
+    /// Every dispatched command, as `menu_caps::fno_agent_commands` reads it.
     pub top: BTreeSet<String>,
     /// The `ALL_CLIENT_ACTIONS` slice: what the unknown-command refusal
     /// prints.
@@ -135,70 +126,25 @@ fn bracket_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
 
 impl AgentsSurface {
     pub fn read(root: &Path) -> Result<Self, String> {
-        let client = read(root, CLIENT_REL)?;
-        let doors = read(root, menu_caps::AGENTS_DOORS_REL)?;
-        // The spellings below read the binary's dispatch as one text: run's
-        // doors moved to their own module and dispatch exactly as before.
-        let dispatch = format!("{client}\n{doors}");
-        let family = read(root, FAMILY_DOORS_REL)?;
+        // One reading of the top level, shared with menu-caps: the debt row
+        // and these rows count the same words.
+        let sources = menu_caps::AgentSources::read(root)?;
+        let top = menu_caps::fno_agent_commands(&sources)?;
+        let client = &sources.client;
+        // The seams read the binary's dispatch as one text: run's doors moved
+        // to their own module and dispatch exactly as before.
+        let dispatch = format!("{client}\n{}", sources.doors);
         let claim = read(root, CLAIM_COMMANDS_REL)?;
-        let pr_door = read(root, PR_DOOR_REL)?;
-        let review_doors = read(root, REVIEW_DOORS_REL)?;
-        let transport = read(root, TRANSPORT_REL)?;
-        let gh_adapter = read(root, GH_ADAPTER_REL)?;
-
-        let mut top = menu_caps::fno_agent_commands(&client, &doors)?;
-        // The `|| command == "x"` continuation arms menu-caps' single-literal
-        // regex cannot see; the shared extraction must not change its count,
-        // because the fno-agent debt ceiling pins that number.
-        let continuation = static_regex(r#"\|\|\s*command == "([a-z][a-z0-9-]*)""#);
-        top.extend(
-            continuation
-                .captures_iter(&dispatch)
-                .map(|c| c[1].to_string()),
-        );
-
-        // main() argv doors: `args.first().map(String::as_str) == Some("x")`.
-        let door = static_regex(
-            r#"args\.first\(\)\.map\(String::as_str\) == Some\("([a-z][a-z0-9-]*)"\)"#,
-        );
-        top.extend(door.captures_iter(&dispatch).map(|c| c[1].to_string()));
-
-        // The delegate tables: one match per module, read in place. The arm
-        // regex has no line anchor: Rust's `^` matches only at the haystack
-        // start, and the regions are small flat match bodies.
-        let table_arm = static_regex(r#""([a-z][a-z0-9-]*)"\s*=>"#);
-        let some_arm = static_regex(r#"Some\("([a-z][a-z0-9-]*)"\)\s*=>"#);
-        for (text, marker, regex) in [
-            (&family, "pub fn client_dispatch", &some_arm),
-            (&pr_door, "pub fn run_command", &table_arm),
-            (&review_doors, "pub fn dispatch", &table_arm),
-            (&transport, "pub fn transport_early_arms", &some_arm),
-        ] {
-            let stripped = menu_caps::strip_comments(text);
-            let region = menu_caps::braced_region(&stripped, marker)?;
-            top.extend(regex.captures_iter(region).map(|c| c[1].to_string()));
-        }
-        // pr_closure's produce door: an alternation arm, so read the literals
-        // of the match region instead of the arm shapes.
-        let closure = read(root, "crates/fno-agent/src/runtime/org_board/pr_closure.rs")?;
-        let closure_stripped = menu_caps::strip_comments(&closure);
-        let closure_region = menu_caps::braced_region(&closure_stripped, "pub fn run_command")?;
-        top.extend(literals(closure_region));
-
-        // The gh transport door: plain literal arms over its own match.
-        let gh_stripped = menu_caps::strip_comments(&gh_adapter);
-        let gh_region = menu_caps::braced_region(&gh_stripped, "pub fn gh_transport_door")?;
-        top.extend(table_arm.captures_iter(gh_region).map(|c| c[1].to_string()));
 
         // The refusal's registered spellings.
-        let client_stripped = menu_caps::strip_comments(&client);
+        let client_stripped = menu_caps::strip_comments(client);
         let all_region = bracket_region(&client_stripped, "const ALL_CLIENT_ACTIONS")?;
         let registered = literals(all_region);
 
         // The claim family: op arms plus what the no-operation refusal names.
         let claim_stripped = menu_caps::strip_comments(&claim);
-        let claim_region = menu_caps::braced_region(&claim_stripped, "pub fn run_claim")?;
+        let claim_region =
+            menu_caps::braced_region(&claim_stripped, CLAIM_COMMANDS_REL, "pub fn run_claim")?;
         let op_arm = static_regex(r#"if op == "([a-z][a-z0-9-]*)""#);
         let mut claim_ops: BTreeSet<String> = op_arm
             .captures_iter(claim_region)

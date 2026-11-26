@@ -25,9 +25,13 @@ fleet-task	like component-verdict: no advertised fno command
 gh	transport door: a proxied gh call pays no other arm
 gh-adapter	transport door: the gh adapter purposes (coverage, discretionary)
 gh-cache	transport door: gh cache read
+harness-beat	transport door: harness beat read (harness_reader::transport_doors)
+harness-matrix	transport door: harness capability matrix read
+harness-probe	transport door: harness capability probe
 harness-roster	door: harness roster read
 hook	door: hook plumbing transport
 intel	door: fno doctor intel shells here through resolve_binary
+launch-workdir	transport door: launch_workdir::client_dispatch; ensure_launch_workdir is the caller
 lead-rundown	table door under review_doors::dispatch; org JSON reader
 lead-shape	door: the org shape shell invokes the binary directly
 lead-state	door: the org shape shell and escalate's client invoke the binary directly
@@ -103,3 +107,14 @@ worked-nodes	door: one payload in, one receipt out, one verdict
 worker-wake	door: the Stop hook's wake transport; starts nothing, never lazy-starts
 pr-cite-check	gate: the review lane runs the cite check on customers-scope nodes; no operator surface names it
 user-hours	door: the away override and the working-hours read for the prompt-wait arm and `fno config doctor`; no operator surface names it yet
+workspace-register-worker	table door under worktree::client_dispatch; worker registry write
+worktree-dispatch-pin	table door under worktree::client_dispatch; dispatch pin
+worktree-ensure	table door under worktree::client_dispatch; worktree ensure
+worktree-list	table door under worktree::client_dispatch; worktree list read
+worktree-overlap-record	table door under worktree::client_dispatch; overlap record write
+worktree-overlaps	table door under worktree::client_dispatch; overlap report read
+worktree-policy	table door under worktree::client_dispatch; policy read
+worktree-reapable	table door under worktree::client_dispatch; reapable gate
+worktree-resolve-node	table door under worktree::client_dispatch; node resolve read
+worktree-status	table door under worktree::client_dispatch; status read
+worktree-stranded	table door under worktree::client_dispatch; stranded read
