@@ -95,7 +95,7 @@ pub struct AgentSources {
 }
 
 impl AgentSources {
-    pub fn read(root: &Path) -> Result<Self, String> {
+    pub fn read(root: &Path) -> Result<Self, ReadError> {
         let mut tables = Vec::new();
         for &(rel, marker) in AGENTS_DOOR_TABLES {
             tables.push((rel, marker, read_rel(root, rel)?));
@@ -117,13 +117,36 @@ pub struct Inputs {
     pub debt: String,
 }
 
-fn read_rel(root: &Path, rel: &str) -> Result<String, String> {
-    std::fs::read_to_string(root.join(rel))
-        .map_err(|e| format!("menu-caps: cannot read {rel} under {}: {e}", root.display()))
+/// A committed input the guard could not read.
+#[derive(Debug)]
+pub struct ReadError {
+    rel: &'static str,
+    root: std::path::PathBuf,
+    error: std::io::Error,
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "menu-caps: cannot read {} under {}: {}",
+            self.rel,
+            self.root.display(),
+            self.error
+        )
+    }
+}
+
+fn read_rel(root: &Path, rel: &'static str) -> Result<String, ReadError> {
+    std::fs::read_to_string(root.join(rel)).map_err(|error| ReadError {
+        rel,
+        root: root.to_path_buf(),
+        error,
+    })
 }
 
 /// Read every input under `root`; the error names the first missing file.
-pub fn read_inputs(root: &Path) -> Result<Inputs, String> {
+pub fn read_inputs(root: &Path) -> Result<Inputs, ReadError> {
     Ok(Inputs {
         collapse_map: read_rel(root, MAP_REL)?,
         baseline: read_rel(root, BASELINE_REL)?,

@@ -26,7 +26,7 @@ budget caps (`cost_cap_usd`) tripped sessions at ~13% of their real budget.
 | Surface | Role |
 |---|---|
 | `crates/fno-agent/src/spawn/model_price.rs` | **Single pricing source of truth.** Reads the `<state>/cache/models-dev.json` catalog `fno` fetches daily (`crates/fno/src/config/model_catalog.rs`); `PriceBook::rates` + `cost()` + the running fold. No fallback tier: a nonzero token kind with no rate is unpriced. |
-| `fno-agent context-run --model-price` | The price leg's CLI door: tokens in, four-decimal dollars out; `unpriced` + exit 3 on a miss. |
+| `fno agent internal session context-run --model-price` | The price leg's CLI door: tokens in, four-decimal dollars out; `unpriced` + exit 3 on a miss. |
 | `cli/src/fno/cost/_session_cost.py` | Transcript parser + ledger writer. Dedups usage by `(message.id, requestId)`; `calculate_cost` shells the price leg; unpriced sessions write `cost_usd: null` + `unpriced_model`. |
 | `fno doctor --cost-check` | Opt-in drift tripwire vs the reference cost tool. |
 
@@ -35,7 +35,7 @@ transcript JSONL ──parse (dedup by message.id+requestId)──> SessionMetri
                                                                  │
                         context-run --model-price (models.dev) ──┤
                                                                  ▼
-fno-agent finalize ──> _session_cost.py ──> ledger.json
+fno agent loop finalize ──> _session_cost.py ──> ledger.json
                                                                  │
                 budget cap (loopcheck.rs cost/wall-clock caps)   ┤
                 graph.json cost_sessions (register path)─────────┘

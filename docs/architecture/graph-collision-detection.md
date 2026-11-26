@@ -43,8 +43,8 @@ both under `cli/src/fno/graph/collision.py`, because the plugin skills
 |--------|----------|---------|
 | `parse_files_to_modify(plan_path)` | `has_file_surface` | Extract normalized paths from a plan's file table. Recognized headings: `Files to Modify`, `Files to Change`, `Files Touched`, `File Ownership Map`, `Files`. Handles single-file quick plans and folder plans (every `*.md` under the folder, so 00-INDEX.md plus each NN-* phase file). |
 | `has_file_surface(plan_path)` | `crates/fno-agent/src/backlog/collision.rs` | Whether the plan states a surface at all. False is UNEVALUATED, not clean: a caller that must tell "compared, no overlap" from "nothing to compare" asks here first. |
-| `match_shared_root(path, roots)` | `partition`, `fno-agent wave ready` | The generated-output root a normalized path falls under. |
-| `partition(items, shared_roots)` | `fno-agent wave ready` (`crates/fno-agent/src/backlog/wave_ready.rs`) | Union-find grouping of `(task id, paths)` pairs; overlap serializes, an empty path set is its own unevaluated verdict. |
+| `match_shared_root(path, roots)` | `partition`, `fno agent internal target wave ready` | The generated-output root a normalized path falls under. |
+| `partition(items, shared_roots)` | `fno agent internal target wave ready` (`crates/fno-agent/src/backlog/wave_ready.rs`) | Union-find grouping of `(task id, paths)` pairs; overlap serializes, an empty path set is its own unevaluated verdict. |
 | `HIDDEN_SHARED_OUTPUT_ROOTS` | both skills | The shared-output root tuple, canonical home. |
 
 ## Severity and actions

@@ -50,7 +50,7 @@ hooks/target-stop-hook.sh (grep for <aborted>, parse reason)
    │   runs the finalize accounting (the Rust finalize writer)
    │
    ▼
-fno-agent finalize (the native ledger writer)
+fno agent loop finalize (the native ledger writer)
    │   writes ledger.json entry with status: aborted, reason: {reason}
    │
    ▼

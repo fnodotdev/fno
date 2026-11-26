@@ -13,7 +13,7 @@ fno doctor evals connector-gate \
   --json
 ```
 
-The same action runs as `fno-agent evals connector-gate`.
+The same action runs as `fno internal evals evals connector-gate`.
 
 | Exit | Meaning |
 |---|---|

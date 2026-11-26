@@ -6,15 +6,15 @@ allowed-tools: Read
 
 # Know your own harness before you run or mail a native command
 
-footnote drives several coding CLIs (claude, codex, opencode, agy, pi, cursor-agent, grok). Each has its own native slash commands. The measured roster, each command's risk class, and a one-line when-to-use live in the capability table. `fno-agent commands` renders your row of it.
+footnote drives several coding CLIs (claude, codex, opencode, agy, pi, cursor-agent, grok). Each has its own native slash commands. The measured roster, each command's risk class, and a one-line when-to-use live in the capability table. `fno agent internal harness commands` renders your row of it.
 
 ## Run this first
 
 ```bash
-fno-agent commands
+fno agent internal harness commands
 ```
 
-Bare form detects your own harness from the session env. On a refusal, pass the name: `fno-agent commands claude`. `--json` for machines.
+Bare form detects your own harness from the session env. On a refusal, pass the name: `fno agent internal harness commands claude`. `--json` for machines.
 
 Read the roster before you reach for a native command you have not run in this harness. The risk column is the mail guard's own vocabulary: `safe`, `context-destroying` (clears or swaps the session's context), `session-ending` (exits or logs out).
 

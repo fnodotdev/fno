@@ -206,7 +206,7 @@ A list in a panel shows state with a check, a tag or a split into Installed and 
 
 ### Every rule holds on both grounds
 
-Every rule on this page holds under the dark default theme and the light default theme. A paint PR carries shots in both. A vault shot name carries the head it shows as `<node>-<head12>-<view>-<role>-<theme>.png`. `fno-agent visual shot-save <node> <png...>` writes that name. The pairing prefers the after side whose head matches the critique's head. A later round reads its before pair from the vault instead of re-shooting an old head. Code: `Theme::default_for` in `crates/fno/src/ui/theme.rs` picks `footnote-paper` on a light ground and `footnote-superscript` otherwise.
+Every rule on this page holds under the dark default theme and the light default theme. A paint PR carries shots in both. A vault shot name carries the head it shows as `<node>-<head12>-<view>-<role>-<theme>.png`. `fno agent internal target visual shot-save <node> <png...>` writes that name. The pairing prefers the after side whose head matches the critique's head. A later round reads its before pair from the vault instead of re-shooting an old head. Code: `Theme::default_for` in `crates/fno/src/ui/theme.rs` picks `footnote-paper` on a light ground and `footnote-superscript` otherwise.
 
 ## Rules the mux does not take
 

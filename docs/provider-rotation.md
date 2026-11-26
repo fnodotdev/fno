@@ -49,7 +49,7 @@ before `dispatch_env()` returns a usable env dict.
 or `{"HOME": ...}`) that, when merged into a subprocess's env, points the CLI
 at the correct credentials directory.
 
-**Routing row's account axis** - A `[[routing.models]]` row's `account` names one record `id` here, and its `route` names the vendor whose quota a launch spends. The pair makes the ACCESS PATH the priced unit. The same model over a subscription record and over per-token API dollars is two rows with two cost profiles, never one averaged number. Under the strict inventory policy (`routing.enforce_inventory`), capacity is observed per named account, so one locked-out record skips its own lane without walling the harness. The routing audit (`fno-agent route-slot audit`) names the selected record per verified session. See [role-based-model-routing.md](architecture/role-based-model-routing.md).
+**Routing row's account axis** - A `[[routing.models]]` row's `account` names one record `id` here, and its `route` names the vendor whose quota a launch spends. The pair makes the ACCESS PATH the priced unit. The same model over a subscription record and over per-token API dollars is two rows with two cost profiles, never one averaged number. Under the strict inventory policy (`routing.enforce_inventory`), capacity is observed per named account, so one locked-out record skips its own lane without walling the harness. The routing audit (`fno agent admit slot audit`) names the selected record per verified session. See [role-based-model-routing.md](architecture/role-based-model-routing.md).
 
 ---
 
@@ -533,7 +533,7 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
 
-The re-entry doors resolve through one canonical resolver, `fno-agent reentry-plan` in `crates/fno-agent/src/runtime/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. The resolver reads the account through `accounts::show::binding` in process, the projection `fno config accounts show <id> --print-binding` prints (identity, lane, config dir, never credentials). It never trusts ambient `CLAUDE_CONFIG_DIR`.
+The re-entry doors resolve through one canonical resolver, `fno agent internal session reentry-plan` in `crates/fno-agent/src/runtime/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. The resolver reads the account through `accounts::show::binding` in process, the projection `fno config accounts show <id> --print-binding` prints (identity, lane, config dir, never credentials). It never trusts ambient `CLAUDE_CONFIG_DIR`.
 
 The exact fail-closed rule, one statement for every door: a routed or non-Anthropic row whose `launch_account` is unknown refuses re-entry. Guessing a namespace is the wrong-bill door. A row that positively records `launch_account: default` and no route file keeps the historical bare behavior. A recorded route file that is missing, unparseable, or carries only the auth-scrub floor refuses for the same reason as below.
 
@@ -615,7 +615,7 @@ happened, so that question is read from the session transcript instead.
 
 ## The launch env contract
 
-`accounts::env::launch_env` in `crates/fno-agent/src/spawn/accounts/env.rs` answers it. `fno-agent spawn-overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
+`accounts::env::launch_env` in `crates/fno-agent/src/spawn/accounts/env.rs` answers it. `fno agent admit overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
 
 ```
 {"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
@@ -649,7 +649,7 @@ Two rules follow. Which one applies depends on whether the launch has an argv ca
 
 **Prefer the carrier.** `fno agent spawn --dispatch-account <record>` takes the record id on argv. `accounts::launch` resolves the overlay in the spawn arm and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover.
 
-**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno-agent spawn-overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENT_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
+**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno agent admit overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENT_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
 
 The remaining limit: a root the seal does not pin still follows the moved `HOME`. That includes the `FNO_HOME`-anchored sidecars (push-stamps, the corrections log, the decision index), whose carrier the seal leaves free. Prefer the argv carrier over the seal wherever a launch has one.
 
@@ -958,7 +958,7 @@ or backfill required.
 
 ### verify_provenance evidence path
 
-The bundled binary's `fno-agent verify-evidence` command exposes three sub-commands
+The bundled binary's `fno agent loop verify-evidence` command exposes three sub-commands
 (`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-command and
 its `subagent_spawn` / `subagent_complete` pair verifier were removed for cause
 (production sigma dispatch goes through the raw Task tool and never reached the
@@ -1107,7 +1107,7 @@ fno config accounts combos use <name> [--scope project|global]
 fno config accounts combos update <name> --providers a,b,c [--strategy S] [--sticky N] [--scope project|global]
 ```
 
-`fno-agent spawn-overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
+`fno agent admit overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
 
 `combos test` does NOT issue real API calls (smoke-pinging every member multiplies cost). For an active liveness probe, run `fno config accounts test <id> --smoke` per member.
 

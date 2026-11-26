@@ -66,7 +66,7 @@ footnote/
 - **File budget:** a file over 5,000 lines is shrink-only. A new `.py` file lands only in an allowed home such as `tests/py`. Product code goes in `crates/`. `scripts/ci/check-file-budget.sh` enforces both at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
 - **Rust rules:** [docs/rust-style.md](docs/rust-style.md), R1 to R17. Parse JSON once into a typed struct and return typed errors. `scripts/ci/check-value-reads.sh` holds `.get("field")` and `Result<_, String>` shrink-only per crate.
-- **Test value:** Pre-push runs no local build or test (decision D3323). The checks are `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, and `fno doctor lint style` on changed markdown. CI builds and tests. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 22 (`fno-agent test-delta --max-net 22`). pr create refuses a code PR with no cut and no `Audited owners:` line.
+- **Test value:** Pre-push runs no local build or test (decision D3323). The checks are `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, and `fno doctor lint style` on changed markdown. CI builds and tests. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 22 (`fno agent internal target test-delta --max-net 22`). pr create refuses a code PR with no cut and no `Audited owners:` line.
 - **Multi-CLI:** skills are portable. Orchestration needs per-CLI hook config. See `docs/HARNESSES.md`, `docs/architecture/multi-cli-hooks.md`, `docs/SKILL-COMPAT-MATRIX.md`.
 
 ## Commands
@@ -103,11 +103,11 @@ Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usa
 
 ## Execution & looping
 
-**Waves + executors.** Plans declare waves in their `## Execution Strategy`. `fno-agent wave ready` lists the dispatchable tasks. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
+**Waves + executors.** Plans declare waves in their `## Execution Strategy`. `fno agent internal target wave ready` lists the dispatchable tasks. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
 
 **Looping.**
-- *In-session:* `hooks/target-stop-hook.sh` shims `fno-agent loop-check`, deciding stop/allow from external truth only: `<promise>` intent, done() reads (PR exists, CI green, every `config.review.required_bots` bot reviewed with no unaddressed blocking finding, and either no open finding or the configured rounds spent), any plan-declared `done_probes`, a backstop fingerprint, and budget. Terminal-allow invokes `fno-agent finalize` (idempotent).
-- *Cross-session:* `fno-agent loop run` drives `--driver target`, stopping on a `TerminationReason` (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted). [unified-loop](docs/architecture/unified-loop.md).
+- *In-session:* `hooks/target-stop-hook.sh` shims `fno agent loop check`, deciding stop/allow from external truth only: `<promise>` intent, done() reads (PR exists, CI green, every `config.review.required_bots` bot reviewed with no unaddressed blocking finding, and either no open finding or the configured rounds spent), any plan-declared `done_probes`, a backstop fingerprint, and budget. Terminal-allow invokes `fno agent loop finalize` (idempotent).
+- *Cross-session:* `fno agent loop run` drives `--driver target`, stopping on a `TerminationReason` (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted). [unified-loop](docs/architecture/unified-loop.md).
 - Distress: `<help reason="..." evidence="...">...</help>`. Cancel target: `/fno:cancel-target` (attributed). Lead: `fno agent hq cancel --scope <scope>`. Subprocess agents return `RESULT: BLOCKED`.
 - Shared iteration protocol: do ONE thing -> verify mechanically -> keep or discard -> repeat ([iteration-loop](skills/target/references/iteration-loop.md)).
 
@@ -181,7 +181,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 - **Skill:** `skills/<name>/SKILL.md` (+ optional `references/`, `scripts/`). **Agent:** `agents/<name>.md` with frontmatter.
 - **Skills ship together:** the fno skills load each other by name at runtime. `skills/target/references/toolbag.md` lists them. No skill refs `${REPO_ROOT}/scripts/`. Script reuse is build-time through `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
 - **TDD:** failing test -> red -> minimal code -> green -> verify -> atomic commit.
-- **Testing:** `fno-agent wave ready --help`, then `./scripts/validate-test-first.sh`.
+- **Testing:** `fno agent internal target wave ready --help`, then `./scripts/validate-test-first.sh`.
 
 ## Deep-dive docs
 

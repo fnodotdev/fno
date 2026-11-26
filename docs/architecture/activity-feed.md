@@ -191,7 +191,7 @@ For a `node_created` row with a node id, the footer offers `b: blueprint`. Press
 
 ## Open questions in the sideline
 
-Open questions also show as a block in the sideline, pinned above the org block. The block reads `fno-agent needs --items`, not the feed: the feed shows a question's history, and the block shows only what is open. An answer picked in the block's overlay records `sink: mux`, and the row shows the delivery rung for 15 minutes. See [attention-items](attention-items.md) for the delivery ladder.
+Open questions also show as a block in the sideline, pinned above the org block. The block reads `fno agent fleet needs --items`, not the feed: the feed shows a question's history, and the block shows only what is open. An answer picked in the block's overlay records `sink: mux`, and the row shows the delivery rung for 15 minutes. See [attention-items](attention-items.md) for the delivery ladder.
 
 ## OTLP export
 

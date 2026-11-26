@@ -20,7 +20,7 @@ Every receipt names its writer. `removed_by` carries the SURFACE that took the r
 
 | Door | `removed_by` | `removal_trigger` |
 |---|---|---|
-| The scheduled retirement sweep and `fno-agent reap --apply` | `gc-sweep` | `unattended` |
+| The scheduled retirement sweep and `fno agent registry reap --apply` | `gc-sweep` | `unattended` |
 | The roster sweep for harness rows no fno row names | `roster-reap` | `unattended` |
 | The registry choke point (`update_registry` reached by `rm` and every save that drops rows), Rust leg | the bounded argv command (`state::invocation_command()`) | `unattended` when the daemon binary invoked it, `session` otherwise |
 | The same choke point, Python leg (`fno.agents.registry`) | the bounded argv command, overridden by the remover the spawn-axes ask carries | `session`, stamped by the shared builder |

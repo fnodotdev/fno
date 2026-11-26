@@ -48,7 +48,7 @@ value, nor silently falls back to the default on one.
 | only `mc` set | `mc` |
 | neither set | the ceiling, `config.blueprint.max_prs_per_epic` (default 4) |
 
-An `N` over the ceiling refuses. `fno backlog decompose` exits 1 and names the cap, the ceiling and its source. The plan validator runs `fno-agent wave check`, which warns on a plan whose `max_prs` or declared ship count is over the ceiling. Lower the cap, or raise the ceiling in the project config.
+An `N` over the ceiling refuses. `fno backlog decompose` exits 1 and names the cap, the ceiling and its source. The plan validator runs `fno agent internal target wave check`, which warns on a plan whose `max_prs` or declared ship count is over the ceiling. Lower the cap, or raise the ceiling in the project config.
 
 Read the config floor with:
 ```bash
@@ -77,7 +77,7 @@ is known):
 3. If the grouping collapses to a single group, **skip decompose** - the epic
    node is the one PR. Still record this in `## Delivery Groups`
    (AC1-EDGE: never force a split).
-4. Write a `## Delivery Groups` section to the doc. The decomposition step owns this section, NOT `fno-agent plan-cli mutate`. It survives `rewrite` re-runs. Format:
+4. Write a `## Delivery Groups` section to the doc. The decomposition step owns this section, NOT `fno agent internal target plan-cli mutate`. It survives `rewrite` re-runs. Format:
    ```markdown
    ## Delivery Groups
 

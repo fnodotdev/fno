@@ -6,7 +6,7 @@ Read a gate only when its trigger fires. The dispatch table in SKILL.md ("## Gat
 
 Trigger: named evidence must exist before this plan dispatches or merges. The Gates table in SKILL.md routes here. This gate carried a body and no table row until 2026-09-02. Nothing routed to it and no plan ever set the key. Meanwhile `finalize.rs`, `ladder.py`, `target_cli.py`, `git_protection/merge_gate.rs` and `validate-plan.sh` all read it. A gate body with no trigger row is unreachable, whatever it says.
 
-When named evidence must exist before work starts or merges, author one `dispatch_hold` mapping in frontmatter. Add non-blank `reason`, `release_when`, and `set_by` strings. Add an ISO `review_on` date. The mapping's presence is the hold. The review date prompts review and never releases work. Every dispatcher and merger reads the same declaration. If the declaration is malformed or unreadable, the action fails closed. After the plan is written, the authorized-merge `hold-set` op authors the same block receipted (pipe the JSON payload to `fno-agent authorized-merge`). After an authorized ruling confirms `release_when`, the `hold-release` op with `evidence` lifts the hold. Never copy the hold into graph status or a private dispatcher file.
+When named evidence must exist before work starts or merges, author one `dispatch_hold` mapping in frontmatter. Add non-blank `reason`, `release_when`, and `set_by` strings. Add an ISO `review_on` date. The mapping's presence is the hold. The review date prompts review and never releases work. Every dispatcher and merger reads the same declaration. If the declaration is malformed or unreadable, the action fails closed. After the plan is written, the authorized-merge `hold-set` op authors the same block receipted (pipe the JSON payload to `fno agent internal pr authorized-merge`). After an authorized ruling confirms `release_when`, the `hold-release` op with `evidence` lifts the hold. Never copy the hold into graph status or a private dispatcher file.
 
 ## Plan Claims Ingestion (MANDATORY when input is a node id)
 
@@ -173,7 +173,7 @@ same frontmatter output. No LLM judgment in this step.
 # the worker-family port deleted the Python leg). Resolve the fno-agent
 # binary through the shared resolver (hooks/lib/agents-bin.sh) and exec the
 # door; a checkout with a built binary needs nothing else.
-LOCKED_VALUE=$(fno-agent executor-route locked < "$DESIGN_DOC_PATH")
+LOCKED_VALUE=$(fno agent internal target executor-route locked < "$DESIGN_DOC_PATH")
 # LOCKED_VALUE is one of: '' | tdd | impeccable | mixed
 ```
 
@@ -240,7 +240,7 @@ MODEL_PIN="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^model:/{sub(/^model:[
 # 2. Fallback: a `Model: <token>` Locked Decision (same native door as the
 #    executor lock, selected with --key model; empty when none).
 if [[ -z "$MODEL_PIN" ]]; then
-  MODEL_PIN="$(fno-agent executor-route locked --key model < "$DESIGN_DOC_PATH")"
+  MODEL_PIN="$(fno agent internal target executor-route locked --key model < "$DESIGN_DOC_PATH")"
 fi
 ```
 
@@ -414,7 +414,7 @@ watcher, a daemon, a cadence, a LaunchAgent, anything whose value is that it
 keeps running - MUST declare 1-2 `done_probes` in its frontmatter.
 Everything else omits the field entirely.
 
-`fno-agent loop-check` runs each probe as the final `DonePRGreen` conjunct and
+`fno agent loop check` runs each probe as the final `DonePRGreen` conjunct and
 refuses done until every one exits 0.
 The gate otherwise measures artifacts (PR + CI + review), which operational
 silence cannot falsify: grooming shipped three times without ever running,
@@ -490,7 +490,7 @@ Two declarations are honored, either or both:
 
 | Key | Read by | Question |
 |-----|---------|----------|
-| `done_probes` | `fno-agent loop-check` | may this SESSION stop? |
+| `done_probes` | `fno agent loop check` | may this SESSION stop? |
 | `close_probes` | the three close commands (`backlog done`, `done`, `reconcile`) | may this NODE close? |
 
 Session termination and node closure are different questions with different
@@ -500,7 +500,7 @@ Putting wave 2's outcome assertion under `done_probes` would wedge wave 1's
 session; putting it under `close_probes` lets the session end while the node
 stays open until the promise lands.
 
-The close commands shell out to `fno-agent probe-run --key close_probes`, the
+The close commands shell out to `fno agent loop probe --key close_probes`, the
 same runner `loop-check` uses for `done_probes` - one runner, two gates.
 
 ```yaml
@@ -524,7 +524,7 @@ A node that repairs a red main closes on its merge while main is still red unles
 
 ```yaml
 close_probes:
-  - "fno-agent probe-run main-ci --workflow cli-ci --node <id>"
+  - "fno agent loop probe main-ci --workflow cli-ci --node <id>"
 ```
 
 It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close commands keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.

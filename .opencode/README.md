@@ -53,7 +53,7 @@ FNO_OPENCODE=0 opencode
 
 The command, agent and skill catalogs come from one supported install, not from this repository: `fno config plugin install opencode` writes generated `fno:<command>` commands, `fno:<name>` agents, the skill trees, and the stop bridge into `~/.config/opencode/` (or `$OPENCODE_CONFIG_DIR`), records every path in a manifest, and refuses to overwrite a file footnote did not write.
 
-Uninstall is `fno-agent plugin-install opencode --uninstall`. Only manifest paths whose bytes still match are removed. Anything you edited is kept and named. A partial uninstall exits 3.
+Uninstall is `fno agent internal harness plugin-install opencode --uninstall`. Only manifest paths whose bytes still match are removed. Anything you edited is kept and named. A partial uninstall exits 3.
 
 `fno doctor` reports what is installed versus what the catalogs actually load, by name.
 

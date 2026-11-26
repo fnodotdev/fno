@@ -118,7 +118,7 @@ Resolve the save path with `fno do plan path --slug "<slug>" [--node "<node-id>"
 
 Initialize session state for cost tracking (replaces the PreToolUse hook for portability). State lives in the repo's space, not the checkout; resolve the dir through the command:
 ```bash
-STATE_DIR=$(dirname "$(fno-agent state path target-state 2>/dev/null)" 2>/dev/null)
+STATE_DIR=$(dirname "$(fno agent internal target state path target-state 2>/dev/null)" 2>/dev/null)
 [[ -z "$STATE_DIR" || "$STATE_DIR" == "." ]] && STATE_DIR=".fno"
 mkdir -p "$STATE_DIR"
 # Don't overwrite if target is running (it has its own state)
@@ -195,7 +195,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
-     existing path unchanged - `fno-agent plan-cli mutate` writes back to the same file
+     existing path unchanged - `fno agent internal target plan-cli mutate` writes back to the same file
      (an atomic rename onto the resolved path), so an already-node-bearing name is
      preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
      into `…--.md` (US4). Do NOT rename a supplied doc.
@@ -224,7 +224,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    **Enrich the Execution Strategy before it becomes executable.**
 
-   Run `fno-agent plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+   Run `fno agent internal target plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
 
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
@@ -240,7 +240,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    ```bash
    bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
-     && fno-agent plan-cli mutate "$PLAN_PATH" --finalize
+     && fno agent internal target plan-cli mutate "$PLAN_PATH" --finalize
    fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" --force || true   ```
 
    A nonzero exit from the validate-and-finalize chain stops Blueprint before `3a` and `3b`. Never register a draft that the executor rejects.
@@ -539,7 +539,7 @@ The mutation is implemented in `crates/fno-agent/src/backlog/plan_doc/mutate.rs`
 Arguments mirror the modifiers above:
 
 ```bash
-fno-agent plan-cli mutate <doc-path> \
+fno agent internal target plan-cli mutate <doc-path> \
   [--mode greenfield|brownfield|auto] \
   [--rewrite] \
   [--draft | --finalize] \

@@ -108,7 +108,7 @@ Agent files ship no bare model aliases, so an `agent.<name>.model` entry governs
 
 ## Hooks: what runs where
 
-The bridge runs footnote's hooks.json, the same scripts claude and codex run, through opencode's plugin events. Session start and prompt injections feed the system prompt. Guards run before tools and can deny. Post-tool hooks run fail-open. Compaction context rides `experimental.session.compacting`. The idle event drives the target loop's completion gate, the same `fno-agent loop-check` claude uses.
+The bridge runs footnote's hooks.json, the same scripts claude and codex run, through opencode's plugin events. Session start and prompt injections feed the system prompt. Guards run before tools and can deny. Post-tool hooks run fail-open. Compaction context rides `experimental.session.compacting`. The idle event drives the target loop's completion gate, the same `fno agent loop check` claude uses.
 
 Gap rows, named honestly: claude's SessionEnd, StopFailure, Notification, SubagentStart and SubagentStop have no opencode equivalent the bridge can drive today. Either opencode has no matching event, or the script reads a claude transcript. Everything else has a mapping, and `docs/architecture/hook-budget-audit.md` counts them.
 
@@ -116,7 +116,7 @@ Gap rows, named honestly: claude's SessionEnd, StopFailure, Notification, Subage
 
 `fno whoami` inside opencode reads `harness: opencode`: the bridge stamps `OPENCODE_SESSION_ID` into every shell environment, and the harness resolver reads it. When opencode is the nearest harness ancestor, a session spawned from a claude process still reads opencode. The process-tree walk decides, not the environment.
 
-`fno-agent intel -H opencode` folds opencode sessions into the fleet report. The default scope is the current project. Add `--all-projects` to read the whole machine.
+`fno agent internal evals intel -H opencode` folds opencode sessions into the fleet report. The default scope is the current project. Add `--all-projects` to read the whole machine.
 
 ## One doctor line per state
 
@@ -133,7 +133,7 @@ Gap rows, named honestly: claude's SessionEnd, StopFailure, Notification, Subage
 ## Uninstall
 
 ```bash
-fno-agent plugin-install opencode --uninstall
+fno agent internal harness plugin-install opencode --uninstall
 ```
 
 Removes exactly the manifest's paths, and only those whose bytes still match the recorded hash. A file you edited is kept and named. Each disable edit printed an undo line at the moment it ran. `undo: cp '<backup>' '<file>'` restores any config file from its timestamped backup.

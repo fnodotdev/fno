@@ -40,4 +40,4 @@ The `scope: cross-project` parallel-worktree pipeline has been removed. A sessio
 2. **Do NOT** invoke any cross-project pipeline (removed) and **do NOT** `cd` into other repos to write code.
 3. **Route to spawn-into-project:** continue THIS session in its own project only. Foreign waves are handled by `/execute` (auto-spawn when the foreign node is unblocked; defer + carveout when it is blocked); cross-project dependents are dispatched on merge by `fno backlog advance`.
 
-`cross_project: true` no longer forks the pipeline; it only triggers this deprecation warning + the spawn-into-project routing above. The manifest field and the plan-graduation timing in `fno-agent finalize` are retained so an already-stamped legacy plan still parses and graduates correctly.
+`cross_project: true` no longer forks the pipeline; it only triggers this deprecation warning + the spawn-into-project routing above. The manifest field and the plan-graduation timing in `fno agent loop finalize` are retained so an already-stamped legacy plan still parses and graduates correctly.

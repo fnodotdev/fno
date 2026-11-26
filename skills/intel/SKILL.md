@@ -6,7 +6,7 @@ allowed-tools: Read
 
 # intel
 
-The fold counts. You judge. `fno-agent intel` classifies every user-shaped turn in this machine's transcripts by provenance (the fold's `operator` class, relay, harness, keepalive, unknown). It joins sessions to nodes, PRs, and mail. It counts tokens, lines, tool errors, languages, response time, hours, and overlapping sessions. Under `--scorecard` it also emits the per-model and per-lead block. Per model: issue rates with kind buckets. Per lead: restated asks, and returned complaints, which are nodes named before their closure and named again after. The block carries a coverage line and the unmeasured columns. It samples idle substantive sessions and computes per-category metrics from the facets. No model runs there. This skill is the judgment layer: you read the fold's sampled rows, judge each sampled session, cluster the summaries into categories, and write the narrative.
+The fold counts. You judge. `fno agent internal evals intel` classifies every user-shaped turn in this machine's transcripts by provenance (the fold's `operator` class, relay, harness, keepalive, unknown). It joins sessions to nodes, PRs, and mail. It counts tokens, lines, tool errors, languages, response time, hours, and overlapping sessions. Under `--scorecard` it also emits the per-model and per-lead block. Per model: issue rates with kind buckets. Per lead: restated asks, and returned complaints, which are nodes named before their closure and named again after. The block carries a coverage line and the unmeasured columns. It samples idle substantive sessions and computes per-category metrics from the facets. No model runs there. This skill is the judgment layer: you read the fold's sampled rows, judge each sampled session, cluster the summaries into categories, and write the narrative.
 
 The one rule the whole report stands on: **user turns only**. Relay, harness, keepalive, and unknown turns are other agents and machinery talking, or turns no witness can name. They never inform satisfaction, friction, or corrections. The fold's counters tell you exactly what to ignore. The order of evidence is **events before transcripts**. Judge friction from the fold's `events` block first: its types are the journal's own (agent_spawn_refused, blocked, loop_check, operator_submit). Read `tool_errors` classes (command_failed, hook_blocked, user_rejected) beside them. Then read the witnessed turns to fill the gaps the events leave.
 
@@ -19,13 +19,13 @@ The fold names its populations, and the report keeps them apart. Every number sa
    ```bash
    /fno:intel [--scope <project>[,<project>...]|all] [--harness claude,codex,opencode|all] [--period 2w|1m|2m|3m|all] [--sample N|all] [question]
    # or one node's story:
-   fno-agent intel --json --node <id>
+   fno agent internal evals intel --json --node <id>
    ```
 
-(`fno doctor intel` is the same fold. The binary's full flag set, including `--session`, sits on `fno-agent intel`.) The period words map to `--days`. `1m` is the default and maps to 30 days. `2w` maps to 14 days, `2m` to 60, `3m` to 90. `all` removes the window (`--days 0`). Pass any other word nowhere: refuse it with the allowed list. The binary takes `--scope`'s meaning in two flags: `--scope all`, or no `--scope`, maps to `--all-projects` (the skill's default). Each comma entry of `--scope <project>` maps to one `--project <name>`. `--harness` passes through as `-H`. Every word after the flags is the user question. With no question, use `What were the user's sessions about, and where did they stall?`. The question key is the first 8 hex of sha256 over the question lowercased with runs of whitespace collapsed (`printf %s "$Q" | shasum -a 256 | cut -c1-8`). Default `--sample 50`. Run the fold once, under a 10-minute Bash timeout, and save its JSON beside the report. That file is the raw sidecar. Later steps read it, and any re-run of categories reads it:
+(`fno doctor intel` is the same fold. The binary's full flag set, including `--session`, sits on `fno agent internal evals intel`.) The period words map to `--days`. `1m` is the default and maps to 30 days. `2w` maps to 14 days, `2m` to 60, `3m` to 90. `all` removes the window (`--days 0`). Pass any other word nowhere: refuse it with the allowed list. The binary takes `--scope`'s meaning in two flags: `--scope all`, or no `--scope`, maps to `--all-projects` (the skill's default). Each comma entry of `--scope <project>` maps to one `--project <name>`. `--harness` passes through as `-H`. Every word after the flags is the user question. With no question, use `What were the user's sessions about, and where did they stall?`. The question key is the first 8 hex of sha256 over the question lowercased with runs of whitespace collapsed (`printf %s "$Q" | shasum -a 256 | cut -c1-8`). Default `--sample 50`. Run the fold once, under a 10-minute Bash timeout, and save its JSON beside the report. That file is the raw sidecar. Later steps read it, and any re-run of categories reads it:
 
    ```bash
-   fno-agent intel --json --period 1m --project fno --sample 50 > <vault>/fno/intel/<date>-<question key>.fold.json
+   fno agent internal evals intel --json --period 1m --project fno --sample 50 > <vault>/fno/intel/<date>-<question key>.fold.json
    ```
 
    The report's header quotes the fold's `scope` object, so the reader sees which harnesses and roots the fold read. Exit 3 means no sessions in the window. Report that and stop.
@@ -70,7 +70,7 @@ The fold names its populations, and the report keeps them apart. Every number sa
 4. Metrics: the post-process reads the run file and the saved fold JSON. It reads no transcript. It prints the judgment summary: every aggregate plus the categories block. The per-session rows are dropped, so the file stays small, and the raw rows already live in the sidecar. The run file's suggestions are validated and baseline-stamped into a `suggestions` block:
 
    ```bash
-   fno-agent intel --categories <run file> --fold <vault>/fno/intel/<date>-<question key>.fold.json > <vault>/fno/intel/<date>-<question key>.json
+   fno agent internal evals intel --categories <run file> --fold <vault>/fno/intel/<date>-<question key>.fold.json > <vault>/fno/intel/<date>-<question key>.json
    ```
 
    On exit 2, fix the run file from the named reason and run it once more. If it fails again, keep the raw sidecar as the report's `fold:` file and write the Categories and Suggestions sections as `not written: <stderr line>`. On the next run over the same question, find the prior report's saved JSON. It is the newest file matching `<question key>` before this run's date. Pass it as `--score-prior <prior json>`. The post-process reads the prior report's stamped suggestions. It adds a `scorecard` block printing `moved`, `unchanged`, `worse`, or `unmeasured` per metric. Quote it in the report's Scorecard section. A first run writes the section as `not written: first run, no prior report`.
@@ -84,12 +84,12 @@ The fold names its populations, and the report keeps them apart. Every number sa
 8. Render the shareable HTML copy. Run:
 
    ```bash
-   fno-agent intel --render <report.md>
+   fno agent internal evals intel --render <report.md>
    ```
 
    Its stdout line is the HTML path. The renderer reads the report and the fold JSON named in the frontmatter `fold:` field. It scrubs secrets, home paths, quoted blocks, and quotes outside `Operator corrections`, and draws the fold counters as inline SVG. End the run by telling the user both paths, one line each: `Report: <md path>` and `Shareable copy: <html path> (open in a browser; print to PDF; latest.html beside it is always the newest)`. A nonzero exit is relayed with its stderr line. The markdown report stands either way: it stays the file every later step reads.
 
-Judgment runs on this session's own model. No profile, no spawned reviewer, no Python shim. The fold is Rust (`fno-agent intel`), the narrative is you.
+Judgment runs on this session's own model. No profile, no spawned reviewer, no Python shim. The fold is Rust (`fno agent internal evals intel`), the narrative is you.
 
 ## Known Limitations and Deferred Work
 

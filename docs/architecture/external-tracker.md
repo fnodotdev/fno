@@ -26,7 +26,7 @@ Both sides carry `id` as the join key, never as a synced value.
 
 ## The interface
 
-The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agent/src/runtime/tracker/mod.rs`. The Python seam package is deleted. Python callers ride the native door (`fno-agent backlog get`'s stdin form) through the small client helpers in `cli/src/fno/rust_binary.py`. The helpers are the backend name plus sidecar get, all, and set. The guarded default-backend read lives in `fno/graph/api.py` as `read_entries`. The sidecar graph projection, the per-id file store, and the backend resolution all answer in Rust. The goldens under `crates/fno-agent/tests/golden/tracker/` characterize them.
+The interface lives in Rust, on `TrackerNode` and `Candidate` in `crates/fno-agent/src/runtime/tracker/mod.rs`. The Python seam package is deleted. Python callers ride the native door (`fno backlog get`'s stdin form) through the small client helpers in `cli/src/fno/rust_binary.py`. The helpers are the backend name plus sidecar get, all, and set. The guarded default-backend read lives in `fno/graph/api.py` as `read_entries`. The sidecar graph projection, the per-id file store, and the backend resolution all answer in Rust. The goldens under `crates/fno-agent/tests/golden/tracker/` characterize them.
 
 Read from the tracker, five fields plus the display-only reads.
 
@@ -56,7 +56,7 @@ A backend supplies open or closed.
 
 ## The door and the cache
 
-Backends answer through `fno-agent backlog get`'s stdin door, the same stdin-JSON shape `gh-budget` uses on `fleet-incident`. The payload is `{"tracker": "read" | "list-open" | "snapshot" | "close", "backend": <name or null>, "id": <id or null>, "stale_ok": <bool>}`. The door prints one JSON object and exits 0 whenever the op ran. Refusals ride in the payload as `{"not_found": true}` or `{"error": "..."}`.
+Backends answer through `fno backlog get`'s stdin door, the same stdin-JSON shape `gh-budget` uses on `fleet-incident`. The payload is `{"tracker": "read" | "list-open" | "snapshot" | "close", "backend": <name or null>, "id": <id or null>, "stale_ok": <bool>}`. The door prints one JSON object and exits 0 whenever the op ran. Refusals ride in the payload as `{"not_found": true}` or `{"error": "..."}`.
 
 The `snapshot` op builds the joined view once per backend and caches the last good read at `<state_dir>/sidecar/.snapshot/<backend>-<encoded-scope>.json`. The scope is what selects the item set besides the backend name: `FNO_TRACKER_GITHUB_REPO` for github, `FNO_TRACKER_LINEAR_TEAM` for linear, empty for graph.
 
@@ -86,7 +86,7 @@ It is also the field most likely to be missed.
 No tracker models a local checkout.
 It is the authority for multi-repo dispatch and backs `docs/architecture/node-cwd-authority.md`.
 
-The claim pointer is not in the sidecar. `locked_by` and `session_id` are live coordination state owned by the claims subsystem, `fno-agent claim`. That subsystem keys on the opaque id and never opens the graph. Mirroring it here must not happen, because it makes the sidecar a second writer for claim state.
+The claim pointer is not in the sidecar. `locked_by` and `session_id` are live coordination state owned by the claims subsystem, `fno agent claim`. That subsystem keys on the opaque id and never opens the graph. Mirroring it here must not happen, because it makes the sidecar a second writer for claim state.
 
 These fields live only in the tracker and never enter the sidecar.
 They are `title`, `state`, `priority`, `parent`, `blocked_by`, `size`, `domain`, and `details`.

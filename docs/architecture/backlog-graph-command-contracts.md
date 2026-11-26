@@ -432,7 +432,7 @@ Decide whether a node's plan promised work that has not all shipped.
          a failed read degrades to ``ok`` with a warning, the same posture a
          plan-read failure takes.
       B. Outcome probes. Any ``close_probes`` entry exits non-zero. Probes are
-         delegated to ``fno-agent probe-run`` (the same runner the loop uses for
+         delegated to ``fno agent loop probe`` (the same runner the loop uses for
          ``done_probes``); a declared gate that cannot be evaluated fails closed.
       C. Ship count. ``expected_url_count: N`` (N >= 2) and fewer than N of the
          node's PR refs are MERGED. The right check for multi-repo / split

@@ -66,7 +66,7 @@ A plan reaching `done` and a node closing are gated separately. The merge gate a
 The gate fires ONLY on an explicit declaration. A plan declaring **neither `close_probes` nor `expected_url_count`** closes exactly as it does today. `## Wave N` headings are internal structure, not a promise, so a multi-wave single-PR plan closes clean. One .md == one PR == one node is the house rule. Inferring "multi-wave" from headings was rejected because it false-positives on exactly that common case, parking every such node on autonomous `/target`. A gate that only fires on an explicit promise cannot false-positive. Two conditions, first refusal wins:
 
 - **Outcome probes.** Any declared `close_probes` entry exits non-zero. Probes
-  run via `fno-agent probe-run` (the same runner `loop-check` uses for
+  run via `fno agent loop probe` (the same runner `loop-check` uses for
   `done_probes`).
 - **Ship count.** A declared `expected_url_count: N` (N >= 2) and fewer than N
   of the node's PR refs are MERGED.
@@ -86,10 +86,10 @@ The gate still fails open on an absent, unreadable or unparseable plan, so a sta
 
 A node closes on a merged PR and green CI. That proves the fix against the inventory at merge time. A later change can bring the symptom back, and nothing at close time can see that. On 2026-09-20 three done nodes regressed in one session, and a human found each one by hand.
 
-A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. The daemon arm `symptom_recheck` runs `fno-agent probe-run recheck --apply` every 6 hours (`crates/fno-agent/src/gate/symptom_recheck.rs`). The pass:
+A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. The daemon arm `symptom_recheck` runs `fno agent loop probe recheck --apply` every 6 hours (`crates/fno-agent/src/gate/symptom_recheck.rs`). The pass:
 
 - reads every node with status `done` whose `plan_path` declares `recheck_probes`, at most 40 per pass
-- runs the list through `fno-agent probe-run --key recheck_probes`, the same runner as the two gates above
+- runs the list through `fno agent loop probe --key recheck_probes`, the same runner as the two gates above
 - counts only a FAIL verdict. BLOCKED, SKIP and an unreadable plan read `undeterminable` and file nothing
 - runs a failing list a second time. A pass on the retry reads `flaky` and files nothing
 - files one bug node for a second fail, `regression: <title>`, with `source_node_id` naming the original
@@ -98,7 +98,7 @@ A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. T
 
 The idea cap (`backlog.max_open_ideas`) still applies. The cap counts per epic, so the nearest epic gives the filing that epic's room. When the cap refuses, the result row keeps the regression with a `file_error`, and the tick detail counts it as `unfiled`. The recheck does not reopen the original. `fno backlog reopen` refuses a node whose PR merged, and its refusal says to file the remaining work as a new node.
 
-Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agent probe-run recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
+Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno agent loop probe recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
 
 `close_probes` is not re-run. Measured 2026-10-25: 13 of 21 done nodes' close probes failed for reasons that were not regressions. Those reasons were expired event windows and retired files. A plan-less node has no probe to re-run, so the recheck does not cover it.
 
@@ -108,7 +108,7 @@ One writer owns the stamp: `crates/fno-agent/src/backlog/plan_doc/stamp.rs` (`cm
 
 ```mermaid
 flowchart TD
-    FIN[fno-agent finalize] -->|ship terminal, every mode| SP[plan_doc::stamp cmd_stamp]
+    FIN[fno agent loop finalize] -->|ship terminal, every mode| SP[plan_doc::stamp cmd_stamp]
     DONE[fno backlog done] -->|post-close step| SP
     MAN[fno do plan stamp] -->|manual recovery| SP
     SP --> FM[status: in_review, urls appended]
@@ -119,9 +119,9 @@ flowchart TD
     GRAD -->|"len(urls) < expected"| NOOP[no-op, wait for more ships]
 ```
 
-### 1. `fno-agent finalize` (primary)
+### 1. `fno agent loop finalize` (primary)
 
-The stop-hook shim runs `fno-agent finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agent/src/gate/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
+The stop-hook shim runs `fno agent loop finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agent/src/gate/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
 
 ### 2. `fno backlog done`
 

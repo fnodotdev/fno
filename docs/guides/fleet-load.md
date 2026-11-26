@@ -1,13 +1,13 @@
 # The fleet load report
 
-`fno-agent intel --fleet` answers one question: how much load did the fleet put on this machine, and how many sessions can it hold before it stalls?
+`fno agent internal evals intel --fleet` answers one question: how much load did the fleet put on this machine, and how many sessions can it hold before it stalls?
 
 ## The command
 
 ```bash
-fno-agent intel --fleet
-fno-agent intel --fleet --days 14
-fno-agent intel --fleet --backfill
+fno agent internal evals intel --fleet
+fno agent internal evals intel --fleet --days 14
+fno agent internal evals intel --fleet --backfill
 ```
 
 `--days` sets the window (30 days default). `--backfill` lifts the per-run read budget, so the first run reads every transcript in the window instead of spreading the scan over several runs. `--json` prints the report object instead of text. A budgeted run reports the files and bytes still unread, and computes no curve, threshold or cap until the backfill completes.

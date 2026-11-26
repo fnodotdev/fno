@@ -12,13 +12,13 @@ The keys are in [mux-keys](../mux-keys.md#inside-the-pr-review).
 
 - The diff: `gh api repos/<o>/<r>/pulls/<n> -H "Accept: application/vnd.github.diff"`. This returns the same bytes as `gh pr diff` and spends no GraphQL request.
 - The head: `gh api repos/<o>/<r>/pulls/<n> --jq .head.sha`.
-- The recipient: `fno-agent claim status node:<id>`. A review opened from a seat names that seat and its machine instead.
+- The recipient: `fno agent claim status node:<id>`. A review opened from a seat names that seat and its machine instead.
 
 Both `gh` reads run off the UI loop, once per open, with a 20 s bound. A failed read shows `diff not read: <first error line>`. A diff over 1 MiB or 20,000 rows shows its first part and says so.
 
 ## What a send writes
 
-`S` runs `fno-agent backlog note --graph <g> <node> --blocking --stdin --block-cmd "gh api ... (diff)"`. The body is one head line, then each comment numbered:
+`S` runs `fno backlog note --graph <g> <node> --blocking --stdin --block-cmd "gh api ... (diff)"`. The body is one head line, then each comment numbered:
 
 ```text
 review of PR #7 (o/r) at abcdef01: 2 comments. Fix each, then resolve this finding.

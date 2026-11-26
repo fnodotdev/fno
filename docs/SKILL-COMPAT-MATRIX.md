@@ -12,7 +12,7 @@ A row covers the skill's default lane. `execute` runs flat, `review` runs inline
 
 ## Loop participation: which harnesses can close the loop
 
-A command that declares `loop` (target, lead) runs only where the stop-hook loop can STOP. That answer lives in one machine-readable field, `loop_participation` in `harness_capabilities.toml`, and `docs/harness-command-matrix.md` carries the per-harness evidence. `hooks/target-stop-hook.sh` shims `fno-agent loop-check`, which decides stop or allow from external truth. No lifecycle boundary means no `loop-check` invocation and no loop, however well the harness spawns, resumes, and receives mail.
+A command that declares `loop` (target, lead) runs only where the stop-hook loop can STOP. That answer lives in one machine-readable field, `loop_participation` in `harness_capabilities.toml`, and `docs/harness-command-matrix.md` carries the per-harness evidence. `hooks/target-stop-hook.sh` shims `fno agent loop check`, which decides stop or allow from external truth. No lifecycle boundary means no `loop-check` invocation and no loop, however well the harness spawns, resumes, and receives mail.
 
 | Value | What a caller gets | Cell |
 |---|---|---|
@@ -31,7 +31,7 @@ Driver-specific functions (`driver_invoke`, `driver_check_promise`, `driver_pers
 
 ## How to add a new harness
 
-1. Add the harness to `KNOWN_HARNESSES` in `crates/fno-agent/src/spawn/provider.rs`, the one roster. `fno-agent harness-roster` serves it to every reader. It appears in the matrix as an all-`unmeasured` column at once.
+1. Add the harness to `KNOWN_HARNESSES` in `crates/fno-agent/src/spawn/provider.rs`, the one roster. `fno agent internal harness roster` serves it to every reader. It appears in the matrix as an all-`unmeasured` column at once.
 2. Add its capability row to `harness_capabilities.toml`, measured cell by cell. `fno doctor harness <name> --live` is the onboarding gate.
 3. Run `fno doctor harness-matrix --write` and commit both generated docs.
 4. For a wrapper-driven harness, implement `scripts/lib/driver-<name>.sh` with the four function contract, optionally a promise sentinel plugin (`docs/harnesses/promise-sentinel.md`), and write `docs/SETUP-<NAME>.md`.

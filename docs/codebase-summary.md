@@ -253,7 +253,7 @@ The plugin includes test scripts but no formal test framework:
 ./scripts/scan-antipatterns.sh
 
 # Print the dispatchable tasks of a plan
-fno-agent wave ready path/to/plan.md
+fno agent internal target wave ready path/to/plan.md
 
 # Test hook behavior
 ./scripts/test_stop_hook_events.sh

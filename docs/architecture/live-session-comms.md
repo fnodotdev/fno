@@ -56,7 +56,7 @@ handles, sending nothing.
 
 An autonomous `/target` loop submits no user prompt and starts no new session
 between iterations, so neither inbox-reminder hook fires; a message sits unseen
-until the loop yields to a human. When `fno-agent loop-check` returns a
+until the loop yields to a human. When `fno agent loop check` returns a
 `block` decision, it now appends a one-line nudge for the oldest unread message
 addressed to the session's project to the decision `message`. **Vehicle
 (AC3-VERIFY):** the stop hook surfaces a `block` message to the continuing

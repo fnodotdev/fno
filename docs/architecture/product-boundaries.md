@@ -19,7 +19,7 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 | Edge | Kind | Owner | Detail |
 |---|---|---|---|
 | fno to fno-agent | compile | crates/fno-agent/Cargo.toml | dev-dependencies only (production shells the binary) |
-| fno to fno-agent | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno-agent digest` (fail-open on absence) |
+| fno to fno-agent | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno agent fleet digest` (fail-open on absence) |
 | fno to fno-agent-worker | process | crates/fno/src/backlog/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
 | fno-agent to fno | process | crates/fno-agent/src/runtime/attach.rs | attach invokes the mux as a process, not a library |
 | mux clients to server | protocol | crates/fno/src/mux/proto.rs | versioned control socket |

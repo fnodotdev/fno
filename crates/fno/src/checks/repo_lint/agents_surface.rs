@@ -128,7 +128,7 @@ impl AgentsSurface {
     pub fn read(root: &Path) -> Result<Self, String> {
         // One reading of the top level, shared with menu-caps: the debt row
         // and these rows count the same words.
-        let sources = menu_caps::AgentSources::read(root)?;
+        let sources = menu_caps::AgentSources::read(root).map_err(|e| e.to_string())?;
         let top = menu_caps::fno_agent_commands(&sources)?;
         let client = &sources.client;
         // The seams read the binary's dispatch as one text: run's doors moved
@@ -303,6 +303,127 @@ pub fn baseline_drift(live: &[String], baseline: &[String]) -> (Vec<String>, Vec
     (added, removed)
 }
 
+/// The shrink-only record of `fno-agent <command>` mentions outside crates/:
+/// `path<TAB>count`, one row per file that still names the client binary.
+pub const CALLERS_REL: &str = "scripts/ci/fno-agent-callers.tsv";
+
+/// Each tracked file outside crates/ that names a live client command as
+/// `fno-agent <command>`, with the 1-based line of every mention.
+fn outside_callers(
+    root: &Path,
+    top: &BTreeSet<String>,
+) -> std::io::Result<BTreeMap<String, Vec<usize>>> {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()?;
+    if !listed.status.success() {
+        return Err(std::io::Error::other(
+            String::from_utf8_lossy(&listed.stderr).trim().to_string(),
+        ));
+    }
+    let mention = static_regex(r"\bfno-agent[ \t]+([a-z][a-z0-9-]*)");
+    let mut found = BTreeMap::new();
+    for rel in String::from_utf8_lossy(&listed.stdout).split('\0') {
+        if rel.is_empty()
+            || rel.starts_with("crates/")
+            || [CALLERS_REL, HIDDEN_REL, "scripts/ci/command-baseline.txt"].contains(&rel)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            continue;
+        };
+        let lines: Vec<usize> = text
+            .lines()
+            .enumerate()
+            .flat_map(|(n, line)| {
+                mention
+                    .captures_iter(line)
+                    .filter(|c| top.contains(&c[1]))
+                    .map(move |_| n + 1)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if !lines.is_empty() {
+            found.insert(rel.to_string(), lines);
+        }
+    }
+    Ok(found)
+}
+
+/// The ratchet over the outside callers: a file may not pass its row, a file
+/// with no row may name none, and a row above its file's count comes down in
+/// the same change, so the count only falls.
+pub fn caller_drift(
+    found: &BTreeMap<String, Vec<usize>>,
+    rows: &BTreeMap<String, usize>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (path, lines) in found {
+        let ceiling = rows.get(path).copied().unwrap_or(0);
+        if lines.len() > ceiling {
+            let at: Vec<String> = lines.iter().map(|n| format!("{path}:{n}")).collect();
+            failures.push(format!(
+                "agents-surface: {path} names the fno-agent client {} time(s), above its {CALLERS_REL} \
+                 ceiling {ceiling}. Spell each as its fno command (`fno agent ...`): {}",
+                lines.len(),
+                at.join(", ")
+            ));
+        }
+    }
+    for (path, &ceiling) in rows {
+        let count = found.get(path).map_or(0, Vec::len);
+        if count < ceiling {
+            failures.push(format!(
+                "agents-surface: {path} names the fno-agent client {count} time(s), below its \
+                 {CALLERS_REL} ceiling {ceiling}. Lower the row to {count} (delete it at 0) in \
+                 this change."
+            ));
+        }
+    }
+    failures
+}
+
+/// The caller ratchet against the live tree and its committed record.
+pub fn caller_failures(root: &Path, top: &BTreeSet<String>) -> Vec<String> {
+    let rows = match std::fs::read_to_string(root.join(CALLERS_REL)) {
+        Ok(text) => {
+            let mut rows = BTreeMap::new();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let mut cols = line.split('\t');
+                match (
+                    cols.next(),
+                    cols.next().and_then(|c| c.trim().parse::<usize>().ok()),
+                ) {
+                    (Some(path), Some(count)) if !path.is_empty() => {
+                        rows.insert(path.to_string(), count);
+                    }
+                    _ => {
+                        return vec![format!(
+                            "agents-surface: {CALLERS_REL}:{} is not `path<TAB>count`",
+                            n + 1
+                        )]
+                    }
+                }
+            }
+            rows
+        }
+        Err(e) => return vec![format!("agents-surface: cannot read {CALLERS_REL}: {e}")],
+    };
+    match outside_callers(root, top) {
+        Ok(found) => caller_drift(&found, &rows),
+        Err(e) => vec![format!(
+            "agents-surface: git ls-files failed under {}: {e}",
+            root.display()
+        )],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +474,24 @@ mod tests {
             "{failures:?}"
         );
         assert_eq!(failures.len(), 4, "{failures:?}");
+
+        // The outside-caller ratchet: a new `fno-agent <command>` line in a
+        // file with no row refuses by file and line, and a row above its
+        // file's count must come down.
+        let found = BTreeMap::from([("skills/x/SKILL.md".to_string(), vec![3])]);
+        let callers = caller_drift(&found, &BTreeMap::new());
+        assert!(
+            callers.len() == 1 && callers[0].contains("skills/x/SKILL.md:3"),
+            "{callers:?}"
+        );
+        let slack = BTreeMap::from([("skills/x/SKILL.md".to_string(), 2)]);
+        let lower = caller_drift(&found, &slack);
+        assert!(lower[0].contains("Lower the row to 1"), "{lower:?}");
+        assert!(caller_drift(
+            &found,
+            &BTreeMap::from([("skills/x/SKILL.md".to_string(), 1)])
+        )
+        .is_empty());
     }
     #[test]
     fn agents_surface_holds_on_the_committed_tree() {
@@ -370,6 +509,8 @@ mod tests {
         if let Err(homeless) = menu_caps::check_homes(&surface.top, &menu_caps::menu_forwarded()) {
             panic!("homeless fno-agent words:\n  {}", homeless.join("\n  "));
         }
+        let callers = caller_failures(&root, &surface.top);
+        assert!(callers.is_empty(), "{}", callers.join("\n"));
         let hidden_text = std::fs::read_to_string(root.join(HIDDEN_REL))
             .unwrap_or_else(|e| panic!("agents-surface: cannot read {HIDDEN_REL}: {e}"));
         let rows = hidden_rows(&hidden_text).unwrap();

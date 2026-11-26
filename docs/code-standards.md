@@ -396,7 +396,7 @@ Autonomous loops (target) complete on a `<promise>` tag in the output. This is t
 ### Rules
 
 1. **Only output `<promise>` when the work is genuinely done** - tests pass, the PR is up, review feedback is addressed
-2. The stop hook runs `fno-agent loop-check`, which reads the world (PR + CI + required-bot review) on seeing a promise; it allows exit only when those reads agree
+2. The stop hook runs `fno agent loop check`, which reads the world (PR + CI + required-bot review) on seeing a promise; it allows exit only when those reads agree
 3. The promise is the agent's claim of completion, not the authority - a premature promise blocks (loop-check names the failing read) and the loop continues
 4. The promise text should summarize what was accomplished
 
@@ -404,7 +404,7 @@ There are no completion gates to set. The gate machinery (gate booleans in `targ
 
 ### Termination
 
-`fno-agent loop-check` resolves a session with one `TerminationReason`: `DonePRGreen`, `DoneAdvisory`, or explicitly activated `DoneDelivery` (work confirmed done), plus `NoWork`, `Budget`, `NoProgress`, `Interrupted` (cancel sentinel), or `Aborted`. The pre-wedge `IN_PROGRESS` / `COMPLETE` / `BLOCKED` status strings no longer drive the decision.
+`fno agent loop check` resolves a session with one `TerminationReason`: `DonePRGreen`, `DoneAdvisory`, or explicitly activated `DoneDelivery` (work confirmed done), plus `NoWork`, `Budget`, `NoProgress`, `Interrupted` (cancel sentinel), or `Aborted`. The pre-wedge `IN_PROGRESS` / `COMPLETE` / `BLOCKED` status strings no longer drive the decision.
 
 **Forbidden statuses** (will break the loop):
 - `EXECUTION_COMPLETE`

@@ -8,7 +8,7 @@ Pinned SHA: `e159615a16cd947b9278c1e165b61955ec1ddec5` (origin/main at campaign 
 
 Pass/fail: every in-scope Python file passes. `fno doctor test` over all 19 in-scope files: 473 collected, 448 passed, 25 skipped, 0 failed, 90s.
 
-Rust: `cargo test -p fno-agent claim` filter reads 300 tests (298 passed, 2 failed). Both failures are out of scope:
+Rust: `cargo test -p fno agent claim` filter reads 300 tests (298 passed, 2 failed). Both failures are out of scope:
 
 ### Baseline failures (bug reports, not deleted)
 

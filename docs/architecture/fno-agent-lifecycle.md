@@ -178,7 +178,7 @@ All changes land in one batched `update_registry`; the sweep emits `reconcile_do
 }
 ```
 
-`drives.active` counts controlling drivers across all agents (read from the in-memory `DriveTable`, so the handler is async). The `fno-agent status` client probes an already-running daemon via `call_if_running` and exits **13** without lazy-starting one when the daemon is down — `status` describes a daemon, it does not boot one.
+`drives.active` counts controlling drivers across all agents (read from the in-memory `DriveTable`, so the handler is async). The `fno agent session status` client probes an already-running daemon via `call_if_running` and exits **13** without lazy-starting one when the daemon is down — `status` describes a daemon, it does not boot one.
 
 ### list (US6.6)
 

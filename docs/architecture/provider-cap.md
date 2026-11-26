@@ -4,7 +4,7 @@ The one armed surface that owns every provider-cap move. The watchdog measures a
 
 ## Status and arming
 
-`fno-agent provider-cap status [--json] [--max-age-s N]` reads the daemon's latest snapshot. Fresh means measured_at is within N seconds. Otherwise it computes on demand and says so. The daemon arm rebuilds the snapshot every 120 s. It persists armed or not. An unarmed tick row reads `provider_cap_off`, so the readout shows a live measurement.
+`fno agent admit provider-cap status [--json] [--max-age-s N]` reads the daemon's latest snapshot. Fresh means measured_at is within N seconds. Otherwise it computes on demand and says so. The daemon arm rebuilds the snapshot every 120 s. It persists armed or not. An unarmed tick row reads `provider_cap_off`, so the readout shows a live measurement.
 
 ## How a lane opens
 
@@ -73,4 +73,4 @@ The return ladder's grace lives under `[recovery]`: `provider_outage_reset_grace
 
 ## State
 
-`<agents home>/provider-cap/` holds `snapshot.json`, `decision-<lane>.json`, the per-epoch canary state `return-<lane>.json`, question markers, and the journals. Recorded in `docs/state-root-inventory.md`. Compaction stamps live in `<agents home>/compacting/<session>.json`. The `PreCompact` hook writes them best-effort via `fno-agent compaction mark`.
+`<agents home>/provider-cap/` holds `snapshot.json`, `decision-<lane>.json`, the per-epoch canary state `return-<lane>.json`, question markers, and the journals. Recorded in `docs/state-root-inventory.md`. Compaction stamps live in `<agents home>/compacting/<session>.json`. The `PreCompact` hook writes them best-effort via `fno agent registry compaction mark`.

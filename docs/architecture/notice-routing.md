@@ -14,7 +14,7 @@ Every session-start and hook notice carries a role audience: `worker`, `lead`, o
 | Reconcile warnings (promise gate, canonical sync, orphan plans) | the owning lead, by mail |
 | Waiting-on-you questions | the user's session only |
 
-The session role reads from one resolver. A live team's `holder_session` makes a session a lead. A registry row with a node set makes it a worker. Anything else is the user. `fno-agent context-run --role <session_id>` prints the role word, so hooks outside context-run read the same answer. Every context-run producer runs with `FNO_SESSION_ROLE` set. A role read that fails reads as `user`, which is the pre-change behavior.
+The session role reads from one resolver. A live team's `holder_session` makes a session a lead. A registry row with a node set makes it a worker. Anything else is the user. `fno agent internal session context-run --role <session_id>` prints the role word, so hooks outside context-run read the same answer. Every context-run producer runs with `FNO_SESSION_ROLE` set. A role read that fails reads as `user`, which is the pre-change behavior.
 
 The producer declaration carries two optional keys. `audience` lists the roles a producer runs for. `warning` marks the reconcile banner the fold counts. Both are ignored by the Python census expander.
 

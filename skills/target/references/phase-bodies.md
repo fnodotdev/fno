@@ -47,7 +47,7 @@ When a lens row's condition holds for the diff under review, read that lens file
 There is no promise-time self-grade phase (control-plane step 6).
 Intent is checked through CI, not an agent grading its own homework: the BDD
 acceptance criteria that matter become tests during `/execute` (TDD) and run in CI,
-which `fno-agent loop-check`'s CI read already covers. A genuinely missing test
+which `fno agent loop check`'s CI read already covers. A genuinely missing test
 is a `/blueprint`-quality problem, not a completion gate. There is no self-grade
 PASS/FAIL line and no phase 4.5.
 

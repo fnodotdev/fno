@@ -184,7 +184,7 @@ and dispatches as follows:
 
 | Helper available? | PREV_NONCE | Path |
 |---|---|---|
-| yes | non-empty | helper-call (`fno-agent verify-evidence child-promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
+| yes | non-empty | helper-call (`fno agent loop verify-evidence child-promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
 | no  | any       | inline-grep fallback + stderr WARN (helper unsourceable) |
 | yes | empty     | inline-grep fallback + stderr WARN (legacy target session predating the producer-nonce write) |
 
@@ -194,12 +194,12 @@ the operator's signal of substrate degradation.
 
 #### Helpers
 
-- **fno-agent (canonical)**: `fno-agent verify-evidence child-promise
+- **fno-agent (canonical)**: `fno agent loop verify-evidence child-promise
   SESSION_ID NONCE [EVENTS_FILE]`, folded out of the deleted
   `scripts/lib/verify-event-evidence.sh` into the bundled binary in US1.
   Returns rc=0 (match), rc=1 (missing OR nonce mismatch),
   rc=2 (substrate failure). Diagnostics go to stderr.
-- **The door**: `fno-agent verify-evidence child-promise` is the one reader (the Python in-package parallel deleted with the events package residue). The error keys `child_promise_missing`, `child_promise_nonce_mismatch`, and `events_unreadable` map one-to-one to the door's stderr substrings.
+- **The door**: `fno agent loop verify-evidence child-promise` is the one reader (the Python in-package parallel deleted with the events package residue). The error keys `child_promise_missing`, `child_promise_nonce_mismatch`, and `events_unreadable` map one-to-one to the door's stderr substrings.
 
 ### `verification_receipt`
 
@@ -218,7 +218,7 @@ A full passed receipt is structurally valid only when the scope is non-empty, `s
 A void receipt can never be passed.
 Explicit false, absent, pending, unavailable, stale, and advisory observations are therefore not interchangeable, and unknown evidence fails closed.
 
-Python validation in `fno.events`, Bash validation in `scripts/lib/events-validate.sh`, and Rust validation in `fno-agent verify-evidence receipt` enforce the same receipt vocabulary and invariants.
+Python validation in `fno.events`, Bash validation in `scripts/lib/events-validate.sh`, and Rust validation in `fno agent loop verify-evidence receipt` enforce the same receipt vocabulary and invariants.
 The Rust reducer takes the canonical journal first and any diagnostic mirror journals afterward.
 The parity corpus includes fractional UTC timestamps and bounded-command failures so wire-compatible RFC3339 values and size limits do not drift between implementations.
 

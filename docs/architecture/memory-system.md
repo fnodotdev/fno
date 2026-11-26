@@ -158,7 +158,7 @@ Both sides record use through the same sidecar. When a pass revises an existing 
 
 ## Completion eval (a separate autonomous writer)
 
-`crates/fno-agent/src/gate/finalize.rs::write_postmortem` is a second, older autonomous writer, unrelated to `write-memory-entry.sh` above. It writes one structured artifact per `fno-agent finalize` call to `~/.fno/postmortems/`. `crates/fno-agent/src/eval/retro/postmortem.rs` and `classify.py` consume that artifact into a backlog node or an inbox item: the eval loop's corpus.
+`crates/fno-agent/src/gate/finalize.rs::write_postmortem` is a second, older autonomous writer, unrelated to `write-memory-entry.sh` above. It writes one structured artifact per `fno agent loop finalize` call to `~/.fno/postmortems/`. `crates/fno-agent/src/eval/retro/postmortem.rs` and `classify.py` consume that artifact into a backlog node or an inbox item: the eval loop's corpus.
 
 Two retirement rules close the pipeline, because landed artifacts had no exit and piled up. `classify_postmortem` consumes every success terminal (`DonePRGreen` and every other `Done*` reason) instead of filing it. A clean session's eval is a receipt. The wedge regex must never see these gists. The pasted assistant prose matches it constantly. That is how 35 of 62 landed receipts were `DonePRGreen`. And the daily archive sweep (`retire_stale_postmortems` in `graph/archive.py`) closes a landed receipt still sitting as an open `idea` after 30 days untouched. It marks it `retired: stale-postmortem-receipt`. The sweep's normal age gate removes it from the working graph like any terminal row. Rows a human or the ack flow acted on (queued, claimed, deferred) are never touched.
 

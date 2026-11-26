@@ -24,7 +24,7 @@ Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and
 
 The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
 
-Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier commands are `fno-agent attest push` and `fno-agent attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
+Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier commands are `fno agent loop attest push` and `fno agent loop attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
 
 The primary is the coverage authority, so write access to it is review authority. Any writer on the primary can add a `review_attestation` row the gate reads as a review. The set of machines with `store.remote_url` is therefore the set of machines that can vouch a pass. The push stamps the writing machine id into the row (`data.attest_machine`), and the coverage listing shows it. That makes the row auditable, not true. Treat a primary row like the journal it mirrors. Trust is the operator's machine list, and a foreign writer is a trust decision, not a bug. A gate read never writes schema: a pull that finds no table reads no rows instead of creating one.
 
@@ -103,7 +103,7 @@ A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on th
 
 Each host's daemon pulls its rows on `agents.remote.pull_interval_secs`. That key lives in the global config, default 15 seconds. The pull injects each row through the receiver's own local send. Lane selection, holds, and receipts stay the local path's.
 
-The mux Messages tab reads the bus too. `fno-agent mail-threads` folds the bus rows of the last 7 days into the local projection, at most 2000 rows. Each sender and recipient shows as `<name>@<host>`, one thread per pair. A row this machine already holds stays out. That is a row with a bus label this machine held, an id its pull delivered, or an id in the local chats store.
+The mux Messages tab reads the bus too. `fno agent internal mail threads` folds the bus rows of the last 7 days into the local projection, at most 2000 rows. Each sender and recipient shows as `<name>@<host>`, one thread per pair. A row this machine already holds stays out. That is a row with a bus label this machine held, an id its pull delivered, or an id in the local chats store.
 
 Mail between two agents on one machine never reaches the bus. The mail carrier takes it to the other machines. The table is `fleet_chat` on the primary, one row per (machine_id, msg_id). Only the machine that holds the mail writes its rows. Its daemon publishes them on the mail arm's beat. A qualifying row is pair mail of the last 7 days, with both sides local. A row pulled from the bus or sent to `<name>@<host>` stays off, because the bus fold shows it. Each row carries the sender and recipient names, the body, the subject, the host, the owner, the machine key and a signature over those fields. The writer deletes its own rows past 7 days. No machine deletes another machine's row. `mail-threads` folds the other machines' rows as `<name>@<host>` threads and marks each row `origin: carrier`. It skips three kinds of row: one from this machine, one of another person, and one whose signature fails the pinned host key. A refused host gets one stderr line. After another machine's mail or the bus moves, the beat rewrites `db/mail/carrier/stamp`. The tab's stat poll folds that file into its change signal, so a new row paints on the next poll. No session on this machine owns a carrier thread, so a reply there finds no pane and sends nothing. To answer, use `fno agent mail send <session-id>@<host>`.
 
@@ -121,14 +121,14 @@ The primary can be unreachable. The send then queues the row in `mail_outbox.jso
 
 Each machine signs every bus row it writes. The key is an Ed25519 key in `machine_key.pk8` in the agents state root, owner-only, made on first use. The row carries the public key and the signature over its fields, so a row edited on the primary does not verify. The pull checks each row before it injects it. Trust is first use: the first key a receiver sees for a host is pinned in its `machine_pins.json`. After that, the pull refuses a row for that host that another key signed. It also refuses an unsigned row, and a row whose `from_id` names another host. A refused row is marked `refused`, and the daemon log names the msg_id and the reason. An unsigned row from a host with no pin still injects, so a peer on an older build keeps working until it upgrades.
 
-Only the user changes a key, by rotating it. `fno-agent mail-remote key rotate` makes a new key on this machine and prints the pin line. Every peer then refuses this machine's mail until the user runs that line on the peer: `fno-agent mail-remote key pin <host> <public key>`. `fno-agent mail-remote key show` prints this machine's key and every pin, each with a short fingerprint.
+Only the user changes a key, by rotating it. `fno agent internal mail remote key rotate` makes a new key on this machine and prints the pin line. Every peer then refuses this machine's mail until the user runs that line on the peer: `fno agent internal mail remote key pin <host> <public key>`. `fno agent internal mail remote key show` prints this machine's key and every pin, each with a short fingerprint.
 
 ### One token per machine
 
 Each machine can carry its own token, all signed by one key the user holds. Start sqld with `--auth-jwt-key-file <user key>.pub.pem`. Then mint a token per machine:
 
 ```bash
-fno-agent mail-remote key token ~/keys/fleet-user.pk8 mac2
+fno agent internal mail remote key token ~/keys/fleet-user.pk8 mac2
 ```
 
 The first run makes the user key, and each run writes the `.pub.pem` file beside it. The token prints on stdout. Set it as `store.remote_token` on that machine only. Keep the user key off the machines that run the fleet.
@@ -139,16 +139,16 @@ Host spellings normalize on write and on pull. Lowercase, and a trailing `.local
 
 ### The user certificate
 
-The same user key proves who records a wide law. A wide decision is a global decision, or a decision bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agent mail-remote key show` on that machine prints its key.
+The same user key proves who records a wide law. A wide decision is a global decision, or a decision bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno agent internal mail remote key show` on that machine prints its key.
 
 ```bash
-fno-agent mail-remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
+fno agent internal mail remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
 ```
 
 The certificate prints on stdout as one line. It binds the user name to that one machine key, and the user key signs it. Install it on that machine:
 
 ```bash
-fno-agent mail-remote key cert <line>
+fno agent internal mail remote key cert <line>
 ```
 
 `cert` refuses a certificate for another machine key and names both key fingerprints. It writes `user_cert.txt` beside `machine_key.pk8`, owner-only. `show` then prints the user name and the user key fingerprint. Do this on each machine, and every `show` prints the same user key fingerprint.
@@ -288,7 +288,7 @@ A machine that stays offline past its lease loses the claim, and a peer can take
 
 ## Leaving: export
 
-`fno-agent claim export --out <file> [--url <primary>]` copies every table on the primary into a new local SQLite file. The file opens as a normal store. The primary stamps its claims table as the authority at creation, so the local open keeps the exported rows. Use `--url` after the key is unset.
+`fno agent claim export --out <file> [--url <primary>]` copies every table on the primary into a new local SQLite file. The file opens as a normal store. The primary stamps its claims table as the authority at creation, so the local open keeps the exported rows. Use `--url` after the key is unset.
 
 ## The person beside the machine
 

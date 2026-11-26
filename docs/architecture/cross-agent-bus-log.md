@@ -174,7 +174,7 @@ Same-project by-name delivery was the unfinished half of the bus: `fno agent sen
 
 ## Fleet announcements (one bus line)
 
-One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agent/src/backlog/announce.rs`, reached as `fno agent mail admin team` or the binary-direct `fno-agent announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
+One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agent/src/backlog/announce.rs`, reached as `fno agent mail admin team` or the binary-direct `fno agent mail announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
 
 **Envelope.** Key order matches `to_json_line`. `to: "fleet:<scope>"` and `to_kind: "fleet"` mean no Python address can ever equal it, so `scan_unread` and every addressed-mail reader cannot deliver it. `meta` carries `scope`, `audience` (the snapshot), `subject`, `expires_at`, `urgent`, `supersedes`.
 

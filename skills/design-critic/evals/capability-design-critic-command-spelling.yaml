@@ -1,6 +1,6 @@
 # Capability tier: does the reader of skills/design-critic/SKILL.md name the
-# command it teaches in its current spelling? The fno-agents -> fno-agent
-# rename moved every command the skill names; graded on the new spelling.
+# command it teaches in its current spelling? The fold of the fno-agent
+# client into fno agent moved every command the skill names; graded on the new spelling.
 id: capability-design-critic-command-spelling
 tier: regression
 prompt: |
@@ -11,6 +11,6 @@ grade:
   - kind: file-exists
     path: command-answer.md
   - kind: exit
-    command: "grep -qF 'fno-agent visual critique-prep <node>' command-answer.md && ! grep -qF 'fno-agents visual' command-answer.md"
+    command: "grep -qF 'fno agent internal target visual critique-prep <node>' command-answer.md && ! grep -qE 'fno-agents? visual' command-answer.md"
 timeout_minutes: 10
 tags: [capability, design-critic]

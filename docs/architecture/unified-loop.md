@@ -11,7 +11,7 @@
 
 This document covers the driver loop AROUND sessions: `crates/fno-agent/src/runtime/loop_runtime.rs`, `loop_target.rs`, `loop_dispatch.rs`, and the `scripts/run-target-loop.sh` exec shim. For the stop-hook decision command that runs INSIDE each session, see [control-plane-loop.md](control-plane-loop.md).
 
-The target stop shims resolve the manifest by harness session id before invoking `loop-check`. When a cwd manifest's `harness_session_id` or legacy alias names the stopping session, the shims keep it. Otherwise, `fno-agent manifest-for-session` scans the repository worktrees. A confirmed miss emits `loop-check: no manifest names session <id>; visitor allowed` and allows the visitor to stop. An unreadable resolver remains checker-unavailable and takes the shim's bounded retry path.
+The target stop shims resolve the manifest by harness session id before invoking `loop-check`. When a cwd manifest's `harness_session_id` or legacy alias names the stopping session, the shims keep it. Otherwise, `fno agent internal session manifest` scans the repository worktrees. A confirmed miss emits `loop-check: no manifest names session <id>; visitor allowed` and allows the visitor to stop. An unreadable resolver remains checker-unavailable and takes the shim's bounded retry path.
 
 ---
 
@@ -79,7 +79,7 @@ pub trait Queue {
 
 `close` returns `CloseOutcome`: `Closed`, `Refused(String)`, `Parked(String)`, or `AwaitingMerge`. The runtime journals none of these directly - it records `loop_terminated` at walk end; the Queue impl is responsible for any additional side-effects on close (e.g. `fno backlog done` in group 2). `AwaitingMerge` is success-shaped - the PR is up and reviewed but not yet merged, so the graph node stays `in_review` and `reconcile` closes it at the actual merge; the claim is released and no failure is recorded.
 
-**Target Queue (group 1):** degenerate - one unit read from `.fno/target-state.md`. `close()` is inert: the session's own stop hook already emitted the `termination` event; the manifest is immutable. As of step 6 the session's terminal side-effects (ledger session-record, and on a ship the plan stamp/graduate + handoff artifact) are written by `fno-agent finalize`, which the shim invokes at the terminal-allow boundary BEFORE the worker process exits. A failed `DoneDelivery` finalize keeps the hook alive for an idempotent retry; legacy finalize failures remain best-effort. The outer loop only observes the terminal after the hook permits exit, so `TargetQueue::close` stays inert exactly as designed - placing the writes in `close` would miss attended interactive `/target` runs, which have no outer loop at all.
+**Target Queue (group 1):** degenerate - one unit read from `.fno/target-state.md`. `close()` is inert: the session's own stop hook already emitted the `termination` event; the manifest is immutable. As of step 6 the session's terminal side-effects (ledger session-record, and on a ship the plan stamp/graduate + handoff artifact) are written by `fno agent loop finalize`, which the shim invokes at the terminal-allow boundary BEFORE the worker process exits. A failed `DoneDelivery` finalize keeps the hook alive for an idempotent retry; legacy finalize failures remain best-effort. The outer loop only observes the terminal after the hook permits exit, so `TargetQueue::close` stays inert exactly as designed - placing the writes in `close` would miss attended interactive `/target` runs, which have no outer loop at all.
 
 **Megawalk Queue (group 2):** shells `fno backlog next` and `fno backlog done`. It NEVER reads `graph.json` directly (locked decision / grilled 7). Selection logic (epics-first, project scoping, rank, `make_selection_sort_key`) stays inside `fno backlog next` - one place, no duplication.
 
@@ -134,7 +134,7 @@ The method is named `append` (not `emit` or `emit_fields`) deliberately - see "T
 
 ## The typed-event contract
 
-The loop NEVER parses session stdout. The session's terminal state is communicated entirely through the project journal. When it decides to allow the session to exit, the stop hook (`fno-agent loop-check`) emits a `termination` event. `Journal::find_termination` scans for the last matching event keyed on `unit.session_key` (= `session_id` from the manifest).
+The loop NEVER parses session stdout. The session's terminal state is communicated entirely through the project journal. When it decides to allow the session to exit, the stop hook (`fno agent loop check`) emits a `termination` event. `Journal::find_termination` scans for the last matching event keyed on `unit.session_key` (= `session_id` from the manifest).
 
 Envelope shape for all loop-runtime events:
 
@@ -230,7 +230,7 @@ The split in that last column is what makes the loop converge. A queue only a hu
 **One arm was cut and rebuilt. The second is the walk.**
 
 - *In-session:* `hooks/target-stop-hook.sh` adds `.fno/lead-state.md` as a second candidate after its target search comes up empty and forwards `--driver lead`. When both are present the target manifest wins: a session holding one is a worker whatever else sits beside it. A lead terminal skips `finalize`, which stamps a plan and graduates a node that a lead does not have. `hooks/footnote-agy-target-stop-hook.sh` cannot gate a lead, because the loop is claude-only in v1. It names the manifest and refuses rather than allowing the stop. A guard on one of two reachable paths is decorative.
-- *Cross-session:* `fno-agent loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agent/src/runtime/loop_lead.rs`.
+- *Cross-session:* `fno agent loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agent/src/runtime/loop_lead.rs`.
 
 **A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agent hq escalate` with one `--stalled <row>` per row. The command records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
 
@@ -410,7 +410,7 @@ The in-process callers fail OPEN on a probe that could not evaluate (a gh outage
 
 ## The exec shim (`scripts/run-target-loop.sh`)
 
-The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps documented legacy flags onto `fno-agent loop run --driver target` and execs the binary. No loop logic lives here.
+The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps documented legacy flags onto `fno agent loop run --driver target` and execs the binary. No loop logic lives here.
 
 ### Flag table
 
@@ -425,7 +425,7 @@ The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps do
 | `--prompt-file PATH` | `--prompt-file PATH` (passed through) |
 | unknown flag | loud rejection with migration message; exit 2 |
 
-Unknown flags are rejected loudly with the message: `"The bash loop moved to 'fno-agent loop run' (step 5); this shim maps only the documented legacy flags."` No silent drops.
+Unknown flags are rejected loudly with the message: `"The bash loop moved to 'fno agent loop run' (step 5); this shim maps only the documented legacy flags."` No silent drops.
 
 ### Binary resolution order
 
@@ -481,7 +481,7 @@ The legacy `scripts/run-target-loop.sh` was 466 lines. The code it contained is 
 | Restart-signal file polling | target closure checks `SIGINT_RECEIVED` + `.target-cancelled`; lead closure checks its scoped `.cancelled` sidecar |
 | Multi-plan grep over session output | plan identity in manifest (`plan_path`), not parsed from stdout |
 | Phase re-read / phase tracking | deleted by step-1 wedge; no phase state remains |
-| Fingerprint / consecutive-fire counting | inside `fno-agent loop-check` (already Rust since the wedge) |
+| Fingerprint / consecutive-fire counting | inside `fno agent loop check` (already Rust since the wedge) |
 | Binary resolution (4 lines of if/then) | `resolve_driver_binary()` + `which_binary()` in `loop_dispatch.rs` |
 
 Model-fallback is a deliberate drop, not an oversight. The loop contract is typed events; the budget backstop and driver-level retry (re-dispatch on `node_failed`) handle the failure class the fallback chain was attempting to manage. Porting the sed/grep model-name parser into Rust would resurrect complexity the step-5 design explicitly removes.
@@ -554,7 +554,7 @@ Two new event kinds join the loop stream. Schema in `events-schema.yaml` only; N
 
 ### Front door (removed)
 
-The `/megawalk` skill launched `fno-agent loop run --driver megawalk` in the background and streamed `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) rendered the canonical journal at ~1Hz via a Rich TUI. Both are gone with the driver. There is no separate `megawalk-events.jsonl`. The single `events.jsonl` remains the authoritative loop record.
+The `/megawalk` skill launched `fno agent loop run --driver megawalk` in the background and streamed `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) rendered the canonical journal at ~1Hz via a Rich TUI. Both are gone with the driver. There is no separate `megawalk-events.jsonl`. The single `events.jsonl` remains the authoritative loop record.
 
 ---
 

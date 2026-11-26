@@ -87,6 +87,6 @@ It is an immutable manifest.
 
 ## The decision command
 
-The command behind all of this is `fno-agent loop-check`.
+The command behind all of this is `fno agent loop check`.
 It runs inside the session at the stop hook and reads only external truth.
 The full mechanism (the manifest, the shim, the done reads, the budget cap) is in [the control plane loop](../architecture/control-plane-loop.md).

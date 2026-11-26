@@ -17,7 +17,7 @@ This skill runs on every harness. Claude loads it through the `design-critic` ag
 
 You get one node id. Two files are your whole input.
 
-1. The critique file `<vault>/mux/<node>-critique.json`. The worker made it with `fno-agent visual critique-prep <node>`. It holds `head` (the PR head sha) and `views`. Each view entry has `view`, `theme` and `identical`. It also has `before` (the main shot) and `after` (the PR shot). Last, it has `boxed` (the PR shot with the changed region boxed) and `region` (the box). The file also holds empty `findings`, `checked` and `left` lists.
+1. The critique file `<vault>/mux/<node>-critique.json`. The worker made it with `fno agent internal target visual critique-prep <node>`. It holds `head` (the PR head sha) and `views`. Each view entry has `view`, `theme` and `identical`. It also has `before` (the main shot) and `after` (the PR shot). Last, it has `boxed` (the PR shot with the changed region boxed) and `region` (the box). The file also holds empty `findings`, `checked` and `left` lists.
 2. The rulebook `docs/architecture/mux-design-system.md`. Every `##` and `###` heading in it is a rule name.
 
 If the critique file is missing, or its `head` is not the PR head, stop. Return `BLOCKED` and name the prep command. Never make up a critique file. A vault shot name carries the head it shows as `<node>-<head12>-<view>-<role>-<theme>.png`. The pairing prefers the after side whose head matches the critique's `head`. A view judges paint from its own head.

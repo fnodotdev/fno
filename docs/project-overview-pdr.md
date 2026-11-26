@@ -86,9 +86,9 @@ graph TD
 
 Target is the autonomous delivery pipeline for one feature or backlog node. The key mechanism:
 
-- A **stop hook** (`target-stop-hook.sh`) is a thin shim over the read-only `fno-agent loop-check` command, which decides whether the session may exit.
+- A **stop hook** (`target-stop-hook.sh`) is a thin shim over the read-only `fno agent loop check` command, which decides whether the session may exit.
 - The agent signals it believes the work is done by emitting a `<promise>` tag; `loop-check` then verifies that claim against external truth before allowing exit.
-- If the session ends before completion, the unified loop (`fno-agent loop run` / `run-target-loop.sh`) re-invokes it.
+- If the session ends before completion, the unified loop (`fno agent loop run` / `run-target-loop.sh`) re-invokes it.
 
 **Completion is external truth, not local booleans.** A session is done only when the world agrees:
 - a PR exists,
@@ -96,7 +96,7 @@ Target is the autonomous delivery pipeline for one feature or backlog node. The 
 - every required reviewer bot (`config.review.required_bots`) has reviewed with no unaddressed blocking finding,
 - and a budget cap has not been exceeded.
 
-There are no completion-gate booleans, no `fno gate` surface, and no `current_phase` state - the pre-wedge gate machinery was removed in the control-plane collapse. `loop-check` writes nothing; terminal side-effects (ledger record, plan stamp, handoff) are written by the separate `fno-agent finalize` command.
+There are no completion-gate booleans, no `fno gate` surface, and no `current_phase` state - the pre-wedge gate machinery was removed in the control-plane collapse. `loop-check` writes nothing; terminal side-effects (ledger record, plan stamp, handoff) are written by the separate `fno agent loop finalize` command.
 
 **Allowed statuses:** `IN_PROGRESS`, `COMPLETE`, `BLOCKED` - nothing else. Any other status breaks the loop.
 

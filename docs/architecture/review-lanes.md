@@ -139,7 +139,7 @@ See [mail-live-inject](mail-live-inject.md) for what it resolves and why the Sto
 
 A mux-hosted session injects via `fno mux pane send --raw`, regardless of harness. A mux-hosted Codex session is therefore a real prompt-line lane. It can fire `/compact`, `/review`, or any other TUI command the Codex parser accepts. `--raw` is required here: a bare send now wraps the payload in an `<fno_mail>` envelope, and an enveloped slash command is text rather than a command.
 
-A Claude daemon session injects via the `fno-agent mail-inject` Rust binary (`cli/src/fno/agents/dispatch.py`).
+A Claude daemon session injects via the `fno agent internal mail inject` Rust binary (`cli/src/fno/agents/dispatch.py`).
 
 A Codex app-server thread has no prompt line. The Python front door routes the exact commands `/review` and `/code-review` to the structured `review/start` RPC. It refuses every other raw payload, naming the app-server constraint and the wrapped-send or mux alternatives.
 
@@ -150,7 +150,7 @@ Other non-keystroke daemon lanes keep the generic refusal. A slash submitted thr
 The `mail-inject` binary remains reachable directly for scripting against a Claude daemon session outside the Python CLI, where its STDIN form suits a pipe:
 
 ```bash
-printf '/code-review <level> --comment' | fno-agent mail-inject --harness claude --session <full-session-uuid>
+printf '/code-review <level> --comment' | fno agent internal mail inject --harness claude --session <full-session-uuid>
 ```
 
 It reads the turn text from STDIN and enforces the brevity cap for a direct binary call. The raw lane itself is capped in Python at the `fno agent mail send --raw` front door. The binary holds the same ceiling for callers that bypass it.
@@ -164,7 +164,7 @@ It delivers over the daemon `control.sock` to a live `claude --bg` session, so t
 
 The binary's `mail-inject --harness codex` mode submits text through `turn/start`. It is the wrapped-mail transport, not a raw command transport, because the Codex app-server has no slash parser.
 
-The structured Codex expert door is `fno-agent review-start --session <thread-id> --target <uncommittedChanges|baseBranch:branch|commit:sha|custom:instructions> --delivery inline`.
+The structured Codex expert door is `fno agent internal pr review-start --session <thread-id> --target <uncommittedChanges|baseBranch:branch|commit:sha|custom:instructions> --delivery inline`.
 
 That direct command takes an already-structured target rather than a raw payload. The exact-command allowlist stays Python-only at the raw-payload door, so no second raw-payload door opens in Rust.
 
@@ -179,7 +179,7 @@ Do not conclude the lane is absent from an empty `--help` or an empty Python-tre
 
 ## The target ship loop and findings
 
-The target ship step runs the review round before the PR opens. The default round is `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, invoked in the target session itself: no mail, no paste, no turn boundary. Size is medium under 300 changed lines, high above, xhigh for risky surfaces. With no PR yet, `--comment` holds the findings on branch and HEAD in the `review_attestation` journal row. Once the PR opens, `fno do pr publish-review` posts them as one PR comment, and `fno-agent finalize` re-runs that post as a backstop. The inline lane surfaces findings and emits a head-pinned attestation. A rebase with an unchanged code delta carries the attestation. Other HEAD changes require another review. Fixes take a new review while the round budget lasts. The flow uses no lead, daemon stream, or external reader. The ledger is machine-local, so another machine cannot read the attestation.
+The target ship step runs the review round before the PR opens. The default round is `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, invoked in the target session itself: no mail, no paste, no turn boundary. Size is medium under 300 changed lines, high above, xhigh for risky surfaces. With no PR yet, `--comment` holds the findings on branch and HEAD in the `review_attestation` journal row. Once the PR opens, `fno do pr publish-review` posts them as one PR comment, and `fno agent loop finalize` re-runs that post as a backstop. The inline lane surfaces findings and emits a head-pinned attestation. A rebase with an unchanged code delta carries the attestation. Other HEAD changes require another review. Fixes take a new review while the round budget lasts. The flow uses no lead, daemon stream, or external reader. The ledger is machine-local, so another machine cannot read the attestation.
 
 ## Worker self-review
 
@@ -547,7 +547,7 @@ The producer is now reachable from every path that can reach the gate.
 | `fno do pr status <n>` | yes | reads through the same recompute-then-read helper |
 | `fno do pr coverage-check <n>` without `--recompute` | no by default; `--recompute` yes | the row is read as-is, never added to; `--recompute` shells the producer, same as `fno do pr merge` |
 | `finalize`'s auto-merge arm | not added, by decision | reached only from a terminal-allow, which implies `run_done` already ran this fire, and a failed arm leaves a green reviewed PR for a human |
-| a human running the command by hand | yes | `fno-agent review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
+| a human running the command by hand | yes | `fno agent loop review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
 
 The table is asserted, not trusted. `crates/fno-agent/tests/review_coverage_paths.rs` runs the Rust-drivable rows. It holds the safe-direction row to its reason. When a new call site reads `review_coverage` without joining the table, it fails. The command's payload is pinned equal to `run_done`'s by `review_coverage_command.rs`, on the whole data object.
 
@@ -563,7 +563,7 @@ The local `review_coverage` event is the computed verdict. The `fno/review-cover
 
 ### Zero rows vs a frozen streak: the discriminator
 
-Two symptoms read alike and are different defects. Count `loop_check` rows in the worktree's own `.fno/events.jsonl`. Zero rows means the producer never ran there. A manual `fno-agent review-coverage --cwd <worktree>` settles it. Rows present with `consecutive_unchanged` frozen below `MUTE_PROBE_N` is the streak-gated shape the merge recompute makes moot.
+Two symptoms read alike and are different defects. Count `loop_check` rows in the worktree's own `.fno/events.jsonl`. Zero rows means the producer never ran there. A manual `fno agent loop review-coverage --cwd <worktree>` settles it. Rows present with `consecutive_unchanged` frozen below `MUTE_PROBE_N` is the streak-gated shape the merge recompute makes moot.
 
 ## The bot identity: posting a verdict GitHub can count
 

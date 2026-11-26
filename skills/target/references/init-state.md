@@ -122,7 +122,7 @@ fi
 - For plan input: set immediately from the input argument
 - For idea input: set after `/blueprint` creates the plan directory
 
-`fno-agent finalize` uses `plan_path` to stamp the plan frontmatter on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived. The durable record is the plan frontmatter stamp, ledger.json, git history, and any beastmode COMPLETION.md ledger.
+`fno agent loop finalize` uses `plan_path` to stamp the plan frontmatter on ship. Session-state files (HANDOFF.md, SUMMARY.md, STATE.md, target-state.md) are transient and are NOT archived. The durable record is the plan frontmatter stamp, ledger.json, git history, and any beastmode COMPLETION.md ledger.
 
 ## Step 3a: Cross-Project Is Retired (migration shim)
 
@@ -135,7 +135,7 @@ section in SKILL.md.
 
 `fno do target init` still persists `cross_project: false` by default (the
 manifest schema field is retained for back-compat with already-stamped
-legacy plans, whose graduation timing `fno-agent finalize` still honors).
+legacy plans, whose graduation timing `fno agent loop finalize` still honors).
 A legacy plan carrying `scope: cross-project` (or a `cross-project`
 subcommand) sets `cross_project: true`; that no longer forks the pipeline,
 it only triggers the SKILL.md deprecation warning + spawn-into-project

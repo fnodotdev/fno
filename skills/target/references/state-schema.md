@@ -29,7 +29,7 @@ session_id: 20260420T091434Z-56177-a1b2c3
   # CODEX_THREAD_ID owns the claim but is not reused here: one Codex
   # conversation can run several targets, and loop/finalize dedupe by session_id.
   # Stable for the lifetime of the session (across resume and external-loop restarts).
-  # Used by fno-agent loop-check as the primary session discriminator.
+  # Used by fno agent loop check as the primary session discriminator.
 
 created_at: "2026-06-05T03:00:00Z"   # ISO 8601 UTC, set at fresh init
 initial_head: "eb7505a7..."          # HEAD at init; `null` in a repo with no commits.
@@ -174,4 +174,4 @@ fno whoami status    # derives session status from latest termination event in e
 
 ## Back-compat
 
-Legacy manifests (those with a `status:` key) are recognized by `fno-agent loop-check` as pre-wedge and handled in allow-exit mode (a `loop_check_legacy_manifest` event is emitted). They are not migrated automatically.
+Legacy manifests (those with a `status:` key) are recognized by `fno agent loop check` as pre-wedge and handled in allow-exit mode (a `loop_check_legacy_manifest` event is emitted). They are not migrated automatically.

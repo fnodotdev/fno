@@ -12,7 +12,7 @@ A receipt is durable **evidence** of where a session left off, never write
 revalidated against the receipt before any successor write.
 
 - Schema + writer + validator: `crates/fno-agent/src/runtime/resume_receipt/` (the native module; the former `cli/src/fno/resume/receipt.py` leg is deleted).
-- CLI: `fno do resume receipt write|validate|show` (the front door execs the `fno-agent resume-receipt` door).
+- CLI: `fno do resume receipt write|validate|show` (the front door execs the `fno agent internal session resume-receipt` door).
 - Producer call site: `skills/target/scripts/handoff.sh` writes one at every
   handoff boundary, alongside the human-readable brief.
 - No resume database. Canonicalization reuses the scoreboard reducers
