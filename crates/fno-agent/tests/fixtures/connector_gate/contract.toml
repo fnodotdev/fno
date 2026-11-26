@@ -1,0 +1,32 @@
+# A synthetic contract shaped on the CA SOS sos_entity payload. Every name,
+# entity number and URL in the rows and sample beside it is invented.
+key = "entity_number"
+source_document_field = "source_url"
+code_version_field = "code_version"
+max_mismatches = 0
+min_sample = 30
+page_size = 25
+
+[[fields]]
+name = "operator_name"
+normalize = ["collapse_ws", "casefold"]
+
+[[fields]]
+name = "entity_type"
+normalize = ["casefold"]
+
+[[fields]]
+name = "status"
+normalize = ["casefold"]
+
+[[fields]]
+name = "formed_in"
+normalize = ["casefold"]
+
+[[fields]]
+name = "agent_for_service"
+normalize = ["collapse_ws"]
+
+[[fields]]
+name = "formation_date"
+normalize = ["date_iso"]
