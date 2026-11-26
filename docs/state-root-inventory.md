@@ -235,7 +235,6 @@ One file per session, per day, or per throttle window.
 | Entry | Writer | Lifetime |
 |---|---|---|
 | `state/latches/.context-nudge-*` | `hooks/context-nudge.sh` | pruned by the same hook at `-mtime +2` |
-| `state/latches/.spend-drift-no-node-<session-id>` | `hooks/spend-drift-monitor.sh` | written once per session when Node.js is absent, so the notice prints once. Pruned by the same hook at `-mtime +2` |
 | `state/latches/.worktree-create-<session-id>` | `hooks/worktree-setup.sh` (and its /speculate copy) | create-attempt counter, deleted by the same hook on a successful create, stale copies pruned at `-mtime +2` |
 | `.a2a-confirmed` | `agents/dispatch.py` | single file, overwritten |
 | `.active-backlog-nudge` | `crates/fno-agent/src/backlog/active_backlog.rs` (the keeper's publish touches it) | single file |
