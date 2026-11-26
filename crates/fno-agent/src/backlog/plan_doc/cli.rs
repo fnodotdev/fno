@@ -616,8 +616,8 @@ fn run_migrate_keys(rest: &[String]) -> i32 {
     0
 }
 
-/// The `--gate-records` walk: lift the gate-block keys into a `## Gate
-/// records` section, dry-run by default. The plain RENAME mode never runs
+/// The `--gate-records` walk: lift the record keys (`records::GATE_KEYS`)
+/// into the `## Gate records` fence, dry-run by default. The plain RENAME mode never runs
 /// here, and the vault migration itself waits for the post-merge task.
 fn run_migrate_gate_records(rest: &[String], apply: bool) -> i32 {
     let res = super::migrate::gate_records(&plans_dir_of(rest), apply);
