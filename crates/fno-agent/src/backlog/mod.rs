@@ -1115,7 +1115,12 @@ pub(crate) fn authoritative_sync_prepared(
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, version)?;
-    confirm_ids_landed_in(&transaction, &report.present_ids, &report.deleted_ids)?;
+    confirm_ids_landed_in(
+        &transaction,
+        &report.present_ids,
+        &report.deleted_ids,
+        Some(after.len()),
+    )?;
     transaction.commit()?;
     Ok(version.to_string())
 }
@@ -1216,7 +1221,7 @@ pub(crate) fn authoritative_sync_rebased(
     );
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, &version)?;
-    confirm_ids_landed_in(&transaction, &report.present_ids, &report.deleted_ids)?;
+    confirm_ids_landed_in(&transaction, &report.present_ids, &report.deleted_ids, None)?;
     transaction.commit()?;
     Ok(Some(version))
 }
@@ -1317,12 +1322,15 @@ pub(crate) struct WriteReport {
 
 /// The read-back the publish trusts, over the id sets this write touched and
 /// nothing else: every id it wrote must be in the typed table or the raw
-/// carry, and every id it deleted must be in neither. A table total says
-/// nothing about this write, because a concurrent add moves it with no loss.
+/// carry, and every id it deleted must be in neither. The total is only a
+/// floor: a concurrent add raises it with no loss, but a total below the
+/// rows this write meant to leave behind means an untouched row was lost.
+/// `floor` is `None` for a rebased write, which sees only its own rows.
 fn confirm_ids_landed_in(
     connection: &Connection,
     written: &[String],
     deleted: &[String],
+    floor: Option<usize>,
 ) -> Result<(), StoreDbError> {
     const SQLITE_BIND_BATCH: usize = 900;
     fn stored_among(
@@ -1355,11 +1363,17 @@ fn confirm_ids_landed_in(
         .filter(|id| !stored.contains(*id))
         .collect();
     let lingering: Vec<String> = stored_among(connection, deleted)?.into_iter().collect();
-    if missing.is_empty() && lingering.is_empty() {
+    let stored_total: i64 = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM nodes_raw)",
+        [],
+        |row| row.get(0),
+    )?;
+    let below_floor = floor.is_some_and(|floor| stored_total < floor as i64);
+    if missing.is_empty() && lingering.is_empty() && !below_floor {
         return Ok(());
     }
     Err(StoreDbError::Refused(format!(
-        "publish read-back mismatch: wrote {} ids, deleted {}; missing ids {missing:?}; undeleted ids {lingering:?}",
+        "publish read-back mismatch: wrote {} ids, deleted {}; stored {stored_total}, floor {floor:?}; missing ids {missing:?}; undeleted ids {lingering:?}",
         written.len(),
         deleted.len()
     )))
@@ -2512,18 +2526,19 @@ mod tests {
         }
     }
 
-    /// The other arm: a written id absent from both tables, or a deleted id
-    /// still present, always fails the read-back and names the id.
+    /// The other arm: a written id absent from both tables, a deleted id still
+    /// present, or an untouched row lost under the floor always fails the
+    /// read-back.
     #[test]
-    fn the_readback_refuses_a_missing_or_undeleted_id() {
+    fn the_readback_refuses_a_missing_undeleted_or_lost_untouched_id() {
         let (_dir, graph) = seeded_sqlite_fixture();
         let connection = open(&graph).unwrap();
 
-        let missing = confirm_ids_landed_in(&connection, &["ab-ghost".to_string()], &[])
+        let missing = confirm_ids_landed_in(&connection, &["ab-ghost".to_string()], &[], None)
             .expect_err("a written id that is not stored must fail");
         assert!(missing.to_string().contains("ab-ghost"), "{missing}");
 
-        let undeleted = confirm_ids_landed_in(&connection, &[], &["ab-one".to_string()])
+        let undeleted = confirm_ids_landed_in(&connection, &[], &["ab-one".to_string()], None)
             .expect_err("a deleted id that is still stored must fail");
         assert!(undeleted.to_string().contains("ab-one"), "{undeleted}");
 
@@ -2531,8 +2546,17 @@ mod tests {
             &connection,
             &["ab-one".to_string()],
             &["ab-ghost".to_string()],
+            None,
         )
         .expect("present written id and absent deleted id pass");
+
+        // A write that lost an untouched row: the store holds 1 row but the
+        // publish meant to leave 2. The total is only a floor, so it fails.
+        delete_aggregate(&connection, "ab-two").unwrap();
+        let lost = confirm_ids_landed_in(&connection, &[], &[], Some(2))
+            .expect_err("a total below the rows the write meant to keep must fail");
+        assert!(lost.to_string().contains("floor"), "{lost}");
+        confirm_ids_landed_in(&connection, &[], &[], Some(1)).expect("a total at the floor passes");
     }
 
     // -- single-row mutations --------------------------------------------
