@@ -1040,7 +1040,7 @@ fn claude_path_for(
 
 /// A session id or an id prefix: 8+ hex digits and dashes. The claude
 /// store matches a prefix only when it names one session.
-fn is_session_id_prefix(handle: &str) -> bool {
+pub(crate) fn is_session_id_prefix(handle: &str) -> bool {
     handle.len() >= 8
         && handle.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
         && handle.chars().filter(char::is_ascii_hexdigit).count() >= 8

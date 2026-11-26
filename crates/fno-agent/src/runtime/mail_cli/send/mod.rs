@@ -1480,7 +1480,8 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // The rule door: one `door:send` event per addressed send, the recipient
-    // the subject. A block exits 3 with the reasons on stderr; a warn prints
+    // the subject, plus `by-name:<recipient>` when the recipient is not
+    // session-id-shaped, so a law about addressing by name can fire. A block exits 3 with the reasons on stderr; a warn prints
     // and the send proceeds. An unread source stays silent at THIS door: the
     // send surface is byte-pinned by the dual-implementation parity goldens
     // (tests/capture/mail_send_capture.py), and a store-less CI env would
@@ -1489,10 +1490,7 @@ pub fn run(args: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let ev = crate::rules::Event {
         kind: "door:send".to_string(),
-        subjects: name
-            .as_deref()
-            .map(|r| vec![r.to_string()])
-            .unwrap_or_default(),
+        subjects: name.as_deref().map(send_subjects).unwrap_or_default(),
         project: crate::law_match::resolve_project(
             Some(&cwd),
             &crate::law_match::settings_sources(),
@@ -1759,6 +1757,28 @@ pub fn run(args: &[String]) -> i32 {
             "usage: fno agent mail send <session-id> <message>  (or --to-project <project> <message>)"
         );
         return 2;
+    }
+}
+
+/// The `door:send` subjects for one recipient: the recipient as typed, plus
+/// `by-name:<recipient>` when it is not session-id-shaped (a uuid or an
+/// 8-hex fno id).
+fn send_subjects(recipient: &str) -> Vec<String> {
+    let mut out = vec![recipient.to_string()];
+    if !crate::session_truth::is_session_id_prefix(recipient) {
+        out.push(format!("by-name:{recipient}"));
+    }
+    out
+}
+
+#[cfg(test)]
+mod send_subjects_tests {
+    #[test]
+    fn a_name_recipient_carries_a_by_name_subject_and_an_id_does_not() {
+        assert_eq!(super::send_subjects("nova"), ["nova", "by-name:nova"]);
+        let uuid = "0e0b4dc7-e6b9-454a-b0dc-ebc0a2dd33a6";
+        assert_eq!(super::send_subjects(uuid), [uuid]);
+        assert_eq!(super::send_subjects("a8a39a7a"), ["a8a39a7a"]);
     }
 }
 
