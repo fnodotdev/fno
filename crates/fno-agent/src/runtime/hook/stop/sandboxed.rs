@@ -53,7 +53,15 @@ pub(super) fn sandboxed_stop(session_id: &str, message: Option<&str>) -> i32 {
     match serde_json::from_value::<Decided>(answer) {
         Ok(d) => {
             eprint!("{}", d.stderr);
-            print!("{}", d.stdout);
+            // Under the claude front a block rides stdout JSON at exit 0: the
+            // front skips a nonzero leg, so an exit-2 block would allow.
+            if d.exit == 2 && crate::hook::capturing() {
+                return super::emit_block_for_harness(session_id, d.stderr.trim());
+            }
+            let out = d.stdout.trim_end_matches('\n');
+            if !out.is_empty() {
+                crate::hook::emit_line(out);
+            }
             d.exit
         }
         Err(e) => super::emit_block_for_harness(
