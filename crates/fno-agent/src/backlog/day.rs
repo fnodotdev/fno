@@ -690,6 +690,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
                     "project",
                     "status",
                     "completed_at",
+                    "merge_status",
                     "sessions",
                 ]
                 .into_iter()
@@ -731,7 +732,17 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
             Err(_) => (None, "unreadable".to_string()),
         }
     };
-    let kind_is_away = kind == "away";
+    let asks = if kind == "away" {
+        match super::outstanding::read_open_questions(&questions_path) {
+            Ok(asks) => asks,
+            Err(error) => {
+                eprintln!("fno-agent day: {error}");
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let input = DayInputs {
         kind,
         now,
@@ -749,11 +760,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         questions_state,
         questions_path: questions_path.display().to_string(),
         since,
-        asks: if kind_is_away {
-            super::outstanding::read_open_questions(&questions_path).unwrap_or_default()
-        } else {
-            Vec::new()
-        },
+        asks,
     };
     match fold_day(&input) {
         Ok(payload) => {

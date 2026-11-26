@@ -39,7 +39,7 @@ pub fn fold_away(
         if in_window(text(entry, "completed_at"), from, to) {
             let pr = entry.get("pr_number").and_then(Value::as_i64);
             closed.push(json!({"node": id, "title": title, "project": text(entry, "project"), "pr_number": pr}));
-            if let Some(pr) = pr {
+            if let Some(pr) = pr.filter(|_| text(entry, "merge_status") == Some("merged")) {
                 merged.push(json!({"pr_number": pr, "pr_url": text(entry, "pr_url"), "node": id, "title": title}));
             }
         }
@@ -164,7 +164,7 @@ mod tests {
     fn report_keeps_window_rows_and_the_exact_ask() {
         let at = |raw: &str| DateTime::parse_from_rfc3339(raw).unwrap();
         let entries = vec![
-            json!({"id":"x-1","title":"in","completed_at":"2026-11-26T03:00:00Z","pr_number":7,"pr_url":"u"}),
+            json!({"id":"x-1","title":"in","completed_at":"2026-11-26T03:00:00Z","pr_number":7,"pr_url":"u","merge_status":"merged"}),
             json!({"id":"x-2","title":"old","completed_at":"2026-11-20T03:00:00Z","pr_number":6}),
             json!({"id":"x-3","title":"begun","status":"in_progress","sessions":[{"started_at":"2026-11-26T04:00:00Z"}]}),
         ];
