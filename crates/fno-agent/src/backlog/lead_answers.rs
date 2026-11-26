@@ -607,8 +607,22 @@ struct CachedRecommendation {
     option: Option<u64>,
 }
 
+/// Whether a page's frozen team shares a node with the check-in's scope. A
+/// lead promoted to a wider scope keeps the team string its open pages were
+/// written under, so an exact match hides those questions.
+fn team_overlaps(team: &str, scope: &str) -> bool {
+    let members: BTreeSet<&str> = scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    team.split(',')
+        .map(str::trim)
+        .any(|node| members.contains(node))
+}
+
 /// The pure fold: open pages whose question_id the stem names and whose
-/// team equals this check-in's canonical scope, oldest first. Rows carry
+/// team shares a node with this check-in's scope, oldest first. Rows carry
 /// what the render needs to name the decide command. Each row joins the
 /// arm's cached item by id: `quiet` is `snoozed` or `deadline` while the
 /// question waits on either, and `overdue` names what a past deadline means
@@ -620,7 +634,6 @@ pub(crate) fn held_from_pages(
     items: &[CachedItem],
     now: i64,
 ) -> Vec<Value> {
-    let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
     for (stem, text) in pages {
         let Some((front, _)) = crate::attention_file::parse_page(text) else {
@@ -632,7 +645,7 @@ pub(crate) fn held_from_pages(
         if !crate::attention_arm::stem_names_id(stem, &front.question_id) {
             continue;
         }
-        if crate::territory::canonical_scope(&front.team) != canon {
+        if !team_overlaps(&front.team, scope) {
             continue;
         }
         let epoch = chrono::DateTime::parse_from_rfc3339(&front.asked_at)
@@ -1107,5 +1120,33 @@ mod tests {
         );
         let failed = quiet_line(&worker, || Tail::Unreadable("transcript unreadable".into()));
         assert_eq!(failed, "READER FAILED transcript unreadable");
+    }
+
+    fn open_page(question_id: &str, team: &str) -> (String, String) {
+        let text = format!(
+            "---\nquestion_id: {question_id}\nstatus: open\nasked_at: 2026-10-20T15:32:09Z\nteam: {team}\nnode: x-0c2a\n---\nbody\n"
+        );
+        (format!("{question_id}-ask"), text)
+    }
+
+    /// A lead re-scoped with x-d02f added still sees the questions its pages
+    /// were written under, and a lead whose scope shares no node does not.
+    #[test]
+    fn a_re_scoped_lead_still_sees_its_open_questions() {
+        let old_team = "x-0c2a,x-8b8d,x-b720,x-c530,x-d742,x-e8fd,x-eff0,x-f1d3";
+        let pages = vec![
+            open_page("q-63c90fdc", old_team),
+            open_page("q-499a7db0", old_team),
+            open_page("q-other01", "x-zz01,x-zz02"),
+        ];
+        let widened = format!("{old_team},x-d02f");
+        let rows = held_from_pages(&pages, &widened, &[], 0);
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
+        let other = held_from_pages(&pages, "x-zz01", &[], 0);
+        assert_eq!(other.len(), 1, "{other:?}");
     }
 }
