@@ -17,6 +17,7 @@ fn two_rows_sharing_a_portal_key_resolve_by_the_seat_attach_argv() {
     first.mux = None;
     first.session_id = Some("lenore-a".into());
     first.attach_id = Some("aaaa1111".into());
+    first.predecessor_session_ids = vec!["lenore".into()];
     let mut second = first.clone();
     second.session_id = Some("lenore-b".into());
     second.attach_id = Some("bbbb2222".into());
