@@ -369,14 +369,12 @@ mod tests {
                 "codex carries a route on the headless lane only; got substrate 'thread'. Pass --as headless"
             ))
         );
-        // An anthropic-only vendor with no record refuses on codex by name.
-        assert_eq!(
+        // An anthropic-only vendor refuses on codex headless: unconfigured,
+        // or a claude-lane record, depending on the host's config stack.
+        assert!(matches!(
             seam(Some("deepseek/deepseek-chat"), "codex", "headless"),
-            RouteSeam::Refuse(refused(
-                "deepseek/deepseek-chat",
-                "provider \"deepseek\" is not configured"
-            ))
-        );
+            RouteSeam::Refuse(l) if l.starts_with("--route 'deepseek/deepseek-chat' refused (provider \"deepseek\"")
+        ));
         assert_eq!(
             seam(Some("zai/glm-5.3"), "claude", "cloud"),
             RouteSeam::Refuse(refused("zai/glm-5.3", "the cloud lane carries no route"))

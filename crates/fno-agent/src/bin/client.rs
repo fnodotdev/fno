@@ -2472,7 +2472,7 @@ fn launch_codex_headless(call: &SpawnCall<'_>) -> Option<i32> {
         false,
         call.timeout,
         None,
-        None,
+        call.route.and_then(|r| r.effort.as_deref()),
         None,
         call.harness_args,
         call.route.and_then(|r| r.codex.as_ref()),
