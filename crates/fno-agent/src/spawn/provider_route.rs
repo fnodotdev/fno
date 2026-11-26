@@ -238,11 +238,29 @@ impl RawRecord {
 /// The built-in vendor presets from the canonical reach TOML: every
 /// `[vendor.*]` with `builtin = true`, its `anthropic` table read as
 /// `base_url` / `api_key_env` / `api_key_file`.
+fn reach_table() -> &'static toml::Table {
+    static REACH: OnceLock<toml::Table> = OnceLock::new();
+    REACH.get_or_init(|| {
+        toml::from_str(include_str!("../model_reach.toml")).expect("model_reach.toml parses")
+    })
+}
+
+/// One vendor's `protocol` endpoint table in the canonical reach TOML
+/// (`base_url`, `key_env`, `key_file`), and whether the vendor is builtin.
+pub(crate) fn reach_endpoint(vendor: &str, protocol: &str) -> Option<(&'static toml::Table, bool)> {
+    let table = reach_table().get("vendor")?.get(vendor)?;
+    let endpoint = table.get(protocol)?.as_table()?;
+    let builtin = table
+        .get("builtin")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    Some((endpoint, builtin))
+}
+
 fn builtin_providers() -> &'static BTreeMap<String, RawRecord> {
     static BUILTIN: OnceLock<BTreeMap<String, RawRecord>> = OnceLock::new();
     BUILTIN.get_or_init(|| {
-        let parsed: toml::Table =
-            toml::from_str(include_str!("../model_reach.toml")).expect("model_reach.toml parses");
+        let parsed = reach_table();
         let mut out = BTreeMap::new();
         let Some(vendor) = parsed.get("vendor").and_then(toml::Value::as_table) else {
             return out;
