@@ -16,6 +16,8 @@ This page answers four questions. Which cross-tree guards mark a real second imp
 
 **The inside-leg completion reader.** Single owner, generated artifact. `crates/fno-agent/src/registry_read.rs` owns `inside_leg_state`, including state vocabulary and TTL. The reaper and foreground capacity readers consume it. The sideline consumes the generated `crates/fno/src/registry_read.rs` copy. `generated-artifacts.tsv` records the projection and build command. The generated-artifact freshness check guards the copy against its source.
 
+**The caller-identity core.** Single owner, generated artifact. Three fno-agent modules own it. `crates/fno-agent/src/spawn/self_identity.rs` owns `resolve_self_identity` and the ancestry walk. `crates/fno-agent/src/eval/proc_table.rs` owns the process table. `crates/fno-agent/src/runtime/identity_markers.rs` owns the harness marker tables and the fno stamp reads. fno compiles the generated copies at `crates/fno/src/self_identity.rs`, `proc_table.rs` and `identity_markers.rs`, so the front door resolves the caller's session in process. `generated-artifacts.tsv` records each copy. The fno caller passes the registry path, because fno has no `AgentsHome`. The front-door join reads the copied marker table, so no hand mirror of it remains. When fno links fno-agent, the copies go away.
+
 **The tick timestamp parser.** Single owner. `event_store.rs` owns `parse_rfc3339_ms`. The indexed writer and incremental tick fold share it, so both retain the same millisecond maxima.
 
 ## The discriminator
