@@ -61,9 +61,9 @@ agents hq refresh-canon
 agents hq roles
 agents hq verdict
 agents internal
-agents internal discovered-json
-agents internal registry-json
-agents internal target-family
+agents internal session discovered-json
+agents internal registry json
+agents internal target family
 agents loop check
 agents loop consult
 agents loop control

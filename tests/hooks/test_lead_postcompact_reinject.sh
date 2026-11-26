@@ -29,7 +29,7 @@ fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 TMP="$(mktemp -d -t lead-reinject-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
-# Stub `fno` answering `agents internal registry-json` from a per-case fixture file, and
+# Stub `fno` answering `agents internal registry json` from a per-case fixture file, and
 # `agents lead faq list --scope X` from a second fixture keyed by scope, so no
 # real registry, daemon, or FAQ store is involved. $LEAD_REG_FIXTURE and
 # $LEAD_FAQ_FIXTURE select the payloads; the FAQ fixture is empty (no output)
@@ -38,7 +38,7 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
 [ "${1:-}" = agent ] && set -- agents "${@:2}"
-if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
+if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry" ] && [ "$4" = "json" ]; then
   cat "$LEAD_REG_FIXTURE"
 elif [ "$1" = "agents" ] && [ "$2" = "hq" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then
   cat "$LEAD_FAQ_FIXTURE" 2>/dev/null || true

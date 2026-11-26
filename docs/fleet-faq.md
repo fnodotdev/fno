@@ -363,7 +363,7 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 **Answer.** The reader can omit the field. A null then means the reader did not select it, not that the row has no value. Read the same fact through a second reader before you act on it.
 
-**Specimen.** `fno agent internal registry-json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agent session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
+**Specimen.** `fno agent internal registry json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agent session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
 
 *Graduates to:* a projection that drops the key for any field it does not select, so a null can only ever mean no value.
 

@@ -69,7 +69,7 @@ Drop `--print` to have spawn run the same line. If you hold the node's claim, do
 | Read your own role | `fno whoami` (prints a `role:` line when your row holds one) |
 | Message a live teammate | `fno agent mail send <handle> "<msg>" --from-self` |
 | Steer a running teammate | `fno agent mail ask <name> "<instruction>"` pauses or redirects it WITHOUT ending it. `fno agent session stop` is teardown, never steering: on claude it ends the session and the worker reads Done |
-| Resolve a handle you lost | `fno agent internal discovered-json` · `fno agent fleet top` |
+| Resolve a handle you lost | `fno agent internal session discovered-json` · `fno agent fleet top` |
 | Is it alive? | `fno agent session peek <handle>` |
 | Who is actually running | `fno agent fleet top` |
 | The loop-wedge fold | `fno agent fleet needs --json` (review_wedged / budget_stop; NOT pane completion) |

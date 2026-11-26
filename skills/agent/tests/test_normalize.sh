@@ -90,7 +90,7 @@ EOF
 chmod +x "$_de43_stub/fno"
 run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 
-# x-8151: family membership is an ASK now (fno agent internal target-family), fail-closed
+# x-8151: family membership is an ASK now (fno agent internal target family), fail-closed
 # when the ask fails - the exit-1 stub above would refuse every run_nofno
 # classify. FAMILY_RESOLVER is the documented test injection (normalize.sh
 # consults it before fno), so the "no host fno" property holds: the stub
