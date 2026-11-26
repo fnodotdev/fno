@@ -1392,7 +1392,7 @@ mod done_probe_tests {
             "done_probes:\n  - \"fno agent mail list --since 24h | grep -q groom\"\n  - 'echo ok'",
         );
         assert_eq!(probes_of(&doc).len(), 2);
-        assert_eq!(probes_of(&doc)[1], "echo ok");
+        assert_eq!(probes_of(&doc).last().map(String::as_str), Some("echo ok"));
     }
 
     #[test]

@@ -252,8 +252,10 @@ pub fn set_blocks(body: &str, blocks: &[(&str, String)]) -> Result<String, Recor
             inner.join("\n")
         ));
     };
-    let mut inner: Vec<String> = lines[open + 1..close]
+    let mut inner: Vec<String> = lines
         .iter()
+        .skip(open + 1)
+        .take(close - open - 1)
         .map(|l| l.to_string())
         .collect();
     for (key, block) in blocks {
@@ -261,10 +263,10 @@ pub fn set_blocks(body: &str, blocks: &[(&str, String)]) -> Result<String, Recor
         match inner.iter().position(|l| top_key(l) == Some(*key)) {
             Some(start) => {
                 let mut end = start + 1;
-                while end < inner.len() && top_key(&inner[end]).is_none() {
+                while inner.get(end).is_some_and(|l| top_key(l).is_none()) {
                     end += 1;
                 }
-                while end > start + 1 && inner[end - 1].trim().is_empty() {
+                while end > start + 1 && inner.get(end - 1).is_some_and(|l| l.trim().is_empty()) {
                     end -= 1;
                 }
                 inner.splice(start..end, new_lines);
@@ -272,9 +274,9 @@ pub fn set_blocks(body: &str, blocks: &[(&str, String)]) -> Result<String, Recor
             None => inner.extend(new_lines),
         }
     }
-    let mut out: Vec<String> = lines[..=open].iter().map(|l| l.to_string()).collect();
+    let mut out: Vec<String> = lines.iter().take(open + 1).map(|l| l.to_string()).collect();
     out.extend(inner);
-    out.extend(lines[close..].iter().map(|l| l.to_string()));
+    out.extend(lines.iter().skip(close).map(|l| l.to_string()));
     let mut text = out.join("\n");
     if body.ends_with('\n') {
         text.push('\n');
@@ -356,7 +358,13 @@ mod tests {
             "---\nstatus: ready\n---\n\n# T\n\n## Gate records\n\n```yaml\n{keys}\n```\n"
         ));
         assert_eq!(fm_form, body_form);
-        assert_eq!(body_form["code_index"]["main_sha"], "ee5e0754ad");
+        let lifted = Value::Object(body_form.clone());
+        assert_eq!(
+            lifted
+                .pointer("/code_index/main_sha")
+                .and_then(Value::as_str),
+            Some("ee5e0754ad")
+        );
         // set_blocks replaces one block in place and keeps its neighbours.
         let body = format!("# T\n\n## Gate records\n\n```yaml\n{keys}\n```\n");
         let urls = list_block("urls", &["u1".into(), "u2".into()]);

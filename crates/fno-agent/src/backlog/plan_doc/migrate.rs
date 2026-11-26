@@ -300,6 +300,89 @@ fn migrate_key(line: &str) -> Option<String> {
         .map(|c| c[2].to_string())
 }
 
+/// Parse back: the cut text must yield the same YAML values the frontmatter
+/// carried, or the file needs a human. The error names why, for the note.
+fn cut_round_trips(fm: &str, cut_text: &str) -> Result<(), RoundTrip> {
+    let fm_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(fm)
+        .map_err(|e| RoundTrip(format!("frontmatter does not parse: {e}")))?;
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(cut_text)
+        .map_err(|e| RoundTrip(format!("the cut does not parse: {e}")))?;
+    let parsed_map = parsed
+        .as_mapping()
+        .ok_or_else(|| RoundTrip("the cut is not a YAML mapping".into()))?;
+    for (k, v) in parsed_map {
+        let key = k.as_str().unwrap_or_default();
+        let original = fm_value
+            .get(key)
+            .cloned()
+            .unwrap_or(serde_yaml_ng::Value::Null);
+        if super::doc::yaml_to_json(v) != super::doc::yaml_to_json(&original) {
+            return Err(RoundTrip(format!("{key} cut does not round-trip")));
+        }
+    }
+    Ok(())
+}
+
+/// Why a cut failed its parse-back, worded for the review note.
+struct RoundTrip(String);
+
+impl std::fmt::Display for RoundTrip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Place the cut into the record fence (splicing into an existing one), keep
+/// the newest url as a scalar `pr_url` for the Obsidian PR column, and prove
+/// the migrated file lifts clean: no both-places, no stranger key.
+fn place_cut(
+    fm: &str,
+    mut keep: Vec<String>,
+    body: &str,
+    has_section: bool,
+    per_key: &[(&str, String)],
+    cut_text: &str,
+    notes: &mut Vec<String>,
+) -> Option<String> {
+    let new_body = if has_section {
+        match super::records::set_blocks(body, per_key) {
+            Ok(b) => b,
+            Err(e) => {
+                notes.push(format!("kept ({e}) - review"));
+                return None;
+            }
+        }
+    } else {
+        format!(
+            "{}\n## Gate records\n\n```yaml\n{}\n```\n",
+            body.trim_end_matches('\n'),
+            cut_text
+        )
+    };
+    if !top_level_keys(fm).contains("pr_url") {
+        let urls = super::records::body_list(&new_body, "urls").ok().flatten();
+        if let Some(last) = urls.as_ref().and_then(|u| u.last()) {
+            keep.push(format!("pr_url: {}", yaml_scalar(last)));
+        }
+    }
+    let new_text = format!("---\n{}\n---{}", keep.join("\n"), new_body);
+    match super::doc::load_plan_text(&new_text).map(|d| d.validation_map().map(|_| ())) {
+        Ok(Ok(())) => Some(new_text),
+        Ok(Err(e)) => {
+            notes.push(format!(
+                "kept (the migrated file does not lift: {e}) - review"
+            ));
+            None
+        }
+        Err(e) => {
+            notes.push(format!(
+                "kept (the migrated file does not parse: {e}) - review"
+            ));
+            None
+        }
+    }
+}
+
 /// One file's gate-records lift: (new_text, notes). new_text is None when
 /// nothing changed; a review note names why the file stays untouched.
 pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
@@ -363,81 +446,23 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
         return (None, notes);
     }
 
-    // Parse back: the cut text must yield the same YAML values the
-    // frontmatter carried, or the file needs a human.
-    let fm_value: serde_yaml_ng::Value = match serde_yaml_ng::from_str(fm) {
-        Ok(v) => v,
-        Err(e) => {
-            notes.push(format!("kept (frontmatter does not parse: {e}) - review"));
-            return (None, notes);
-        }
-    };
     let cut_text = cut.join("\n");
-    let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&cut_text) {
-        Ok(v) => v,
-        Err(e) => {
-            notes.push(format!("kept (the cut does not parse: {e}) - review"));
-            return (None, notes);
-        }
-    };
-    let parsed_map = match parsed.as_mapping() {
-        Some(m) => m,
-        None => {
-            notes.push("kept (the cut is not a YAML mapping) - review".to_string());
-            return (None, notes);
-        }
-    };
-    for (k, v) in parsed_map {
-        let key = k.as_str().unwrap_or_default();
-        let original = fm_value
-            .get(key)
-            .cloned()
-            .unwrap_or(serde_yaml_ng::Value::Null);
-        if super::doc::yaml_to_json(v) != super::doc::yaml_to_json(&original) {
-            notes.push(format!("kept ({key} cut does not round-trip) - review"));
-            return (None, notes);
-        }
+    if let Err(why) = cut_round_trips(fm, &cut_text) {
+        notes.push(format!("kept ({why}) - review"));
+        return (None, notes);
     }
 
-    let new_body = if existing.is_some() {
-        match super::records::set_blocks(body, &per_key) {
-            Ok(b) => b,
-            Err(e) => {
-                notes.push(format!("kept ({e}) - review"));
-                return (None, notes);
-            }
-        }
-    } else {
-        format!(
-            "{}\n## Gate records\n\n```yaml\n{}\n```\n",
-            body.trim_end_matches('\n'),
-            cut_text
-        )
+    let Some(new_text) = place_cut(
+        fm,
+        keep,
+        body,
+        existing.is_some(),
+        &per_key,
+        &cut_text,
+        &mut notes,
+    ) else {
+        return (None, notes);
     };
-    // The Obsidian PR column keeps one scalar link: the newest url.
-    if !top_level_keys(fm).contains("pr_url") {
-        let urls = super::records::body_list(&new_body, "urls").ok().flatten();
-        if let Some(last) = urls.as_ref().and_then(|u| u.last()) {
-            keep.push(format!("pr_url: {}", yaml_scalar(last)));
-        }
-    }
-    let new_text = format!("---\n{}\n---{}", keep.join("\n"), new_body);
-    // The migrated file must read back clean: no both-places, no stranger.
-    match super::doc::load_plan_text(&new_text).map(|d| d.validation_map().map(|_| ())) {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            notes.push(format!(
-                "kept (the migrated file does not lift: {e}) - review"
-            ));
-            return (None, notes);
-        }
-        Err(e) => {
-            notes.push(format!(
-                "kept (the migrated file does not parse: {e}) - review"
-            ));
-            return (None, notes);
-        }
-    }
     for key in GATE_BLOCK_KEYS {
         if cut.iter().any(|l| migrate_key(l).as_deref() == Some(*key)) {
             notes.push(format!("{key} -> ## Gate records"));
