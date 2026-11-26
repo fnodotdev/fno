@@ -1372,8 +1372,20 @@ fn collect_readings(
     let h_parked = spawn_reading(beat_started, "parked", || r_parked());
     let h_prompt_parked = spawn_reading(beat_started, "prompt_parked", || prompt_parked::reading());
     let h_review_board = spawn_reading(beat_started, "review_board", {
-        let (rows, scope) = (rows.clone(), scope.clone());
-        move || review_board::reading(&rows, &scope)
+        let (rows, scope, folded) = (rows.clone(), scope.clone(), folded.clone());
+        move || {
+            let members: std::collections::HashSet<String> = folded
+                .as_ref()
+                .ok()
+                .and_then(|f| f.get("fold"))
+                .map(|f| de::parse::<de::FoldView>(f))
+                .unwrap_or_default()
+                .nodes
+                .iter()
+                .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(str::to_string))
+                .collect();
+            review_board::reading(&rows, &scope, &members)
+        }
     });
     // The two input pseudos spawn with the leaves and await at their declared
     // positions: their graph scans overlap the leaf readers instead of
@@ -3690,14 +3702,20 @@ mod tests {
         let note = |ts: &str, text: &str| json!({"ts": ts, "text": text});
         let boards = vec![
             json!({"id": "x-epic", "progress_notes": [note("2026-11-01", "Review board: old")]}),
-            json!({"id": "x-kid", "parent": "x-epic", "progress_notes": [note("2026-11-02", "Review board: new")]}),
+            json!({"id": "x-kid", "progress_notes": [note("2026-11-02", "Review board: new")]}),
         ];
-        let line = |scope| {
-            let value = review_board::reading(&boards, scope).unwrap();
+        let line = |scope, kids: &[&str]| {
+            let members = kids.iter().map(|k| k.to_string()).collect();
+            let value = review_board::reading(&boards, scope, &members).unwrap();
             review_board::lines(&[Reading::took("review_board", value)])
         };
-        assert_eq!(line("x-epic"), vec!["review_board: new".to_string()]);
-        assert!(line("x-none")[0].starts_with("review_board: none: make one from the Gus or Lara"));
+        assert_eq!(
+            line("x-epic", &["x-kid"]),
+            vec!["review_board: new".to_string()]
+        );
+        assert!(
+            line("x-none", &[])[0].starts_with("review_board: none: make one from the Gus or Lara")
+        );
     }
 
     /// One escalation note's frontmatter plus stub sections.

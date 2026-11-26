@@ -8,16 +8,20 @@ use serde_json::{json, Value};
 
 const PREFIX: &str = "Review board:";
 
-/// The newest `Review board:` slug on the scope node or a direct child of it.
-/// `Null` when no note names one.
-pub(super) fn reading(rows: &[Value], scope: &str) -> Result<Value, String> {
+/// The newest `Review board:` slug on the scope node or any node the scope
+/// fold holds. `Null` when no note names one.
+pub(super) fn reading(
+    rows: &[Value],
+    scope: &str,
+    members: &std::collections::HashSet<String>,
+) -> Result<Value, String> {
     let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
     let mut newest: Option<(String, String)> = None;
     for row in rows {
-        let on_scope = [text(row, "id"), text(row, "slug"), text(row, "parent")]
+        let on_scope = [text(row, "id"), text(row, "slug")]
             .iter()
             .flatten()
-            .any(|v| v == scope);
+            .any(|v| v == scope || members.contains(v));
         if !on_scope {
             continue;
         }
