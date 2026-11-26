@@ -2976,10 +2976,9 @@ mod tests {
         lane.tick(true, Utc::now());
         assert!(lane.spawns.borrow().is_empty(), "no doomed launch");
         let post = lane.posts.borrow().last().cloned().unwrap();
-        assert!(post.starts_with("failure head lane refused"), "{post}");
         assert!(
-            post.contains("routing.models"),
-            "clearing hint kept: {post}"
+            post.contains("description=head lane refused, clear by declaring it in routing.models"),
+            "clearing hint leads the description: {post}"
         );
         assert!(post.contains("unknown lane 'no-such-lane'"), "{post}");
     }
