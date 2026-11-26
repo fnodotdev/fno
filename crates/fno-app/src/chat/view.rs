@@ -376,7 +376,7 @@ fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, boo
             div()
                 .max_w(px(536.0))
                 .min_w_0()
-                .flex_shrink()
+                .flex_shrink_1()
                 .child(text)
                 .into_any_element()
         }))

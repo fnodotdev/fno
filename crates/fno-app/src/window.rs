@@ -15,7 +15,7 @@ use gpui::{
     ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
+    Point, ScrollEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
     WindowBounds, WindowOptions,
 };
 
@@ -2780,7 +2780,7 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let Some(at) = self.composer_point(ev.position, window) else {
             return;
         };
@@ -2822,7 +2822,7 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         let Some(at) = launch::caret_at(self, ev.position, window) else {
             return;
         };
@@ -3674,7 +3674,7 @@ impl Root {
     }
 
     fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus);
+        window.focus(&self.focus, cx);
         if self.rename.as_ref().is_some_and(|r| r.inline) {
             self.rename = None;
             cx.notify();
@@ -3776,7 +3776,7 @@ impl Root {
         );
     }
 
-    fn on_wheel(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_wheel(&mut self, ev: &ScrollEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         let (x, y) = self.local(ev.position);
         let Some(hit) = mouse::hit(x, y, self.cell(), &self.grids()) else {
             return;
@@ -3812,7 +3812,7 @@ impl Root {
             .w_full()
             .overflow_hidden()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
-            .on_scroll_wheel(cx.listener(Self::on_wheel))
+            .on_scroll(cx.listener(Self::on_wheel))
             .child(
                 canvas(
                     move |bounds, _, _| area.set(bounds),
@@ -4355,7 +4355,7 @@ impl Render for Root {
             .on_action(cx.listener(Self::toggle_settings))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
-            .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
+            .on_any_mouse_down(cx.listener(|root, _, window, cx| window.focus(&root.focus, cx)))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
             .relative()
@@ -4622,7 +4622,7 @@ pub fn run(
                         true
                     });
                     root.first_run = first_run;
-                    window.focus(&root.focus);
+                    window.focus(&root.focus, cx);
                     root.start_update(cx);
                     root
                 })
@@ -4633,7 +4633,7 @@ pub fn run(
             cx.quit();
             return;
         }
-        cx.on_window_closed(|cx| cx.quit()).detach();
+        cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
 }
