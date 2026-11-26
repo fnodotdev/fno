@@ -21,16 +21,9 @@ use serde_json::{json, Value};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-/// The bus kinds that are bookkeeping about other messages, never inbox
-/// content (`bus.log.CONTROL_KINDS`).
-pub(crate) const WITHDRAW_KIND: &str = "withdraw";
-const LANDED_KIND: &str = "landed";
-/// Delivery states meaning the bytes already reached the recipient
-/// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand
-/// the recipient a second copy. `cross-session` is the historical backfill
-/// shape: the receiver transcript named in its provenance is the proof the
-/// bytes landed, so it is archive, never pending mail.
-const AUDIT_ONLY_DELIVERIES: &[&str] = &["hosted", "typed", "cross-session"];
+pub(crate) use crate::bus_read::{
+    deliverable, landed_ids, read_cursor_file, withdrawn_ids, WITHDRAW_KIND,
+};
 
 pub struct DrainArgs {
     pub bus_dir: PathBuf,
@@ -184,121 +177,6 @@ pub(crate) fn is_control(body: &str) -> bool {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .is_some_and(|first| first.to_lowercase().starts_with("control:"))
-}
-
-pub(crate) fn deliverable(m: &Value) -> bool {
-    let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
-    if kind == WITHDRAW_KIND || kind == LANDED_KIND || kind == fno_mail::state::STATE_KIND {
-        return false;
-    }
-    let delivery = m.get("delivery").and_then(Value::as_str).unwrap_or("");
-    !AUDIT_ONLY_DELIVERIES.contains(&delivery)
-}
-
-/// Ids retracted by a tombstone, plus the tombstones themselves; a tombstone
-/// counts only against a message from the same sender to the same address.
-pub(crate) fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
-    let by_id: std::collections::HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = std::collections::HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(WITHDRAW_KIND) {
-            continue;
-        }
-        if let Some(id) = m.get("id").and_then(Value::as_str) {
-            out.insert(id.to_string());
-        }
-        let target_id = m
-            .get("meta")
-            .and_then(|meta| meta.get("withdraws"))
-            .and_then(Value::as_str);
-        let matches = target_id.and_then(|t| by_id.get(t)).is_some_and(|target| {
-            target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-                && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        });
-        if let (Some(t), true) = (target_id, matches) {
-            out.insert(t.to_string());
-        }
-    }
-    out
-}
-
-/// Ids proven landed by a same-sender/recipient `landed` control row
-/// (`bus.log.landed_ids`): the target must exist, match on both addresses,
-/// and the acknowledging row's own id never joins.
-pub(crate) fn landed_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
-    let by_id: std::collections::HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = std::collections::HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
-            continue;
-        }
-        let target = m
-            .get("meta")
-            .and_then(|meta| meta.get("landed"))
-            .and_then(Value::as_str)
-            .and_then(|t| by_id.get(t));
-        let Some(target) = target else { continue };
-        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        {
-            if let Some(t) = target.get("id").and_then(Value::as_str) {
-                out.insert(t.to_string());
-            }
-        }
-    }
-    out
-}
-
-/// A consumer's cursor file read with the oracle's warnings: absent file is a
-/// silent `None` (full rescan); unreadable or unparseable returns `None` plus
-/// the stderr warning naming the Python exception class. A non-object cursor
-/// reads as no cursor, and the truthiness gate mirrors the oracle: empty
-/// string and numeric zero advance nothing.
-pub(crate) fn read_cursor_file(path: &std::path::Path) -> (Option<String>, Vec<String>) {
-    let file_name = path
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default()
-        .to_string();
-    if !path.exists() {
-        return (None, Vec::new());
-    }
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (OSError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let parsed: Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (JSONDecodeError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let cursor = match parsed.get("last_seen_id") {
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(Value::Number(n)) if n.as_f64().map(|f| f != 0.0).unwrap_or(false) => {
-            Some(n.to_string())
-        }
-        _ => None,
-    };
-    (cursor, Vec::new())
 }
 
 /// Every delivered-mail id in the session's own transcript - the middle

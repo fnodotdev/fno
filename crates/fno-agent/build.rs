@@ -56,6 +56,7 @@ fn main() {
     sync_module_copy("spawn/harness");
     sync_module_copy("eval/proc_table");
     sync_module_copy("runtime/identity_markers");
+    sync_module_copy("runtime/bus_read");
     sync_module_copy("spawn/self_identity");
     sync_model_reach();
     sync_registry_schema();
