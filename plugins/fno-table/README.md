@@ -1,6 +1,6 @@
 # fno-table
 
-A Claude Code mod. `/fno` opens a side pane with two tabs of rows: your live fleet and your backlog. Keys on the selected row run fno verbs.
+A Claude Code mod. `/fno` opens a side pane with two tabs of rows: your live fleet and your backlog. Keys on the selected row run fno commands.
 
 It needs Claude Code 2.1.287 or later and the `fno` CLI on your PATH.
 
@@ -20,6 +20,6 @@ It needs Claude Code 2.1.287 or later and the `fno` CLI on your PATH.
 | fleet | `o` | `fno mux view <agent>` |
 | either | `j` | `fno backlog join <node>` |
 
-Join shows only when the node has a live claim and a bound plan. If `fno backlog join` refuses (exit 3 one wide, 4 no plan, 5 already joined), the pane prints the reason and hides join for that node. A pane the mod opens by itself needs 144 or more columns; 110 after the first manual open.
+The join key shows if the node has a live claim and a bound plan. If `fno backlog join` refuses (exit 3 one wide, 4 no plan, 5 already joined), the pane prints the reason and hides join for that node. A pane the mod opens by itself needs 144 or more columns. After the first manual open it needs 110.
 
 Rows come from `fno agent session list --json` and `fno backlog board --json`.
