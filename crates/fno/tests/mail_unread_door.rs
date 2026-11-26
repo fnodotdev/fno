@@ -40,7 +40,10 @@ fn front_door_lists_unread_after_the_cursor_without_fno_agent() {
         .env_remove("FNO_AGENT_SELF")
         .current_dir(&root)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|child| child.wait_with_output())
         .expect("fno agent mail unread runs");
     let _ = std::fs::remove_dir_all(&root);
 
