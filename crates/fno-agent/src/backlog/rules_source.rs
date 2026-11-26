@@ -357,6 +357,22 @@ pub fn assemble(
                 "decision {id}: its implicit rule row does not parse"
             )),
         }
+        // A law about an action also fires at the action (tier 0), beside
+        // the prompt rule above; `drop_seen` keys on rule id, so the two
+        // never dedupe each other.
+        for (suffix, when) in crate::law_at::LawAt::of(row).when_lines(toml_escape) {
+            let body = format!(
+                "id = \"law-{id}{suffix}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\ntext = \"{}\"\n[rule.when]\n{when}",
+                toml_escape(&law_decision(row)),
+            );
+            match toml_rule(&body) {
+                Some(mut r) => {
+                    r.filters = row_filters(row);
+                    rules.push(r);
+                }
+                None => unread.push(format!("decision {id}: its action rule row does not parse")),
+            }
+        }
     }
 
     // `until <node> closes` resolves at build: a closed node drops its rule.
@@ -389,7 +405,7 @@ pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     set.rules
         .retain(|r| filters_hold(r, &mut crate::law_filters::session_fact));
     let (decision, unread) = (crate::rules::decide(&set.rules, ev, today), set.unread);
-    log_fires(ev, &decision);
+    log_fires(cwd, ev, &decision);
     Ruling { decision, unread }
 }
 
@@ -534,20 +550,28 @@ fn rule_bodies(text: &str) -> Vec<String> {
 /// `unevaluated` over the live set. A report with an unreadable journal or
 /// live set still answers, with the reason on the answer.
 pub fn rules_report(since: Option<&str>) -> Value {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    rules_report_in(&cwd, since)
+}
+
+/// The report over the fire log `cwd` resolves: the same store `rule()`
+/// writes for a caller in that directory.
+fn rules_report_in(cwd: &Path, since: Option<&str>) -> Value {
     let window = since.unwrap_or("7d");
     let cutoff = report_cutoff(window);
     let mut fired: BTreeMap<String, Value> = BTreeMap::new();
-    let journal = crate::law_match::project_events_journal();
+    let journal = crate::law_match::project_events_journal_in(cwd);
     let mut unread: Vec<String> = Vec::new();
-    match std::fs::read_to_string(&journal) {
-        Ok(text) => {
-            for line in text.lines() {
-                let Ok(row) = serde_json::from_str::<Value>(line) else {
+    let query = crate::event_store::EventQuery {
+        since_ms: Some(cutoff * 1000),
+        ..crate::event_store::EventQuery::of_types(&["decision_span"])
+    };
+    match crate::event_store::query_events(&journal, &query) {
+        Ok(rows) => {
+            for row in rows {
+                let Ok(row) = serde_json::from_str::<Value>(&row.line) else {
                     continue;
                 };
-                if row.get("type").and_then(Value::as_str) != Some("decision_span") {
-                    continue;
-                }
                 let data = row.get("data").cloned().unwrap_or(Value::Null);
                 if data.get("span_kind").and_then(Value::as_str) != Some("rule") {
                     continue;
@@ -556,15 +580,6 @@ pub fn rules_report(since: Option<&str>) -> Value {
                     continue;
                 };
                 let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
-                let parsed = ts
-                    .parse::<chrono::DateTime<chrono::FixedOffset>>()
-                    .ok()
-                    .map(|t| t.timestamp());
-                if let Some(secs) = parsed {
-                    if secs < cutoff {
-                        continue;
-                    }
-                }
                 let entry = fired.entry(id).or_insert_with(
                     || json!({"fires": 0, "blocks": 0, "warns": 0, "last_fired": ""}),
                 );
@@ -585,11 +600,10 @@ pub fn rules_report(since: Option<&str>) -> Value {
                 }
             }
         }
-        Err(reason) => unread.push(format!("the fire journal ({reason})")),
+        Err(reason) => unread.push(format!("the fire log at {} ({reason})", journal.display())),
     }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut answer = json!({"ok": true, "since": window, "rules": fired});
-    match rule_set(&cwd) {
+    match rule_set(cwd) {
         Ok(set) => {
             let (never, unwired, unevaluated) = classify_live(&set.rules, &fired);
             answer["never_fired"] = json!(never);
@@ -688,15 +702,19 @@ fn report_cutoff(window: &str) -> i64 {
 /// doors bucket of the rules-seen cursor: a polled merge preview
 /// (`fno do pr status`) re-decides the same door ask on every read, and
 /// the span belongs to the ask, not to the poll.
-fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
+fn log_fires(cwd: &Path, ev: &crate::rules::Event, decision: &crate::rules::Decision) {
     if decision.fires.is_empty() {
         return;
     }
+    // The caller's directory names the store, never `FNO_REPO_ROOT`: the
+    // hook pins that to the plugin root, and the spans then landed where
+    // no reader looks.
+    let journal = crate::law_match::project_events_journal_in(cwd);
     let is_door = ev.kind.starts_with("door:") || ev.kind == "plan-start";
     let trace_id = crate::decision_trace::new_span_id();
     if !is_door {
         for fire in &decision.fires {
-            emit_fire_span(ev, fire, &trace_id);
+            emit_fire_span(&journal, ev, fire, &trace_id);
         }
         return;
     }
@@ -712,7 +730,7 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
                 continue;
             }
             dirty = true;
-            emit_fire_span(ev, fire, &trace_id);
+            emit_fire_span(&journal, ev, fire, &trace_id);
         }
         dirty
     });
@@ -720,7 +738,12 @@ fn log_fires(ev: &crate::rules::Event, decision: &crate::rules::Decision) {
 
 /// One `decision_span` per fire, `span_kind = "rule"`: the rows the rules
 /// report reads. Best-effort; a lost row never changes the answer.
-fn emit_fire_span(ev: &crate::rules::Event, fire: &crate::rules::Fire, trace_id: &str) {
+fn emit_fire_span(
+    journal: &Path,
+    ev: &crate::rules::Event,
+    fire: &crate::rules::Fire,
+    trace_id: &str,
+) {
     let trace = crate::decision_trace::Trace {
         trace_id: trace_id.to_string(),
         span_id: crate::decision_trace::new_span_id(),
@@ -743,7 +766,7 @@ fn emit_fire_span(ev: &crate::rules::Event, fire: &crate::rules::Fire, trace_id:
         "tool".into(),
         ev.tool.clone().map(Value::from).unwrap_or(Value::Null),
     );
-    let _ = crate::decision_trace::emit_span("rule", &trace, &attrs);
+    let _ = crate::decision_trace::emit_span_to(journal, "rule", &trace, &attrs);
 }
 
 /// One config read per assembly: the whole `event_rules` table, the same
@@ -1025,60 +1048,52 @@ mod tests {
     }
 
     #[test]
-    fn the_report_counts_window_spans_and_classifies_the_live_set() {
+    fn the_report_reads_window_spans_from_the_store_the_writer_fills() {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let td = tempfile::TempDir::new().unwrap();
-        let prev_home = std::env::var_os("FNO_HOME");
-        let prev_root = std::env::var_os("FNO_REPO_ROOT");
-        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
-        std::env::set_var("FNO_REPO_ROOT", td.path());
-        let journal = td.path().join(".fno").join("events.jsonl");
+        let _home = crate::claims::EnvVarGuard::set(
+            "FNO_HOME",
+            td.path().join("fno-home").to_str().unwrap(),
+        );
+        let cwd = td.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let empty = rules_report_in(&cwd, Some("7d"));
+        assert_eq!(empty["ok"], serde_json::json!(true), "{empty}");
+        let named = empty["unread"][0].as_str().unwrap_or("");
+        assert!(named.contains(".fno/events.jsonl"), "{empty}");
+
+        let journal = crate::law_match::project_events_journal_in(&cwd);
         std::fs::create_dir_all(journal.parent().unwrap()).unwrap();
-        let span = |rule: &str, verdict: &str, ts: &str| {
-            serde_json::json!({
+        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        for (rule, verdict, ts) in [
+            ("r-a", "block", ago(1)),
+            ("r-a", "warn", ago(2)),
+            ("r-b", "warn", ago(30)),
+        ] {
+            let envelope = serde_json::json!({
                 "ts": ts, "type": "decision_span", "source": "target",
                 "data": {"span_kind": "rule", "rule": rule, "verdict": verdict, "event": "pre-tool"},
-            })
-            .to_string()
-        };
-        let ago = |days: i64| (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
-        let mut text = span("r-a", "block", &ago(1));
-        text.push('\n');
-        text.push_str(&span("r-a", "warn", &ago(2)));
-        text.push('\n');
-        text.push_str(&span("r-b", "warn", &ago(30)));
-        text.push('\n');
-        std::fs::write(&journal, text).unwrap();
+            });
+            crate::event_store::append_envelope(&journal, &envelope.to_string(), None).unwrap();
+        }
 
-        let out = rules_report(Some("7d"));
-        assert_eq!(out["ok"], serde_json::json!(true), "{out}");
-        assert_eq!(out["rules"]["r-a"]["fires"], serde_json::json!(2));
+        let out = rules_report_in(&cwd, Some("7d"));
+        assert_eq!(out["rules"]["r-a"]["fires"], serde_json::json!(2), "{out}");
         assert_eq!(out["rules"]["r-a"]["blocks"], serde_json::json!(1));
         assert_eq!(out["rules"]["r-a"]["warns"], serde_json::json!(1));
-        // r-b's only span is outside the 7d window: it is not counted.
-        assert!(out["rules"].get("r-b").is_none(), "{out}");
-        // No live set is readable under the temp home: the lists say so.
-        assert_eq!(out["never_fired"], serde_json::json!([]));
-        assert!(out["unread"].as_array().is_some(), "{out}");
-        match (prev_home, prev_root) {
-            (Some(h), Some(r)) => {
-                std::env::set_var("FNO_HOME", h);
-                std::env::set_var("FNO_REPO_ROOT", r);
-            }
-            (Some(h), None) => {
-                std::env::set_var("FNO_HOME", h);
-                std::env::remove_var("FNO_REPO_ROOT");
-            }
-            (None, Some(r)) => {
-                std::env::remove_var("FNO_HOME");
-                std::env::set_var("FNO_REPO_ROOT", r);
-            }
-            (None, None) => {
-                std::env::remove_var("FNO_HOME");
-                std::env::remove_var("FNO_REPO_ROOT");
-            }
-        }
+        assert!(
+            out["rules"].get("r-b").is_none(),
+            "outside the window: {out}"
+        );
+        let unread = out["unread"].as_array().cloned().unwrap_or_default();
+        assert!(
+            unread
+                .iter()
+                .all(|u| !u.as_str().unwrap_or("").contains("fire log")),
+            "the store reads: {out}"
+        );
     }
 
     #[test]
@@ -1454,5 +1469,96 @@ mod tests {
             !fires(&[("role", "lead"), ("type", "bug")]),
             "a lead is not a worker"
         );
+    }
+
+    #[test]
+    fn a_law_named_at_a_command_or_door_fires_at_the_action() {
+        let row = serde_json::json!({
+            "decision_id": "d-0000a7a7",
+            "ts": "2026-11-25T00:00:00Z",
+            "authority_source": "operator",
+            "subject": "registry-identity",
+            "decision": "Mail resolves by session id; a name is an alias",
+            "scope": "global",
+            "at_command": ["fno agent mail send *"],
+            "at_door": {"door": "send", "subjects": ["by-name:*"]},
+        });
+        let laws = decision_index::Index {
+            rows: vec![row],
+            damaged: 0,
+        };
+        let set = assemble(Path::new("/"), laws, &BTreeMap::new(), Vec::new()).expect("builds");
+        let ids: Vec<&str> = set.rules.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["law-d-0000a7a7", "law-d-0000a7a7-at", "law-d-0000a7a7-door"],
+            "the prompt rule stays beside the two action rules"
+        );
+        let today = chrono::Local::now().date_naive();
+        let fired = |ev: &crate::rules::Event| -> Vec<String> {
+            crate::rules::decide(&set.rules, ev, today)
+                .fires
+                .into_iter()
+                .map(|f| f.rule)
+                .collect()
+        };
+        let bash = |command: &str| crate::rules::Event {
+            kind: "pre-tool".into(),
+            tool: Some("Bash".into()),
+            command: Some(command.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            fired(&bash("fno agent mail send nova \"x\"")),
+            ["law-d-0000a7a7-at"]
+        );
+        assert!(fired(&bash("fno agent mail unread")).is_empty());
+        let send = |subjects: &[&str]| crate::rules::Event {
+            kind: "door:send".into(),
+            subjects: subjects.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            fired(&send(&["nova", "by-name:nova"])),
+            ["law-d-0000a7a7-door"]
+        );
+        assert!(
+            fired(&send(&["0e0b4dc7-e6b9-454a-b0dc-ebc0a2dd33a6"])).is_empty(),
+            "a send by session id is not a by-name send"
+        );
+    }
+
+    #[test]
+    fn the_tracked_project_rules_bind_the_registry_and_blueprint_laws_at_their_doors() {
+        let file = parse_file(include_str!("../../../../.fno-rules/rules.toml"))
+            .expect("the tracked project rule file parses");
+        for r in &file.rule {
+            assert!(r.problems().is_empty(), "{:?}", r.problems());
+        }
+        let today = chrono::Local::now().date_naive();
+        let law_of = |ev: crate::rules::Event| -> Vec<Option<String>> {
+            crate::rules::decide(&file.rule, &ev, today)
+                .fires
+                .into_iter()
+                .map(|f| f.law)
+                .collect()
+        };
+        let send = |subjects: &[&str]| crate::rules::Event {
+            kind: "door:send".into(),
+            subjects: subjects.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            law_of(send(&["nova", "by-name:nova"])),
+            [Some("d-e952ed19".to_string())]
+        );
+        assert!(law_of(send(&["0e0b4dc7-e6b9-454a-b0dc-ebc0a2dd33a6"])).is_empty());
+        let spawn = |phase: &str| crate::rules::Event {
+            kind: "door:spawn".into(),
+            phase: Some(phase.into()),
+            ..Default::default()
+        };
+        assert_eq!(law_of(spawn("blueprint")), [Some("d-801edf1f".to_string())]);
+        assert!(law_of(spawn("execute")).is_empty());
     }
 }
