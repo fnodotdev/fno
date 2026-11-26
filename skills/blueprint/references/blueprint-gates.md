@@ -409,7 +409,7 @@ block is absent, and only the engine-wide defaults (if any) apply.
 
 ## done_probes: operational evidence (MANDATORY for recurring deliverables)
 
-A plan whose deliverable is **recurring or operational** - a scheduler, a watcher, a daemon, a cadence, a LaunchAgent, anything whose value is that it keeps running - MUST declare 1-2 `done_probes` in its `## Gate records` fence.
+Some deliverables are **recurring or operational**: a scheduler, a watcher, a daemon, a cadence, a LaunchAgent. Their value is that they keep running. Such a plan MUST declare 1-2 `done_probes` in its `## Gate records` fence.
 Everything else omits the field entirely.
 
 `fno-agent loop-check` runs each probe as the final `DonePRGreen` conjunct and
