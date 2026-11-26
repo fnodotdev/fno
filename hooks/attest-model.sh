@@ -16,7 +16,7 @@
 # injected as additionalContext) and always exits 0. An env with no foreign
 # model var is coherent by definition and prints nothing. It also records the
 # resolved intended identity to a per-session sidecar that the PostToolUse
-# drift check (Layer 2, spend-drift-monitor.js) reads; the sidecar keeps
+# drift check (Layer 2, the spend-drift-monitor leg) reads; the sidecar keeps
 # recording ANTHROPIC_MODEL only, because a tier default is not the running
 # model and Layer 2 compares against the running model.
 set -uo pipefail
