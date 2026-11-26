@@ -293,7 +293,7 @@ fn restoring_a_displacing_rename_puts_the_displaced_and_source_rows_back() {
     })
     .unwrap();
 
-    let (_, _, priors) = rename_agent_snapshotting(&path, "worker-a", "taken", None, |row, _| {
+    let (_, _, priors) = rename_agent_displacing(&path, "worker-a", "taken", None, |row, _| {
         row_is_terminal(row)
     })
     .unwrap();

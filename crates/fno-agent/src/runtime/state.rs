@@ -3042,6 +3042,7 @@ pub fn rename_agent(
     node: Option<&str>,
 ) -> Result<(String, String), String> {
     rename_agent_displacing(path, token, new_name, node, |row, _| row_is_terminal(row))
+        .map(|(old, new, _)| (old, new))
 }
 
 /// A terminal row (Exited, PermanentDead) never answers to any label again,
@@ -3058,23 +3059,11 @@ pub(crate) fn row_is_terminal(row: &RegistryEntry) -> bool {
 /// the state under the lock, not a pre-transaction snapshot. The role
 /// check-in takes a carried label back from a predecessor row that holds no
 /// live role; plain [`rename_agent`] displaces only terminal rows.
+/// Also returns every row the rename changed, as it stood before the write:
+/// the source row first, then each displaced holder. A caller whose coupled
+/// step fails afterwards hands the rows to [`restore_registry_rows`] to undo
+/// the whole rename in one transaction.
 pub fn rename_agent_displacing(
-    path: &Path,
-    token: &str,
-    new_name: &str,
-    node: Option<&str>,
-    may_displace: impl Fn(&RegistryEntry, &[RegistryEntry]) -> bool,
-) -> Result<(String, String), String> {
-    rename_agent_snapshotting(path, token, new_name, node, may_displace)
-        .map(|(old, new, _)| (old, new))
-}
-
-/// [`rename_agent_displacing`] that also returns every row the rename
-/// changed, as it stood before the write: the source row first, then each
-/// displaced holder. A caller whose coupled step fails afterwards hands the
-/// rows to [`restore_registry_rows`] to undo the whole rename in one
-/// transaction.
-pub fn rename_agent_snapshotting(
     path: &Path,
     token: &str,
     new_name: &str,
@@ -3223,7 +3212,7 @@ pub fn rename_agent_snapshotting(
 /// rename survives. Each row that gets its name back journals the reverse
 /// `agent_renamed`, or a later `--from-journal` rebuild replays the undone
 /// rename. A row gone from the registry is skipped.
-pub fn restore_registry_rows(path: &Path, priors: &[RegistryEntry]) -> Result<(), String> {
+pub fn restore_registry_rows(path: &Path, priors: &[RegistryEntry]) -> Result<(), StateError> {
     let mut reverted: Vec<(String, String, Option<String>)> = Vec::new();
     update_registry(path, |registry| {
         for prior in priors {
@@ -3245,8 +3234,7 @@ pub fn restore_registry_rows(path: &Path, priors: &[RegistryEntry]) -> Result<()
             row.aliases = prior.aliases.clone();
             row.node = prior.node.clone();
         }
-    })
-    .map_err(|e| e.to_string())?;
+    })?;
     if let Some(home_dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         let emitter = crate::events::EventEmitter::new(
             crate::paths::AgentsHome::at(home_dir).events_jsonl(),

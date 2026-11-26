@@ -284,7 +284,7 @@ pub(crate) fn respond(
     } else {
         new_name.to_string()
     };
-    let (old, new, priors) = match crate::state::rename_agent_snapshotting(
+    let (old, new, priors) = match crate::state::rename_agent_displacing(
         &registry_path,
         token,
         &label,
