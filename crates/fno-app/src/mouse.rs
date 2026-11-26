@@ -67,22 +67,30 @@ pub fn hit(x: f32, y: f32, cell: (f32, f32), panes: &[(u64, Rect)]) -> Option<Hi
     })
 }
 
-/// The share of a pane's first cell, from its left edge, that is the command
-/// block gutter. The gutter paints over the first cell and clicks there pick a
-/// block, so a drag that starts at column 0 further right still selects text.
-pub const GUTTER: f32 = 1.0 / 3.0;
+/// The command block gutter sits in the half-cell padding left of a pane's
+/// grid, so it never covers a glyph. It starts `GUTTER_LEFT` cells left of
+/// column 0 and is `GUTTER_WIDTH` cells wide. The paint and the click target
+/// read the same two numbers.
+pub const GUTTER_LEFT: f32 = 0.45;
+pub const GUTTER_WIDTH: f32 = 1.0 / 3.0;
 
-/// The pane cell under the point when the point lies in a pane's gutter: the
-/// left [`GUTTER`] share of its first column. Anything else is `None`.
+/// The pane row under the point when it lies in that pane's gutter. Anything
+/// else is `None`.
 pub fn gutter_hit(x: f32, y: f32, cell: (f32, f32), panes: &[(u64, Rect)]) -> Option<Hit> {
-    let hit = hit(x, y, cell, panes)?;
-    if hit.col != 0 {
-        return None;
-    }
-    let (_, col) = area_cell(x, y, cell);
     let (px, _) = pad(cell);
-    let across = (x - px) / cell.0 - 0.5 - col;
-    (across < GUTTER).then_some(hit)
+    let across = (x - px) / cell.0 - 0.5;
+    let (row, _) = area_cell(x, y, cell);
+    panes.iter().find_map(|&(pane, r)| {
+        let beside = across - f32::from(r.x);
+        let inside_rows = (r.y as f32..(r.y + r.rows) as f32).contains(&row);
+        (inside_rows && (-GUTTER_LEFT..-GUTTER_LEFT + GUTTER_WIDTH).contains(&beside)).then(|| {
+            Hit {
+                pane,
+                row: (row - r.y as f32) as u16,
+                col: 0,
+            }
+        })
+    })
 }
 
 /// The cell under the point clamped into one pane, for a drag that leaves
@@ -228,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_left_third_of_the_first_column_is_the_gutter() {
+    fn the_gutter_is_the_padding_left_of_the_grid() {
         let cell = (30.0, 20.0);
         let panes = [(
             2,
@@ -241,11 +249,12 @@ mod tests {
         )];
         let (px, py) = pad(cell);
         let at = |col: f32| (px + (4.0 + 0.5 + col) * cell.0, py + 0.5 * cell.1 + 1.0);
+        let (x, y) = at(-0.3);
+        assert_eq!(gutter_hit(x, y, cell, &panes).map(|h| h.row), Some(0));
+        // Over column 0's own glyph and past the padding both miss.
         let (x, y) = at(0.1);
-        assert_eq!(gutter_hit(x, y, cell, &panes).map(|h| h.col), Some(0));
-        let (x, y) = at(0.6);
         assert_eq!(gutter_hit(x, y, cell, &panes), None);
-        let (x, y) = at(1.1);
+        let (x, y) = at(-0.6);
         assert_eq!(gutter_hit(x, y, cell, &panes), None);
     }
 

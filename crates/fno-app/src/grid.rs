@@ -458,7 +458,8 @@ fn paint_block_gutter(
     origin: Point<Pixels>,
     window: &mut Window,
 ) {
-    let width = m.cell.width * crate::mouse::GUTTER;
+    let width = m.cell.width * crate::mouse::GUTTER_WIDTH;
+    let left = origin.x - m.cell.width * crate::mouse::GUTTER_LEFT;
     for b in &frame.blocks {
         let hue = match (b.selected, b.exit) {
             (true, _) => p.accent,
@@ -466,7 +467,7 @@ fn paint_block_gutter(
             _ => p.faint,
         };
         let rows = (b.bottom.saturating_sub(b.top) + 1) as f32;
-        let at = point(origin.x, origin.y + m.cell.height * b.top as f32);
+        let at = point(left, origin.y + m.cell.height * b.top as f32);
         window.paint_quad(fill(
             Bounds::new(at, size(width, m.cell.height * rows)),
             color(hue, false),
