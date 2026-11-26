@@ -20,6 +20,6 @@ It needs Claude Code 2.1.287 or later and the `fno` CLI on your PATH.
 | fleet | `o` | `fno mux view <agent>` |
 | either | `j` | `fno backlog join <node>` |
 
-The join key shows if the node has a live claim and a bound plan. If `fno backlog join` refuses (exit 3 one wide, 4 no plan, 5 already joined), the pane prints the reason and hides join for that node. A pane the mod opens by itself needs 144 or more columns. After the first manual open it needs 110.
+With a live claim and a bound plan on the node, the join key shows. If `fno backlog join` refuses (exit 3 one wide, 4 no plan, 5 already joined), the pane prints the reason and hides join for that node. A pane the mod opens by itself needs 144 or more columns. After the first manual open it needs 110.
 
 Rows come from `fno agent session list --json` and `fno backlog board --json`.
