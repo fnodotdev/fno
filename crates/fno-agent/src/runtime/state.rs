@@ -3119,7 +3119,7 @@ pub fn rename_agent_displacing(
                     "agent {resolved_name:?} changed before rename; retry with its full session id"
                 )
             })?;
-        priors.push(registry.entries[idx].clone());
+        priors.extend(registry.entries.get(idx).cloned());
         // "Names another worker" includes a label the worker still ANSWERS to:
         // a prior label held as another row's alias refuses too, or the renamed
         // label would resolve ambiguous (two rows) the moment anyone used it.
@@ -3140,7 +3140,7 @@ pub fn rename_agent_displacing(
                 .all(|&i| may_displace(&registry.entries[i], &registry.entries))
             {
                 for &i in &held_elsewhere {
-                    priors.push(registry.entries[i].clone());
+                    priors.extend(registry.entries.get(i).cloned());
                     let before = registry.entries[i].name.clone();
                     vacate_label(&mut registry.entries, i, new_name, &resolved_name)?;
                     // A displaced row whose NAME moved journals it too, or a
