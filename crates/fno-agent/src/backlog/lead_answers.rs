@@ -1150,8 +1150,17 @@ mod tests {
             .filter_map(|r| r["question_id"].as_str())
             .collect();
         assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
-        let other = held_from_pages(&pages, "lead-x", &[], 0);
-        assert_eq!(other.len(), 1, "{other:?}");
+        let own = held_from_pages(&pages, "lead-x,lead-y", &[], 0);
+        let own_ids: Vec<&str> = own
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(own_ids, ["q-other01"], "{own:?}");
+        let narrower = held_from_pages(&pages, "lead-x", &[], 0);
+        assert!(
+            narrower.is_empty(),
+            "a page team wider than the scope stays off: {narrower:?}"
+        );
         let mut partly = pages.clone();
         partly.push(open_page("q-partly1", "lead-a,lead-z"));
         let rows = held_from_pages(&partly, &widened, &[], 0);
