@@ -50,7 +50,7 @@ fn xml_block<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
 /// Compared on the reminder-stripped text the classifier reads; anything
 /// subtler fails open, keeping today's hold rather than exempting a turn a
 /// person typed.
-fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
+pub(crate) fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     let text = crate::provenance::system_reminder_re()
         .replace_all(text, "")
         .to_string();
@@ -69,7 +69,14 @@ fn is_spawn_seed_turn(text: &str, seed: &str) -> bool {
     let mut seed_parts = seed.splitn(2, char::is_whitespace);
     let command = seed_parts.next().unwrap_or("");
     let rest = seed_parts.next().unwrap_or("").trim();
-    name == command && args == rest
+    bare_command(name) == bare_command(command) && args == rest
+}
+
+/// A command token without its slash or `fno:` namespace: the pane door
+/// delivers `/target` and claude renders `/fno:target`, one command.
+fn bare_command(token: &str) -> &str {
+    let token = token.trim_start_matches(['/', '$']);
+    token.strip_prefix("fno:").unwrap_or(token)
 }
 
 /// The bus index both arms classify with, read off the state root the way
