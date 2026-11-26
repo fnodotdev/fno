@@ -3042,6 +3042,7 @@ pub fn rename_agent(
     node: Option<&str>,
 ) -> Result<(String, String), String> {
     rename_agent_displacing(path, token, new_name, node, |row, _| row_is_terminal(row))
+        .map(|(old, new, _)| (old, new))
 }
 
 /// A terminal row (Exited, PermanentDead) never answers to any label again,
@@ -3058,13 +3059,17 @@ pub(crate) fn row_is_terminal(row: &RegistryEntry) -> bool {
 /// the state under the lock, not a pre-transaction snapshot. The role
 /// check-in takes a carried label back from a predecessor row that holds no
 /// live role; plain [`rename_agent`] displaces only terminal rows.
+/// Also returns every row the rename changed, as it stood before the write:
+/// the source row first, then each displaced holder. A caller whose coupled
+/// step fails afterwards hands the rows to [`restore_registry_rows`] to undo
+/// the whole rename in one transaction.
 pub fn rename_agent_displacing(
     path: &Path,
     token: &str,
     new_name: &str,
     node: Option<&str>,
     may_displace: impl Fn(&RegistryEntry, &[RegistryEntry]) -> bool,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, Vec<RegistryEntry>), String> {
     if !is_valid_registry_label(new_name) {
         return Err(
             "registry name must be 1-64 letters, numbers, underscores, hyphens, or apostrophes"
@@ -3087,9 +3092,10 @@ pub fn rename_agent_displacing(
     let old_name = source.name.clone();
     let harness_session_id = source.harness_session_id.clone();
     if old_name == new_name {
-        return Ok((old_name, new_name.to_string()));
+        return Ok((old_name, new_name.to_string(), Vec::new()));
     }
     let resolved_name = old_name.clone();
+    let mut priors: Vec<RegistryEntry> = Vec::new();
     // (from, to, session) of rows displaced off the target label in this
     // transaction, journaled beside the rename itself on success.
     let mut displaced: Vec<(String, String, Option<String>)> = Vec::new();
@@ -3113,6 +3119,7 @@ pub fn rename_agent_displacing(
                     "agent {resolved_name:?} changed before rename; retry with its full session id"
                 )
             })?;
+        priors.extend(registry.entries.get(idx).cloned());
         // "Names another worker" includes a label the worker still ANSWERS to:
         // a prior label held as another row's alias refuses too, or the renamed
         // label would resolve ambiguous (two rows) the moment anyone used it.
@@ -3133,6 +3140,7 @@ pub fn rename_agent_displacing(
                 .all(|&i| may_displace(&registry.entries[i], &registry.entries))
             {
                 for &i in &held_elsewhere {
+                    priors.extend(registry.entries.get(i).cloned());
                     let before = registry.entries[i].name.clone();
                     vacate_label(&mut registry.entries, i, new_name, &resolved_name)?;
                     // A displaced row whose NAME moved journals it too, or a
@@ -3195,7 +3203,56 @@ pub fn rename_agent_displacing(
             );
         }
     }
-    Ok((old_name, new_name.to_string()))
+    Ok((old_name, new_name.to_string(), priors))
+}
+
+/// Put rows back as [`rename_agent_displacing`] saw them, in one
+/// transaction: name, aliases and node of the source and of every displaced
+/// holder, so no label resolves to two rows and no alias trail of the undone
+/// rename survives. Each row that gets its name back journals the reverse
+/// `agent_renamed`, or a later `--from-journal` rebuild replays the undone
+/// rename. A row gone from the registry is skipped.
+pub fn restore_registry_rows(path: &Path, priors: &[RegistryEntry]) -> Result<(), StateError> {
+    let mut reverted: Vec<(String, String, Option<String>)> = Vec::new();
+    update_registry(path, |registry| {
+        for prior in priors {
+            let Some(row) = registry.entries.iter_mut().find(|e| {
+                e.harness == prior.harness
+                    && e.harness_session_id == prior.harness_session_id
+                    && e.short_id == prior.short_id
+            }) else {
+                continue;
+            };
+            if row.name != prior.name {
+                reverted.push((
+                    row.name.clone(),
+                    prior.name.clone(),
+                    prior.harness_session_id.clone(),
+                ));
+            }
+            row.name = prior.name.clone();
+            row.aliases = prior.aliases.clone();
+            row.node = prior.node.clone();
+        }
+    })?;
+    if let Some(home_dir) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let emitter = crate::events::EventEmitter::new(
+            crate::paths::AgentsHome::at(home_dir).events_jsonl(),
+            "daemon",
+        );
+        for (from, to, session) in &reverted {
+            let _ = emitter.emit(
+                "agent_renamed",
+                &serde_json::json!({
+                    "name": to,
+                    "harness_session_id": session,
+                    "from": from,
+                    "to": to,
+                }),
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_rename_source<'a>(
