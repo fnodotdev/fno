@@ -2428,9 +2428,11 @@ pub fn validate_spawn_inputs(name: &str, from_name: &str) -> Result<(), String> 
 use crate::agent_lock::{holder_note, AgentLock};
 use crate::spawn_gate_admission::AnswerCaller;
 
-/// Stable fno-side log path for `fno agent logs <name>` (`_derive_log_path`).
-fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
-    home.root().join("logs").join(format!("{}.log", name))
+/// Stable fno-side log path for `fno agent logs <name>`, keyed on the
+/// session id so a reused name never inherits an earlier agent's log. The
+/// row's `log_path` field is what readers follow.
+fn derive_log_path(home: &AgentsHome, session_id: &str) -> PathBuf {
+    home.root().join("logs").join(format!("{session_id}.log"))
 }
 
 /// The transport short id: the row's own key, else the one derived from the
@@ -3726,7 +3728,7 @@ fn create(
     // permission error) -- otherwise leave the leg unset so
     // validate_resolvable_handle can still refuse the row when no other leg
     // resolves, instead of writing a log_path that is a claim, not evidence.
-    let log_path = derive_log_path(home, name);
+    let log_path = derive_log_path(home, &short_id);
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

@@ -1314,7 +1314,15 @@ fn resolvable_handle_log_fallback(
     if leg1 || leg3 {
         return None;
     }
-    let log_path = home.root().join("logs").join(format!("{name}.log"));
+    // No session id exists yet, so a mint stamp keys the file: a reused
+    // name never reopens an earlier agent's log.
+    let minted = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let log_path = home
+        .root()
+        .join("logs")
+        .join(format!("{name}-{minted}.log"));
     let mut open = std::fs::OpenOptions::new();
     std::fs::create_dir_all(log_path.parent()?).ok()?;
     open.write(true).create(true).open(&log_path).ok()?;

@@ -302,7 +302,7 @@ fn spawn_writes_python_readable_row_and_emits_done() {
         row["log_path"],
         home.root()
             .join("logs")
-            .join("alice.log")
+            .join("7c5dcf5d.log")
             .to_string_lossy()
             .as_ref()
     );
