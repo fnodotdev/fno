@@ -1026,6 +1026,9 @@ mod tests {
     fn fold_refuses_a_kind_outside_start_and_end() {
         let input = inputs("noon", "2026-09-10T12:00:00Z", "");
         let error = fold_day(&input).unwrap_err();
-        assert!(error.contains("--kind must be start or end"), "{error}");
+        assert!(
+            error.contains("--kind must be start, end or away"),
+            "{error}"
+        );
     }
 }
