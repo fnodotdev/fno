@@ -1852,11 +1852,11 @@ mod tests {
                 "pr": 149,
                 "blocker": "ci",
                 "reason": "ci",
-                "node": "x-b153",
+                "node": "x-aaaa",
                 "expires_at_ms": now + 15 * 60_000,
             });
-            if let Some(task) = runner_task {
-                data["task_id"] = serde_json::json!(task);
+            if let (Some(task), Some(obj)) = (runner_task, data.as_object_mut()) {
+                obj.insert("task_id".into(), serde_json::json!(task));
             }
             let evidence = vec![crate::watch_expiry::Evidence {
                 event_id: "e1".into(),
@@ -1867,13 +1867,11 @@ mod tests {
                 data,
             }];
             let watches = crate::codex_watch::settle_watches(&evidence);
-            assert_eq!(
-                watches.len(),
-                1,
-                "a declared watch registers for {runner_task:?}"
-            );
+            let [registered] = watches.as_slice() else {
+                panic!("a declared watch registers for {runner_task:?}");
+            };
             assert!(
-                watch_shielded(&watches[0].watch, &evidence, now + 60_000),
+                watch_shielded(&registered.watch, &evidence, now + 60_000),
                 "a live declared watch must shield the seat for {runner_task:?}"
             );
         }
