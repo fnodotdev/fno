@@ -135,6 +135,7 @@ pub mod audience_backfill;
 pub mod backlog_ready;
 pub mod backlog_share;
 pub mod check_supersession;
+pub mod away;
 pub mod day;
 pub mod decide_door;
 pub mod decision_index;
