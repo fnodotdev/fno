@@ -1,7 +1,7 @@
 """Hook output strings must prescribe only fno commands that resolve.
 
-`hooks/context-nudge.sh` fires `REASON` / `ORPHAN_REASON` / `FLUSH_REASON`
-strings into a live session under context pressure, so an agent reads them and
+The context-nudge Stop leg (`crates/fno-agent/src/runtime/hook/front/stop.rs`)
+fires its block reasons into a live session under context pressure, so an agent reads them and
 acts without a chance to check. Every `fno` command those strings name must
 resolve against the checked-in command surface (`scripts/ci/command-baseline.txt`).
 A hook string is the highest-cost instance of the prescribed-command class: a dead
@@ -25,14 +25,13 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HOOK = REPO_ROOT / "hooks" / "context-nudge.sh"
+HOOK = REPO_ROOT / "crates" / "fno-agent" / "src" / "runtime" / "hook" / "front" / "stop.rs"
 BASELINE = REPO_ROOT / "scripts" / "ci" / "command-baseline.txt"
 
-# The three variables the hook assigns its emitted (user-facing) strings to,
-# plus compact_instruction()'s `printf '%s'` returns: REASON only embeds their
-# result via `${_compact_ask}`, so a literal `fno ...` string inside that
-# function is invisible to a scan of the REASON= line alone.
-_OUTPUT_VAR = re.compile(r"^\s*(?:(?:REASON|ORPHAN_REASON|FLUSH_REASON)=|printf '%s')", re.MULTILINE)
+# Every emitted (user-facing) string is a Rust string literal: a line that
+# opens with one (rustfmt puts a long format! literal on its own line), a
+# format! call, or a push_str. Comments never open with a quote.
+_OUTPUT_VAR = re.compile(r'^\s*(?:"|.*\bformat!\(\s*"|.*\bpush_str\(")', re.MULTILINE)
 _FNO = re.compile(r"\bfno\b\s+")
 _WORD = re.compile(r"[A-Za-z][\w-]*")
 
@@ -96,7 +95,7 @@ def test_hook_output_commands_resolve() -> None:
     leaves = _baseline_leaves()
     first_words = {leaf.split(" ", 1)[0] for leaf in leaves}
     lines = _output_lines(HOOK.read_text(encoding="utf-8"))
-    assert lines, "no REASON/ORPHAN_REASON/FLUSH_REASON assignments found"
+    assert lines, "no emitted string literals found"
 
     prescribed: list[str] = []
     for ln in lines:
