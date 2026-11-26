@@ -708,6 +708,7 @@ pub fn dispatch_thread(
         pid_start_time: crate::daemon::process_start_time(pid),
         created_at: crate::daemon::now_rfc3339_like(),
         log_path: Some(record.to_string_lossy().to_string()),
+        transcript_path: Some(record.to_string_lossy().to_string()),
         account_record_id: Some("default".into()),
         ..RegistryEntry::new(Some(sid.clone()), crate::spawn_lineage::ambient_lineage())
     };

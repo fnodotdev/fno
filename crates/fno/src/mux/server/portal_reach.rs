@@ -892,7 +892,7 @@ impl Core {
             (None, Reach::Locate, serve_attach::ServeSeat::Honest(truth)) => {
                 locate_argv_with(&row, Some(truth.why.as_str()), &truth.facts)
             }
-            (None, Reach::Follow, _) => peek_argv(&row.name),
+            (None, Reach::Follow, _) => portal_follow_argv(&row),
             (None, Reach::Locate, serve_attach::ServeSeat::Outside) => locate_argv(&row),
         };
         let mechanism = match serve_env.is_empty() {
