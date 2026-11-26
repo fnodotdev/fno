@@ -55,6 +55,18 @@ pub struct KeyDef {
     pub event: bool,
 }
 
+impl KeyDef {
+    /// The canonical long name: the field-map key.
+    pub fn name(&self) -> &'static str {
+        self.names.first().copied().unwrap_or_default()
+    }
+
+    /// The short spelling the docs lead with, else the long name.
+    pub fn short(&self) -> &'static str {
+        self.names.get(1).copied().unwrap_or_else(|| self.name())
+    }
+}
+
 const fn key(names: &'static [&'static str], kind: Kind, node: bool, event: bool) -> KeyDef {
     KeyDef {
         names,
@@ -629,7 +641,7 @@ fn term_from(
     if !answerable {
         return Err(format!(
             "'{name}:' ({}) does not apply to {}",
-            def.names[0],
+            def.name(),
             surface.name()
         )
         .into());
@@ -688,7 +700,7 @@ fn split_alts(value: &str) -> Vec<&str> {
 
 /// One key's value text into its predicates.
 fn value_alts(def: &KeyDef, value: &str, now: i64) -> Result<Vec<Pred>, ParseError> {
-    let key = def.names[0];
+    let key = def.name();
     let mut alts = Vec::new();
     for part in split_alts(value) {
         match def.kind {
@@ -1042,15 +1054,11 @@ pub fn help_text(surface: Surface) -> String {
         if !answerable {
             continue;
         }
-        let short = if k.names.len() > 1 {
-            k.names[1]
-        } else {
-            k.names[0]
-        };
+        let short = k.short();
         let line = if k.kind == Kind::Sort {
             format!("{}:{}", short, kind_example(k.kind))
         } else {
-            format!("{}:{} {}", short, kind_example(k.kind), k.names[0])
+            format!("{}:{} {}", short, kind_example(k.kind), k.name())
         };
         out.push_str("  ");
         out.push_str(&line);

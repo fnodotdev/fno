@@ -1,11 +1,12 @@
-//! `fno-agent fleet feed --serve`: the activity panel's held reader. It
-//! projects the whole history once, holds it, and answers one JSON request
-//! per stdin line with one JSON answer per stdout line
-//! (`fno_proto::feed::serve`). A thread re-projects every 15 seconds and
-//! swaps the held rows in one step, so an answer never waits on a refresh.
-//! The reader exits when its stdin closes, so it dies with the panel.
+//! `fno-agent feed --serve`: the activity panel's held reader. It holds the
+//! whole history's rows and answers one JSON request per stdin line with one
+//! JSON answer per stdout line (`fno_proto::feed::serve`). A child read of
+//! this binary projects the rows, so the projection's working set (every
+//! store it joins) is the child's and is gone when it exits. A thread reads
+//! again every 15 seconds and swaps the held rows in one step, so an answer
+//! never waits on a refresh. The reader exits when its stdin closes, so it
+//! dies with the panel.
 
-use super::feed::serve_rows;
 use crate::paths::AgentsHome;
 use fno_proto::feed::row::FeedItem;
 use fno_proto::feed::serve;
@@ -22,16 +23,30 @@ struct Held {
     stamp: u64,
 }
 
-/// Project the history and read it as the panel's rows. The rows cross the
-/// same JSON shape the printed read emits, so the reader and the printed
-/// read can never disagree on a field.
-fn load(home: &AgentsHome, stamp: u64) -> Held {
-    let rows = serve_rows(home);
-    let items = serde_json::to_string(&rows)
-        .ok()
-        .and_then(|json| serde_json::from_str::<Vec<FeedItem>>(&json).ok())
-        .unwrap_or_default();
-    Held { items, stamp }
+/// The `--limit` that reads every row, the panel's one-shot read's own.
+const ALL_ROWS: &str = "10000000";
+
+/// Read the history through the printed read, `fno-agent feed --json`, in a
+/// child, and parse its rows as they stream: the reader never holds the
+/// projection or the JSON text, only the rows. `None` when the child fails,
+/// so a refresh keeps the rows it has.
+fn load(home: &AgentsHome) -> Option<Vec<FeedItem>> {
+    let exe = std::env::current_exe().ok()?;
+    let mut child = std::process::Command::new(exe)
+        .args(["feed", "--json", "--limit", ALL_ROWS])
+        .env(crate::paths::HOME_ENV, home.root())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let rows = child.stdout.take().and_then(|out| {
+        serde_json::from_reader::<_, Vec<FeedItem>>(std::io::BufReader::new(out)).ok()
+    });
+    match child.wait() {
+        Ok(status) if status.success() => rows,
+        _ => None,
+    }
 }
 
 /// The reader's width: one column per char. The capped columns hold ids,
@@ -50,7 +65,8 @@ fn now_secs() -> i64 {
 /// Serve until stdin closes. Exit 0 on a clean close, 1 when stdout breaks.
 pub(crate) fn run(home: &AgentsHome) -> i32 {
     fno_proto::feed::grammar::set_sequential_tail(super::node_ref::is_sequential_tail);
-    let held = Arc::new(RwLock::new(Arc::new(load(home, 1))));
+    let items = load(home).unwrap_or_default();
+    let held = Arc::new(RwLock::new(Arc::new(Held { items, stamp: 1 })));
     {
         let held = Arc::clone(&held);
         let home = home.clone();
@@ -58,8 +74,11 @@ pub(crate) fn run(home: &AgentsHome) -> i32 {
             let mut stamp = 1;
             loop {
                 std::thread::sleep(REFRESH_EVERY);
+                let Some(items) = load(&home) else {
+                    continue;
+                };
                 stamp += 1;
-                let fresh = Arc::new(load(&home, stamp));
+                let fresh = Arc::new(Held { items, stamp });
                 match held.write() {
                     Ok(mut slot) => *slot = fresh,
                     Err(poisoned) => *poisoned.into_inner() = fresh,
