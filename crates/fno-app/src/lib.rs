@@ -23,6 +23,7 @@ mod mouse;
 mod mux_modes;
 mod orchestration;
 pub mod palette;
+mod pane_seam;
 mod settings;
 mod sheet;
 mod shot;

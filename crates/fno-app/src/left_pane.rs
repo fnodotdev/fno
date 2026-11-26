@@ -619,8 +619,8 @@ const NAME_MIN: usize = 6;
 /// less the padding, the glyph column, the age column and the gaps. The
 /// facts share whatever the name leaves, so this is the only cut bound a
 /// name reads.
-fn name_room(adv: Pixels, small: Pixels, gap: Pixels) -> usize {
-    let inside = px(WIDTH) - px(24.0) - adv * 2.0 - small * (AGE_W + 1) as f32 - gap * 3.0;
+fn name_room(w: f32, adv: Pixels, small: Pixels, gap: Pixels) -> usize {
+    let inside = px(w) - px(24.0) - adv * 2.0 - small * (AGE_W + 1) as f32 - gap * 3.0;
     ((inside / adv).floor() as usize).max(NAME_MIN)
 }
 
@@ -740,6 +740,7 @@ fn plain_cells(
     mark: Mark,
     p: &Palette,
     adv: Pixels,
+    w: f32,
 ) -> Stateful<Div> {
     let (small, gap) = (adv * (ui::SMALL / ui::BODY), px(8.0));
     let detail = ui::cut(detail, 18);
@@ -752,7 +753,7 @@ fn plain_cells(
     if let Some(w) = word {
         taken += small * w.len() as f32 + px(10.0) + gap;
     }
-    let room = ((px(WIDTH) - taken) / adv).floor().max(4.0) as usize;
+    let room = ((px(w) - taken) / adv).floor().max(4.0) as usize;
     let mut d = item.child(ui::clamp(ui::cut(label, room), ui::Role::Name, p));
     if let Some(w) = word {
         d = d.child(ui::tag(w, p.muted, p));
@@ -774,6 +775,8 @@ struct Grid {
     cols: Vec<(usize, usize)>,
     /// Per row, the cmd-digit badge it shows while cmd is held.
     badges: Vec<Option<usize>>,
+    /// The pane width the rows fill.
+    w: f32,
 }
 
 /// An agent row's cells. While cmd is held, `badge` sits over the age at
@@ -809,7 +812,7 @@ fn agent_row(
 /// (row 0 is the section header, row 1 the first band).
 fn band_row(i: usize, p: &Palette) -> Stateful<Div> {
     let border = p.border;
-    ui::row(i, false, p).w(px(WIDTH)).when(i > 1, move |d| {
+    ui::row(i, false, p).w_full().when(i > 1, move |d| {
         d.mt(px(8.0)).border_t_1().border_color(rgb(border))
     })
 }
@@ -1030,12 +1033,12 @@ fn lead_cell(initial: Option<String>, glyph: String, color: u32, adv: Pixels, p:
 
 /// An agent's last result: one quiet line under its row, cut with an
 /// ellipsis at the pane edge.
-fn note_row(i: usize, text: String, p: &Palette) -> Stateful<Div> {
+fn note_row(i: usize, text: String, p: &Palette, w: f32) -> Stateful<Div> {
     div()
         .id(i)
-        .w(px(WIDTH))
+        .w_full()
         .px_3()
-        .pl(px(WIDTH * 0.08 + 12.0))
+        .pl(px(w * 0.08 + 12.0))
         .pb_1()
         .child(
             ui::text(text, ui::Role::Fact, p)
@@ -1125,7 +1128,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             .px_3()
             .py_1()
             .child(ui::text(why, ui::Role::Fact, &p)),
-        Row::Note(text) => note_row(i, text, &p),
+        Row::Note(text) => note_row(i, text, &p, grid.w),
         Row::Workspace {
             id,
             name,
@@ -1157,7 +1160,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             let row_p = if tinted { p.on_needs() } else { p };
             let agent_name = card.as_ref().map(|_| label.clone());
             let mut item = ui::row(i, cursor, &p)
-                .w(px(WIDTH))
+                .w_full()
                 .when(tinted, |d| d.bg(rgb(p.needs_fill())))
                 .child(lead);
             let weight = if blocked || cursor {
@@ -1171,7 +1174,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                     let name = (label, grid.name_w, weight);
                     agent_row(item, card, identity.as_deref(), name, badge, grid, &row_p)
                 }
-                None => plain_cells(item, &label, &detail, mark, &p, adv),
+                None => plain_cells(item, &label, &detail, mark, &p, adv, grid.w),
             };
             item = agent_menu_on_right_click(item, agent_name, cx);
             if let Some(action) = action {
@@ -1214,7 +1217,9 @@ fn menu_item(
     cx: &mut Context<Root>,
 ) -> AnyElement {
     let row = ui::clickable(
-        ui::row(SharedString::from(format!("{key}-{squad}")), false, p).w(px(WIDTH - 12.0)),
+        ui::row(SharedString::from(format!("{key}-{squad}")), false, p)
+            .w_full()
+            .pr_3(),
         p,
     );
     match action {
@@ -1427,9 +1432,12 @@ pub(super) fn render(
     // drop whole from the right, so a name cuts only when even zero facts
     // leave too little room.
     let gap = px(8.0);
-    let name_w = max_name.min(name_room(adv, small, gap));
-    let left =
-        px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * (AGE_W + 1) as f32 - gap * 3.0;
+    let name_w = max_name.min(name_room(root.left_w, adv, small, gap));
+    let left = px(root.left_w)
+        - px(24.0)
+        - adv * (2 + name_w) as f32
+        - small * (AGE_W + 1) as f32
+        - gap * 3.0;
     let budget = (left / small).floor().max(0.0) as usize;
     let cols = columns(&rows, budget);
     // Agent rows number from 1 in order, as cmd-1..9 picks them. The
@@ -1451,6 +1459,7 @@ pub(super) fn render(
         name_w,
         cols,
         badges,
+        w: root.left_w,
     };
     for (i, row) in rows.into_iter().enumerate() {
         let menu_squad = match &row {
@@ -1479,7 +1488,7 @@ pub(super) fn render(
         .flex()
         .flex_col()
         .flex_none()
-        .w(px(WIDTH))
+        .w(px(root.left_w))
         .h_full()
         .pt(px(ui::TITLE_H))
         .bg(rgb(p.panel))
@@ -2014,7 +2023,7 @@ mod tests {
         let adv = px(8.0);
         let small = adv * (ui::SMALL / ui::BODY);
         let gap = px(8.0);
-        let room = name_room(adv, small, gap);
+        let room = name_room(WIDTH, adv, small, gap);
         assert!(
             room >= 18,
             "an 18-char name shows whole at 320px: room {room}"
@@ -2022,7 +2031,7 @@ mod tests {
         // Only when even zero fact columns leave too little room does the
         // name cut: a huge advance stands in for a narrow pane.
         let wide = px(40.0);
-        let cut = name_room(wide, wide * (ui::SMALL / ui::BODY), gap);
+        let cut = name_room(160.0, wide, wide * (ui::SMALL / ui::BODY), gap);
         assert!(cut < 18, "a narrow pane cuts the name: room {cut}");
         assert!(cut >= NAME_MIN);
     }

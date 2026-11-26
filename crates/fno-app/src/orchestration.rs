@@ -5,11 +5,12 @@
 //! board, so they match `/hq/model.json`. A failed read shows its error
 //! above the last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Pixels, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, MouseButton, Pixels, Stateful};
 
 use super::chat::composer::Draft;
 use super::keys::Key;
 use super::left_pane;
+use super::pane_seam;
 use super::ui::{self, Role};
 use super::window::{Action, AnswerState, MailState, Root};
 use fno::app_api::client::org_seats::Machine;
@@ -19,9 +20,9 @@ use fno::app_api::web_hq::Board;
 /// A node id's width in advances: an 11-character id shows whole.
 const NODE_W: usize = 11;
 /// The questions column's width.
-const QUESTIONS_W: f32 = 440.0;
+pub(crate) const QUESTIONS_W: f32 = 440.0;
 /// The next queue's column width.
-const NEXT_W: f32 = 300.0;
+pub(crate) const NEXT_W: f32 = 300.0;
 
 /// A failed read in the error color. Before the first read the body says
 /// "reading…" instead, so this shows nothing.
@@ -102,7 +103,7 @@ fn widths(root: &Root, machines: &[Machine]) -> Widths {
     let fixed = 2 + seat_w + 9 + NODE_W + if hosts { host_w } else { 0 };
     // One gap between each pair of cells, and the row's own side padding.
     let gaps = if hosts { 5.0 } else { 4.0 };
-    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
+    let rest = root.width - px(root.left_w) - px(root.board_feed_w) - px(24.0 + 24.0);
     let rest = rest - adv * fixed as f32 - px(8.0) * gaps;
     let title_w = (rest / adv).floor().max(4.0) as usize;
     Widths {
@@ -399,7 +400,8 @@ fn next_column(root: &Root) -> Div {
         out = out.child(ui::quiet("nothing queued", &p));
     }
     let fixed = 2 + NODE_W + 4;
-    let rest = root.width - px(left_pane::WIDTH) - px(NEXT_W) - px(QUESTIONS_W) - px(48.0);
+    let rest =
+        root.width - px(root.left_w) - px(root.board_next_w) - px(root.board_feed_w) - px(48.0);
     let title_w = ((rest / adv) - fixed as f32 - 24.0).floor().max(4.0) as usize;
     for row in rows.iter() {
         let id = row["id"].as_str().unwrap_or_default();
@@ -529,6 +531,7 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
 /// sits under the columns; when a read lands with everything empty, the
 /// board area shows the designed empty state and the composer stays.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
+    let p = root.palette;
     let quiet = quiet_board(&root.board);
     let column = |id: &'static str| -> Stateful<Div> {
         div()
@@ -547,14 +550,30 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .gap_6()
         .child(column("board-table").flex_1().min_w_0().child(table(root)))
         .child(
+            pane_seam::seam(pane_seam::SeamKind::BoardNext, &p).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|root, ev, _, cx| {
+                    root.seam_down(pane_seam::SeamKind::BoardNext, ev, cx)
+                }),
+            ),
+        )
+        .child(
             column("board-next")
-                .w(px(NEXT_W))
+                .w(px(root.board_next_w))
                 .flex_none()
                 .child(next_column(root)),
         )
         .child(
+            pane_seam::seam(pane_seam::SeamKind::BoardFeed, &p).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|root, ev, _, cx| {
+                    root.seam_down(pane_seam::SeamKind::BoardFeed, ev, cx)
+                }),
+            ),
+        )
+        .child(
             column("board-feed")
-                .w(px(QUESTIONS_W))
+                .w(px(root.board_feed_w))
                 .flex_none()
                 .pr_4()
                 .child(feed(root, cx)),

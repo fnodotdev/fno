@@ -75,6 +75,13 @@ pub struct AppState {
     /// The Workspaces section's grouping; the default opens nested.
     #[serde(default)]
     pub group_by: GroupBy,
+    /// Pane widths the user dragged; None reads as the built-in default.
+    #[serde(default)]
+    pub left_w: Option<f32>,
+    #[serde(default)]
+    pub board_next_w: Option<f32>,
+    #[serde(default)]
+    pub board_feed_w: Option<f32>,
 }
 
 /// The ways a save can fail. Best-effort callers drop the error.
@@ -151,6 +158,9 @@ mod tests {
             }),
             folds: HashSet::new(),
             group_by: GroupBy::default(),
+            left_w: Some(480.0),
+            board_next_w: Some(360.0),
+            board_feed_w: Some(500.0),
         }
     }
 
@@ -194,7 +204,10 @@ mod tests {
         );
         std::fs::write(&path, text).unwrap();
         let state = load(&path);
-        assert_eq!(state.map(|s| s.folds), Some(HashSet::new()));
+        assert_eq!(state.as_ref().map(|s| &s.folds), Some(&HashSet::new()));
+        assert_eq!(state.as_ref().and_then(|s| s.left_w), None);
+        assert_eq!(state.as_ref().and_then(|s| s.board_next_w), None);
+        assert_eq!(state.as_ref().and_then(|s| s.board_feed_w), None);
         let _ = std::fs::remove_file(&path);
     }
 

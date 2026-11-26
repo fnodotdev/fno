@@ -9,6 +9,7 @@ use gpui::{div, prelude::*, px, rgb, Div, SharedString};
 use crate::keys::Key;
 use crate::link::Layout;
 use crate::palette::Palette;
+use crate::pane_seam;
 use crate::ui::{self, LineField};
 use crate::window::{Action, MainView, Root};
 use fno::app_api::client::{agent_lattice_state, agent_sort::sideline_order};
@@ -437,9 +438,10 @@ impl RowMenu {
                         .child(*label),
                 )
         });
-        let (left, top) = self
-            .anchor
-            .unwrap_or((crate::left_pane::WIDTH + 12.0, ui::TITLE_H + 8.0));
+        let (left, top) = self.anchor.unwrap_or((
+            pane_seam::default_width(pane_seam::SeamKind::LeftPane) + 12.0,
+            ui::TITLE_H + 8.0,
+        ));
         let renames = self.items.iter().any(|(l, _, _)| *l == "Rename agent");
         let panel = div()
             .id("row-menu")

@@ -39,7 +39,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, pane_seam, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -292,6 +292,8 @@ pub struct Root {
     /// A split drag: the pane pair under the grabbed hairline and the last
     /// position sent, so a move sends only on a cell crossing.
     seam_drag: Option<mouse::SeamDrag>,
+    /// A pane seam's live drag: which edge, where the grab happened.
+    edge_drag: Option<pane_seam::EdgeDrag>,
     wheel: f32,
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
@@ -304,6 +306,10 @@ pub struct Root {
     pub(super) folds: HashSet<String>,
     /// The Workspaces section's grouping.
     pub(super) group_by: GroupBy,
+    /// The pane widths the user dragged; the constants are the defaults.
+    pub(super) left_w: f32,
+    pub(super) board_next_w: f32,
+    pub(super) board_feed_w: f32,
     /// The inline workspace-name field: it names a new workspace, or
     /// renames the workspace it carries.
     pub(super) squad_field: Option<SquadField>,
@@ -415,15 +421,53 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
     }));
 }
 
-fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
+fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>, left_w: f32) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
-    let width = viewport.width - px(left_pane::WIDTH);
+    let width = viewport.width - px(left_w);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
     (
         rows.min(u16::MAX as f32) as u16,
         cols.min(u16::MAX as f32) as u16,
     )
+}
+
+/// Everything a new window installs before its first paint: the key layer
+/// (config.mux.prefix, [mux.keys] - the same loader the terminal client
+/// uses; a refused rebind surfaces as the startup notice rather than
+/// silently running the shipped default), the appearance-resolved palette,
+/// and the grid size the opened-with widths imply.
+struct WindowPrelude {
+    sent_size: (u16, u16),
+    light: bool,
+    palette: Palette,
+    theme_warning: Option<String>,
+    key_warning: Option<String>,
+    font_want: (String, f32),
+    theme_cwd: std::path::PathBuf,
+}
+
+fn window_prelude(left_w: f32, metrics: &Metrics, window: &Window) -> WindowPrelude {
+    let sent_size = grid_size(window.viewport_size(), metrics.cell, left_w);
+    let light = super::palette::appearance_is_light(window.appearance());
+    let font_want = (
+        metrics.font.family.to_string(),
+        f32::from(metrics.font_size),
+    );
+    let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+    let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+    let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+    fno::ui::keys::install(keymap);
+    let key_warning = key_warnings.first().map(|w| w.0.clone());
+    WindowPrelude {
+        sent_size,
+        light,
+        palette,
+        theme_warning,
+        key_warning,
+        font_want,
+        theme_cwd,
+    }
 }
 
 impl Root {
@@ -433,12 +477,26 @@ impl Root {
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
         group_by: GroupBy,
+        left_w: Option<f32>,
+        board_next_w: Option<f32>,
+        board_feed_w: Option<f32>,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::new_with_link(
-            session, main, pinned, folds, group_by, metrics, None, window, cx,
+            session,
+            main,
+            pinned,
+            folds,
+            group_by,
+            left_w,
+            board_next_w,
+            board_feed_w,
+            metrics,
+            None,
+            window,
+            cx,
         )
     }
 
@@ -451,27 +509,21 @@ impl Root {
         pinned: Option<SessionKey>,
         folds: HashSet<String>,
         group_by: GroupBy,
+        left_w: Option<f32>,
+        board_next_w: Option<f32>,
+        board_feed_w: Option<f32>,
         metrics: Metrics,
         prewarmed: Option<super::link::WarmedLink>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         Self::write_pid_file(&session);
-        let sent_size = grid_size(window.viewport_size(), metrics.cell);
-        let light = super::palette::appearance_is_light(window.appearance());
-        let font_want = (
-            metrics.font.family.to_string(),
-            f32::from(metrics.font_size),
-        );
-        let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-        let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
-        // The key layer (config.mux.prefix, [mux.keys]), installed before the
-        // scanner reads its first keystroke - the same loader the terminal
-        // client uses. A refused rebind surfaces as the startup notice rather
-        // than silently running the shipped default.
-        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
-        fno::ui::keys::install(keymap);
-        let key_warning = key_warnings.first().map(|w| w.0.clone());
+        // A drag from an earlier run resumes where it left off; the
+        // constants stand in when the state file carries no widths.
+        let left_w = left_w.unwrap_or(pane_seam::default_width(pane_seam::SeamKind::LeftPane));
+        let board_next_w = board_next_w.unwrap_or(orchestration::NEXT_W);
+        let board_feed_w = board_feed_w.unwrap_or(orchestration::QUESTIONS_W);
+        let prelude = window_prelude(left_w, &metrics, window);
         let mut root = Root {
             main,
             link: None,
@@ -480,7 +532,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice: prelude.key_warning.or(prelude.theme_warning),
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -489,14 +541,15 @@ impl Root {
             offer: None,
             first_run: false,
             metrics,
-            palette,
+            palette: prelude.palette,
             focus: cx.focus_handle(),
-            sent_size,
+            sent_size: prelude.sent_size,
             board: Board::default(),
             poller: None,
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             seam_drag: None,
+            edge_drag: None,
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
@@ -504,11 +557,14 @@ impl Root {
             mail: None,
             folds,
             group_by,
+            left_w,
+            board_next_w,
+            board_feed_w,
             squad_field: None,
             workspace_menu: None,
             workspace_confirm: None,
-            light,
-            theme_cwd: theme_cwd.clone(),
+            light: prelude.light,
+            theme_cwd: prelude.theme_cwd,
             session: session.clone(),
             ext: mods::Page::default(),
             adv: px(ui::BODY * 0.6),
@@ -534,7 +590,7 @@ impl Root {
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
-            font_want,
+            font_want: prelude.font_want,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -555,7 +611,7 @@ impl Root {
             window_active: window.is_window_active(),
         };
         wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        Self::attach_link(&mut root, &session, prelude.sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
         root.start_plugins(cx);
@@ -2378,12 +2434,11 @@ impl Root {
         }
     }
 
-    /// prefix+P: the row menu of the agent in the focused pane.
+    /// prefix+P opens the focused agent's menu beside the pane's own edge.
     fn row_menu_open(&mut self, cx: &mut Context<Self>) {
-        self.row_menu = Some(mux_modes::RowMenu::open(
-            &self.layout.agents,
-            self.layout.focus,
-        ));
+        let mut menu = mux_modes::RowMenu::open(&self.layout.agents, self.layout.focus);
+        menu.anchor = Some((self.left_w + 12.0, ui::TITLE_H + 8.0));
+        self.row_menu = Some(menu);
         cx.notify();
     }
 
@@ -3689,6 +3744,9 @@ impl Root {
         // A seam drag whose release never reached the window ends here too;
         // its last crossed cell already holds on the server.
         self.seam_drag = None;
+        // A pane seam drag whose release never reached the window ends here
+        // too; the widths it last pointed at already hold on Root.
+        self.edge_drag = None;
         // A grab on a split's gap cell starts a seam drag, before any pane
         // hit test: the gap belongs to no pane's grid.
         if let Some(seam) = mouse::seam_at(x, y, self.cell(), &self.layout.panes) {
@@ -3720,7 +3778,74 @@ impl Root {
         }
     }
 
+    /// Store a pane width on the field its seam's kind names.
+    fn set_pane_width(&mut self, kind: pane_seam::SeamKind, w: f32) {
+        match kind {
+            pane_seam::SeamKind::LeftPane => self.left_w = w,
+            pane_seam::SeamKind::BoardNext => self.board_next_w = w,
+            pane_seam::SeamKind::BoardFeed => self.board_feed_w = w,
+        }
+    }
+
+    /// The left pane and its drag seam: one flex row child of the page.
+    fn left_with_seam(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let now = fno::app_api::digest_overlay::now_secs();
+        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
+        div()
+            .flex()
+            .flex_row()
+            .flex_none()
+            .child(left)
+            .child(
+                pane_seam::seam(pane_seam::SeamKind::LeftPane, &self.palette).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|root, ev, _, cx| {
+                        root.seam_down(pane_seam::SeamKind::LeftPane, ev, cx)
+                    }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// A seam's mouse-down: the second click of a double-click resets the
+    /// pane to its default; the first starts or restarts a drag.
+    pub(super) fn seam_down(
+        &mut self,
+        kind: pane_seam::SeamKind,
+        ev: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if ev.click_count == 2 {
+            let w = pane_seam::default_width(kind);
+            self.set_pane_width(kind, w);
+            self.edge_drag = None;
+            record_ui_state(self, cx);
+            cx.notify();
+            return;
+        }
+        let start_w = match kind {
+            pane_seam::SeamKind::LeftPane => self.left_w,
+            pane_seam::SeamKind::BoardNext => self.board_next_w,
+            pane_seam::SeamKind::BoardFeed => self.board_feed_w,
+        };
+        self.edge_drag = Some(pane_seam::EdgeDrag {
+            kind,
+            grab_x: f32::from(ev.position.x),
+            start_w,
+        });
+        cx.notify();
+    }
+
     fn on_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        // A pane seam drag points a width at the cursor; the width lands
+        // on Root's field and the next paint reflows every reader.
+        if let Some(drag) = self.edge_drag {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                let w = drag.width_now(f32::from(ev.position.x), f32::from(self.width));
+                self.set_pane_width(drag.kind, w);
+            }
+            return;
+        }
         // A seam drag streams the cursor's own coordinate along the seam's
         // axis; the cell crossing is what keeps the wire quiet.
         if let Some(drag) = self.seam_drag {
@@ -3758,7 +3883,15 @@ impl Root {
         );
     }
 
-    fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // A pane seam drag commits the last width it pointed at and
+        // releases; the widths ride the state file at quit through the
+        // snapshot record_ui_state just refreshed.
+        if self.edge_drag.take().is_some() {
+            record_ui_state(self, cx);
+            cx.notify();
+            return;
+        }
         // A seam drag ends with no message: the server applied every cell
         // the drag crossed, and a dragged size holds for the session.
         if self.seam_drag.take().is_some() {
@@ -4274,7 +4407,7 @@ fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let size_now = grid_size(window.viewport_size(), self.metrics.cell);
+        let size_now = grid_size(window.viewport_size(), self.metrics.cell, self.left_w);
         if size_now != self.sent_size && self.link.is_some() {
             self.sent_size = size_now;
             self.send(ClientMsg::Resize {
@@ -4309,8 +4442,6 @@ impl Render for Root {
                 .into_any_element(),
             _ => main,
         };
-        let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, self.adv, window, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
@@ -4366,7 +4497,7 @@ impl Render for Root {
             .text_color(rgb(self.palette.fg))
             .font_family(self.metrics.font.family.clone())
             .text_size(self.metrics.font_size)
-            .child(left)
+            .child(self.left_with_seam(window, cx))
             .child(
                 div()
                     .relative()
@@ -4436,6 +4567,9 @@ struct UiState {
     view: MainView,
     folds: HashSet<String>,
     group_by: GroupBy,
+    left_w: f32,
+    board_next_w: f32,
+    board_feed_w: f32,
     chat_key: Option<SessionKey>,
     path: Option<PathBuf>,
 }
@@ -4455,6 +4589,9 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     ui.view = root.main;
     ui.folds = root.folds.clone();
     ui.group_by = root.group_by;
+    ui.left_w = root.left_w;
+    ui.board_next_w = root.board_next_w;
+    ui.board_feed_w = root.board_feed_w;
     ui.chat_key = root.chat.key.clone();
 }
 
@@ -4485,6 +4622,9 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         pinned: ui.chat_key.clone(),
         folds: ui.folds.clone(),
         group_by: ui.group_by,
+        left_w: Some(ui.left_w),
+        board_next_w: Some(ui.board_next_w),
+        board_feed_w: Some(ui.board_feed_w),
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -4562,6 +4702,11 @@ pub fn run(
             .map(|s| s.folds.clone())
             .unwrap_or_default();
         let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
+        // The widths a previous run dragged; the constants stand in when the
+        // state file carries none.
+        let left_w = restored.as_ref().and_then(|s| s.left_w);
+        let board_next_w = restored.as_ref().and_then(|s| s.board_next_w);
+        let board_feed_w = restored.as_ref().and_then(|s| s.board_feed_w);
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let first_run = restored.is_none();
@@ -4602,6 +4747,9 @@ pub fn run(
                         pinned.clone(),
                         folds.clone(),
                         group_by,
+                        left_w,
+                        board_next_w,
+                        board_feed_w,
                         metrics,
                         window,
                         cx,
@@ -4612,6 +4760,9 @@ pub fn run(
                         view: main,
                         folds,
                         group_by,
+                        left_w: root.left_w,
+                        board_next_w: root.board_next_w,
+                        board_feed_w: root.board_feed_w,
                         chat_key: pinned,
                         path: state_path,
                     });
@@ -4682,6 +4833,9 @@ pub(super) fn root_for_shot(
             pinned,
             HashSet::new(),
             GroupBy::Workspaces,
+            None,
+            None,
+            None,
             metrics,
             warmed,
             window,
