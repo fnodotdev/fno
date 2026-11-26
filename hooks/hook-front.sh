@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: UserPromptSubmit, Stop, SessionStart, PostToolUse - every leg in one process
+# fno hook: UserPromptSubmit Stop SessionStart and PostToolUse - every leg in one process
 # `hook-front.sh <Event>`: `fno-agent hook front <Event>` runs every former
 # hooks.json leg of the event in process, each on its own thread under its
 # registered timeout, and prints one merged answer
