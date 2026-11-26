@@ -515,75 +515,109 @@ fn parse_codex_record(v: &Value) -> Option<TruthRecord> {
     })
 }
 
+/// One footnote record, typed once at the parse boundary. Every payload
+/// field is optional: each record type fills its own subset.
+#[derive(serde::Deserialize)]
+struct FootnoteRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    ts: Option<String>,
+    #[serde(default)]
+    data: FootnoteData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct FootnoteData {
+    text: Option<String>,
+    content: Option<Vec<FootnoteBlock>>,
+    name: Option<String>,
+    input: Option<Value>,
+    effect_class: Option<String>,
+    verdict: Option<String>,
+    source: Option<String>,
+    disposition: Option<String>,
+    is_error: Option<bool>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+    state: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FootnoteBlock {
+    text: Option<String>,
+}
+
 /// A footnote session record the view shows: operator input, assistant
 /// text, each tool call with its effect decision and result, usage, and the
 /// terminal state. Heartbeats, attempts and the other ignorable types carry
 /// nothing a reader needs, so they parse to `None`.
 fn parse_footnote_record(v: &Value) -> Option<TruthRecord> {
-    let kind = v.get("type").and_then(Value::as_str)?;
-    let data = v.get("data")?;
-    let text_of = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or("?");
-    let (role, text) = match kind {
-        "user_input" => ("user", data.get("text")?.as_str()?.trim().to_string()),
+    let rec: FootnoteRecord = serde_json::from_value(v.clone()).ok()?;
+    let d = rec.data;
+    let word = |s: &Option<String>| s.clone().unwrap_or_else(|| "?".to_string());
+    let (role, text) = match rec.kind.as_str() {
+        "user_input" => ("user", d.text?.trim().to_string()),
         "model_response" => {
-            let parts: Vec<&str> = data
-                .get("content")?
-                .as_array()?
+            let blocks = d.content?;
+            let parts: Vec<&str> = blocks
                 .iter()
-                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .filter_map(|b| b.text.as_deref())
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
                 .collect();
             ("assistant", parts.join(" "))
         }
         "tool_call" => {
-            let input: String = data
-                .get("input")
+            let input: String = d
+                .input
+                .as_ref()
                 .map(Value::to_string)
                 .unwrap_or_default()
                 .chars()
                 .take(120)
                 .collect();
-            ("tool", format!("{} {input}", text_of("name")))
+            ("tool", format!("{} {input}", word(&d.name)))
         }
         "effect_decision" => (
             "tool",
             format!(
                 "  effect {}: {} ({})",
-                text_of("effect_class"),
-                text_of("verdict"),
-                text_of("source")
+                word(&d.effect_class),
+                word(&d.verdict),
+                word(&d.source)
             ),
         ),
-        "tool_result" => {
-            let errored = data.get("is_error").and_then(Value::as_bool) == Some(true);
-            (
-                "tool",
-                format!(
-                    "  result {}{}",
-                    text_of("disposition"),
-                    if errored { " (error)" } else { "" }
-                ),
-            )
-        }
+        "tool_result" => (
+            "tool",
+            format!(
+                "  result {}{}",
+                word(&d.disposition),
+                if d.is_error == Some(true) {
+                    " (error)"
+                } else {
+                    ""
+                }
+            ),
+        ),
         "usage" => {
-            let n = |k: &str| data.get(k).and_then(Value::as_u64).unwrap_or(0);
-            let cost = data
-                .get("cost_usd")
-                .and_then(Value::as_f64)
+            let cost = d
+                .cost_usd
                 .map_or_else(|| "unpriced".to_string(), |c| format!("${c:.4}"));
             (
                 "tool",
                 format!(
                     "  usage in={} out={} cost={cost}",
-                    n("input_tokens"),
-                    n("output_tokens")
+                    d.input_tokens.unwrap_or(0),
+                    d.output_tokens.unwrap_or(0)
                 ),
             )
         }
         "terminal" => (
             "status",
-            format!("terminal: {} {}", text_of("state"), text_of("reason")),
+            format!("terminal: {} {}", word(&d.state), word(&d.reason)),
         ),
         _ => return None,
     };
@@ -593,7 +627,7 @@ fn parse_footnote_record(v: &Value) -> Option<TruthRecord> {
     Some(TruthRecord {
         role: role.to_string(),
         text,
-        timestamp: v.get("ts").and_then(Value::as_str).map(String::from),
+        timestamp: rec.ts,
     })
 }
 
