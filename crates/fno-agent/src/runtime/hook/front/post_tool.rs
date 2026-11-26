@@ -2,6 +2,7 @@
 //! model-drift check, the claim heartbeat, and the friction offer.
 
 use regex::Regex;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -107,6 +108,31 @@ fn js_parse_float(text: &str) -> Option<f64> {
 /// At most one cost and drift check per minute.
 const SPEND_THROTTLE_MS: f64 = 60_000.0;
 
+/// A typed view of a JSON object's named fields. Each field holds a raw
+/// `Value`, so a field of any type reads. An absent field reads `Null`, and
+/// a non-object reads every field `Null`, as a missing key did.
+fn fields<T: DeserializeOwned + Default>(v: Option<&Value>) -> T {
+    v.filter(|v| v.is_object())
+        .and_then(|v| T::deserialize(v).ok())
+        .unwrap_or_default()
+}
+
+/// The spend sidecar fields this leg reads, with the script's names.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct SpendFields {
+    last_ts: Value,
+    budget_warned: Value,
+    budget_escalated: Value,
+    drift_warned: Value,
+}
+
+impl SpendFields {
+    fn read(state: &Map<String, Value>) -> Self {
+        fields(Some(&Value::Object(state.clone())))
+    }
+}
+
 /// The one-shot latches the spend sidecar keeps.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 struct Latch {
@@ -117,10 +143,11 @@ struct Latch {
 
 impl Latch {
     fn read(state: &Map<String, Value>) -> Self {
+        let f = SpendFields::read(state);
         Latch {
-            budget_warned: js_truthy(state.get("budgetWarned")),
-            budget_escalated: js_truthy(state.get("budgetEscalated")),
-            drift_warned: js_truthy(state.get("driftWarned")),
+            budget_warned: js_truthy(Some(&f.budget_warned)),
+            budget_escalated: js_truthy(Some(&f.budget_escalated)),
+            drift_warned: js_truthy(Some(&f.drift_warned)),
         }
     }
 
@@ -225,9 +252,14 @@ fn fno_json(args: &[&str], secs: u64) -> Option<Value> {
 /// Spend so far from the transcript; None on any failure.
 fn probe_cost(session: &str) -> Option<f64> {
     let j = fno_json(&["cost", session, "--json"], 10)?;
-    let c = match j.get("cost_usd")? {
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Cost {
+        cost_usd: Value,
+    }
+    let c = match fields::<Cost>(Some(&j)).cost_usd {
         Value::Number(n) => n.as_f64(),
-        Value::String(s) => js_parse_float(s),
+        Value::String(s) => js_parse_float(&s),
         _ => None,
     }?;
     c.is_finite().then_some(c)
@@ -237,8 +269,20 @@ fn probe_cost(session: &str) -> Option<f64> {
 fn probe_model(transcript: Option<&str>) -> Option<String> {
     let transcript = transcript.filter(|t| !t.is_empty())?;
     let j = fno_json(&["context", "--transcript", transcript, "--json"], 8)?;
-    j.get("model")
-        .and_then(Value::as_str)
+    model_of(Some(&j))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ModelField {
+    model: Value,
+}
+
+/// A nonempty string `model`, else nothing.
+fn model_of(v: Option<&Value>) -> Option<String> {
+    fields::<ModelField>(v)
+        .model
+        .as_str()
         .filter(|m| !m.is_empty())
         .map(str::to_string)
 }
@@ -249,12 +293,7 @@ fn attested_model(session: &str) -> Option<String> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))?;
     let raw = std::fs::read_to_string(home.join("attest").join(format!("{session}.json"))).ok()?;
-    serde_json::from_str::<Value>(&raw)
-        .ok()?
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|m| !m.is_empty())
-        .map(str::to_string)
+    model_of(serde_json::from_str::<Value>(&raw).ok().as_ref())
 }
 
 fn persist(path: &Path, state: &Map<String, Value>) {
@@ -280,7 +319,7 @@ fn spend_drift(_args: &[String]) -> i32 {
     }
 
     let now = now_ms();
-    let last = state.get("lastTs").and_then(Value::as_f64).unwrap_or(0.0);
+    let last = SpendFields::read(&state).last_ts.as_f64().unwrap_or(0.0);
     if (now as f64) - last < SPEND_THROTTLE_MS {
         return 0;
     }
@@ -339,9 +378,18 @@ fn jq_text(v: Option<&Value>, field: &str) -> String {
     }
 }
 
+/// The claim status fields read by name.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ClaimFields {
+    state: Value,
+    holder: Value,
+    expires_at: Value,
+}
+
 /// An integral, non-negative `expires_at`, else nothing.
 fn integral_expires(v: Option<&Value>) -> Option<i64> {
-    let n = v?.get("expires_at")?;
+    let n = fields::<ClaimFields>(v).expires_at;
     if let Some(i) = n.as_i64() {
         return (i >= 0).then_some(i);
     }
@@ -350,8 +398,9 @@ fn integral_expires(v: Option<&Value>) -> Option<i64> {
 }
 
 fn state_in(v: Option<&Value>, states: &[&str]) -> bool {
-    v.and_then(|v| v.get("state"))
-        .and_then(Value::as_str)
+    fields::<ClaimFields>(v)
+        .state
+        .as_str()
         .is_some_and(|s| states.contains(&s))
 }
 
@@ -576,7 +625,7 @@ fn renewal_outcome(
 fn handover_renewed(after: Option<&Value>, holder: &str, recorded: i64) -> bool {
     after.is_some_and(Value::is_object)
         && state_in(after, &["live", "suspect"])
-        && after.and_then(|a| a.get("holder")).and_then(Value::as_str) == Some(holder)
+        && fields::<ClaimFields>(after).holder.as_str() == Some(holder)
         && integral_expires(after).is_some_and(|e| e > recorded)
 }
 
@@ -809,8 +858,8 @@ fn handover_heartbeat(cwd: &str, live: Option<&Path>) {
         s.is_object()
             && state_in(Some(s), &CLAIM_STATES)
             && matches!(
-                s.get("holder"),
-                None | Some(Value::Null) | Some(Value::String(_))
+                fields::<ClaimFields>(Some(s)).holder,
+                Value::Null | Value::String(_)
             )
     });
     if !valid {
@@ -858,20 +907,28 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
             Some(other) => other.to_string(),
         }
     };
-    let hook_sid = input
-        .as_ref()
-        .and_then(|v| v.get("session_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct HookFields {
+        session_id: Value,
+        tool_input: Value,
+        tool_response: Value,
+    }
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct ShellInput {
+        command: Value,
+    }
+    let hook = fields::<HookFields>(input.as_ref());
+    let hook_sid = hook.session_id.as_str().unwrap_or("").to_string();
     let tool_name = text("tool_name");
     let shell_tool = matches!(tool_name.as_str(), "Bash" | "Shell" | "exec_command");
     let tool_command = if shell_tool {
-        let tool_input = input.as_ref().and_then(|v| v.get("tool_input"));
+        let tool_input = Some(&hook.tool_input);
         // jq's `.command // .cmd`: only null, false or absent fall through.
-        match tool_input.and_then(|t| t.get("command")) {
-            None | Some(Value::Null) | Some(Value::Bool(false)) => jq_text(tool_input, "cmd"),
-            Some(_) => jq_text(tool_input, "command"),
+        match fields::<ShellInput>(tool_input).command {
+            Value::Null | Value::Bool(false) => jq_text(tool_input, "cmd"),
+            _ => jq_text(tool_input, "command"),
         }
     } else {
         String::new()
@@ -918,8 +975,7 @@ fn claim_heartbeat(_args: &[String]) -> i32 {
         && tool_command.contains("pr")
         && tool_command.contains("create")
     {
-        let response = input.as_ref().and_then(|v| v.get("tool_response"));
-        bind_created_pr(&tool_command, response, &cwd);
+        bind_created_pr(&tool_command, Some(&hook.tool_response), &cwd);
     }
 
     handover_heartbeat(&cwd, live.as_deref());

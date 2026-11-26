@@ -429,21 +429,31 @@ struct Probe {
 
 impl Probe {
     fn parse(out: &str) -> Self {
-        let Ok(v) = serde_json::from_str::<Value>(out.trim()) else {
+        // Raw values: a field of the wrong type reads as absent, not as a
+        // parse failure of the whole answer.
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Answer {
+            used_pct: Value,
+            used_tokens: Value,
+            window_tokens: Value,
+            compaction_band: Value,
+        }
+        let Some(v) = serde_json::from_str::<Value>(out.trim())
+            .ok()
+            .filter(Value::is_object)
+            .and_then(|v| Answer::deserialize(v).ok())
+        else {
             return Probe::default();
         };
-        let Some(pct) = v.get("used_pct").and_then(Value::as_u64) else {
+        let Some(pct) = v.used_pct.as_u64() else {
             return Probe::default();
         };
         Probe {
             used_pct: Some(pct),
-            used_tokens: v.get("used_tokens").and_then(Value::as_u64),
-            window_tokens: v.get("window_tokens").and_then(Value::as_u64),
-            band: v
-                .get("compaction_band")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            used_tokens: v.used_tokens.as_u64(),
+            window_tokens: v.window_tokens.as_u64(),
+            band: v.compaction_band.as_str().unwrap_or("").to_string(),
         }
     }
 
@@ -505,11 +515,18 @@ fn read_registry() -> Option<Vec<AgentRow>> {
     let home = crate::paths::AgentsHome::from_env();
     let rows = crate::client_commands::load_registry_entries(&home.registry_json()).ok()?;
     let projected = crate::registry_json::registry_json_logic(&rows);
-    let agents = projected.get("agents")?.as_array()?;
+    #[derive(Deserialize)]
+    struct Projected {
+        agents: Vec<Value>,
+    }
+    let projected = Some(&projected)
+        .filter(|v| v.is_object())
+        .and_then(|v| Projected::deserialize(v).ok())?;
     Some(
-        agents
-            .iter()
-            .map(|row| serde_json::from_value(row.clone()).unwrap_or_default())
+        projected
+            .agents
+            .into_iter()
+            .map(|row| serde_json::from_value(row).unwrap_or_default())
             .collect(),
     )
 }
@@ -1261,22 +1278,29 @@ fn operator_capture_text(payload: &str) -> Option<String> {
             "## Operator capture\n\nread returned a JSON object with no depth key; run `fno inbox operator status` directly.".to_string()
         });
     };
-    let depth = p.get("depth").and_then(as_int)?;
+    #[derive(Deserialize, Default)]
+    #[serde(default)]
+    struct Capture {
+        depth: Value,
+        oldest_age_s: Value,
+        oldest_excerpt: Value,
+        skipped: Value,
+    }
+    let p = Capture::deserialize(Value::Object(p.clone())).unwrap_or_default();
+    let depth = as_int(&p.depth)?;
     if depth <= 0.0 {
         return None;
     }
-    let age = p
-        .get("oldest_age_s")
-        .and_then(as_int)
+    let age = as_int(&p.oldest_age_s)
         .map(|a| format!(", oldest {}s old", int_text(a)))
         .unwrap_or_default();
-    let excerpt = match p.get("oldest_excerpt") {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        Some(other) => other.to_string(),
+    let excerpt = match p.oldest_excerpt {
+        Value::Null | Value::Bool(false) => String::new(),
+        Value::String(s) => s,
+        other => other.to_string(),
     };
-    let mut skipped: Vec<(String, f64)> = match p.get("skipped") {
-        Some(Value::Object(map)) => map
+    let mut skipped: Vec<(String, f64)> = match &p.skipped {
+        Value::Object(map) => map
             .iter()
             .filter_map(|(k, v)| as_int(v).map(|n| (k.clone(), n)))
             .collect(),

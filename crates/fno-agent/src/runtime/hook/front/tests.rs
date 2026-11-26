@@ -56,7 +56,7 @@ fn prompt_front_joins_every_leg_notice() {
         "from json\n\n## plain notice\n\nsession abc",
         "{out}"
     );
-    assert!(out.get("decision").is_none(), "{out}");
+    assert!(!out.as_object().is_some_and(|o| o.contains_key("decision")), "{out}");
 }
 
 /// AC2-ERR: a leg that answers nonzero, panics or runs past its timeout is
@@ -75,7 +75,7 @@ fn failed_and_late_legs_are_skipped() {
         started.elapsed() < Duration::from_millis(2500),
         "the late leg must not hold the answer past its timeout"
     );
-    assert!(out.get("decision").is_none(), "{out}");
+    assert!(!out.as_object().is_some_and(|o| o.contains_key("decision")), "{out}");
     assert_eq!(
         out["hookSpecificOutput"]["additionalContext"],
         "## plain notice"
