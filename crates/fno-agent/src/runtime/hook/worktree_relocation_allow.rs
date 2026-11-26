@@ -1,17 +1,23 @@
-//! PermissionRequest hook: allow a worker's EnterWorktree into its own
-//! claimed worktree.
+//! PermissionRequest hook: answer a worker's EnterWorktree ask.
 //!
 //! Claude Code asks before EnterWorktree moves the session to a path outside
 //! its own managed worktree dir in the repo ("permission-root relocation").
-//! The ask is a safety check the auto-mode classifier may not approve, and an
-//! allow rule is never read for it, so an auto-mode worker that launches from
+//! Only bypassPermissions skips that ask: no permission rule, allow rule or
+//! add-dir grant suppresses it, so an auto-mode worker that launches from
 //! the repo root stops at the prompt. A PermissionRequest hook is the one
-//! answer short of bypassPermissions. The claim, not the working directory,
-//! names the worktree: a sibling under the same base keeps its ask.
+//! programmatic answer short of bypassPermissions. The claim, not the
+//! working directory, names the worktree: a sibling under the same base
+//! keeps its ask.
+//!
+//! Three answers. Allow the session's own claimed worktree. Deny a target
+//! that does not exist: nobody can enter it, so the ask has no legitimate
+//! approval, and the deny message names the claimed worktree so a typo'd
+//! worker retries instead of parking at a prompt it cannot answer.
+//! Everything else prints `{}`, which leaves the prompt in place for the
+//! human.
 //!
 //! Paths are canonicalized before the compare, so a symlink cannot point the
-//! session elsewhere. Anything else prints `{}`, which leaves the prompt in
-//! place: this hook never denies.
+//! session elsewhere.
 //!
 //! Routine file work is not answered here. When `user.auto_approve_routine`
 //! is on, the spawn writes plain `permissions.allow` and `ask` rules into its
@@ -48,28 +54,48 @@ pub fn run(_args: &[String]) -> i32 {
     let payload: Payload = serde_json::from_str(raw.trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
     let own = own_worktree(&payload.session_id, &cwd);
-    let allowed = own.as_deref().is_some_and(|own| allows(&payload, own));
-    if let Some(decision) = row_decision(&payload, allowed) {
-        super::emit_guard_row(&cwd, GUARD, "EnterWorktree", decision);
-    }
-    if allowed {
-        let out = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PermissionRequest",
-                "decision": {"behavior": "allow"}
-            }
-        });
-        println!("{out}");
-        0
-    } else {
-        // The prompt stays up, so this leg reports it as blocked: the generic
-        // claude PermissionRequest report skips EnterWorktree.
-        let footnote = std::env::var("FNO_HARNESS_NAME").is_ok_and(|h| h == "footnote");
-        let whole = serde_json::from_str::<serde_json::Value>(raw.trim());
-        if let (false, "EnterWorktree", Ok(whole)) = (footnote, payload.tool_name.as_str(), whole) {
-            super::session_state::process("claude", "PermissionRequest", &whole);
+    let Some((decision, reason)) = classify(&payload, own.as_deref()) else {
+        return super::emit_allow();
+    };
+    super::emit_guard_row_reason(&cwd, GUARD, "EnterWorktree", decision, reason);
+    match decision {
+        "allow" => {
+            let out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {"behavior": "allow"}
+                }
+            });
+            println!("{out}");
+            0
         }
-        super::emit_allow()
+        "deny" => {
+            // No prompt is left standing, so this leg skips the blocked
+            // report: the worker reads the message and can retry.
+            let out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "message": deny_message(&payload, own.as_deref())
+                    }
+                }
+            });
+            println!("{out}");
+            0
+        }
+        _ => {
+            // The prompt stays up, so this leg reports it as blocked: the
+            // generic claude PermissionRequest report skips EnterWorktree.
+            let footnote = std::env::var("FNO_HARNESS_NAME").is_ok_and(|h| h == "footnote");
+            let whole = serde_json::from_str::<serde_json::Value>(raw.trim());
+            if let (false, "EnterWorktree", Ok(whole)) =
+                (footnote, payload.tool_name.as_str(), whole)
+            {
+                super::session_state::process("claude", "PermissionRequest", &whole);
+            }
+            super::emit_allow()
+        }
     }
 }
 
@@ -175,14 +201,46 @@ fn path_call(payload: &Payload) -> Option<&str> {
         .then_some(payload.tool_input.path.as_str())
 }
 
-/// The guard row a path call leaves: `allow`, or `ask` when the prompt stays.
-/// Claude Code logs only a hook's decisions, so without the ask row a worker
-/// parked at the prompt looks the same as one whose hook never ran.
-fn row_decision(payload: &Payload, allowed: bool) -> Option<&'static str> {
-    if allowed {
-        return Some("allow");
+/// The decision a path call earns, with the reason the row carries: `allow`
+/// for the session's own claimed worktree, `deny` for a target that does not
+/// exist, `ask` with a reason for every prompt that stays. Claude Code logs
+/// only a hook's decisions, so without the row a parked worker looks the
+/// same as one whose hook never ran, and without the reason the residual
+/// asks cannot be classified after the fact.
+fn classify(payload: &Payload, own: Option<&Path>) -> Option<(&'static str, &'static str)> {
+    let raw = path_call(payload)?;
+    if own.is_some_and(|own| allows(payload, own)) {
+        return Some(("allow", "own_worktree"));
     }
-    path_call(payload).map(|_| "ask")
+    let reason = if payload_cwd(payload).join(raw).canonicalize().is_err() {
+        "nonexistent"
+    } else if own.is_none() {
+        "own_unresolved"
+    } else {
+        "not_own"
+    };
+    let decision = if reason == "nonexistent" {
+        "deny"
+    } else {
+        "ask"
+    };
+    Some((decision, reason))
+}
+
+/// Why the deny names, so a typo'd worker retries at the right path instead
+/// of parking: the claimed worktree when it resolves, the unresolved claim
+/// otherwise.
+fn deny_message(payload: &Payload, own: Option<&Path>) -> String {
+    let raw = path_call(payload).unwrap_or_default();
+    match own {
+        Some(own) => format!(
+            "EnterWorktree target {raw} does not exist; this session's claimed worktree is {}",
+            own.display()
+        ),
+        None => format!(
+            "EnterWorktree target {raw} does not exist, and no claimed worktree resolves for this session"
+        ),
+    }
 }
 
 /// Every base fno has written checkouts to: the configured (or default) base,
@@ -275,14 +333,36 @@ mod tests {
         .unwrap();
         assert!(!allows(&create, &wt));
 
-        // Every path answer leaves a row, so a stalled worker tells a
-        // declined path (ask) from a hook that never answered (no row).
+        // Every path answer leaves a row with a reason, so a stalled worker
+        // tells a declined path (ask) from a hook that never answered (no
+        // row), and a later reader classifies the residual asks.
         let inside = call(&repo, &wt.to_string_lossy());
         let declined = call(&repo, &outside.to_string_lossy());
-        assert_eq!(row_decision(&inside, true), Some("allow"));
-        assert_eq!(row_decision(&declined, false), Some("ask"));
-        assert_eq!(row_decision(&other, false), None);
-        assert_eq!(row_decision(&create, false), None);
+        let gone = call(&repo, &base.join("gone").to_string_lossy());
+        assert_eq!(
+            classify(&inside, Some(&wt)),
+            Some(("allow", "own_worktree"))
+        );
+        assert_eq!(classify(&declined, Some(&wt)), Some(("ask", "not_own")));
+        assert_eq!(classify(&declined, None), Some(("ask", "own_unresolved")));
+        assert_eq!(classify(&gone, Some(&wt)), Some(("deny", "nonexistent")));
+        assert_eq!(classify(&gone, None), Some(("deny", "nonexistent")));
+        assert_eq!(classify(&other, Some(&wt)), None);
+        assert_eq!(classify(&create, Some(&wt)), None);
+    }
+
+    #[test]
+    fn the_deny_message_names_the_claimed_worktree() {
+        let repo = Path::new("/repo");
+        let wt = Path::new("/base/repo/node");
+        let gone = call(repo, "/base/repo/gone");
+        assert_eq!(
+            deny_message(&gone, Some(wt)),
+            "EnterWorktree target /base/repo/gone does not exist; this session's claimed worktree is /base/repo/node"
+        );
+        let unresolved = deny_message(&gone, None);
+        assert!(unresolved.contains("no claimed worktree resolves"));
+        assert!(unresolved.contains("does not exist"));
     }
 
     #[cfg(unix)]

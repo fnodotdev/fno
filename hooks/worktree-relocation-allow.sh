@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: PermissionRequest - allow EnterWorktree under paths.worktrees_base
+# fno hook: PermissionRequest - answer a worker's EnterWorktree ask
 # Claude Code asks before EnterWorktree relocates a session outside its own
 # managed worktree dir in the repo, and auto mode cannot approve that ask
 # (policy: crates/fno-agent/src/runtime/hook/worktree_relocation_allow.rs). Never exec a
