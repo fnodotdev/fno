@@ -1264,14 +1264,42 @@ fn correction_gate(cwd: &Path, fire: &Fire) -> Option<String> {
     let turn = crate::operator_turns::corrections_in(&outcome)
         .into_iter()
         .next()?;
+    let law = correction_law(crate::decision_index::default_store_live());
     Some(format!(
-        "operator turn {} reads as a {} and is undispositioned: \"{}\". A correction or request \
-         the user types is a product change for every fno user (decision user-corrections-are-\
-         product-fixes): record it with `fno backlog idea --source-kind operator_request`, \
-         `fno backlog capture add`, or `fno inbox decisions set`, then run `fno inbox operator ack {} \
+        "operator turn {} reads as a {} and is undispositioned: \"{}\". {law} Record it with \
+         `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or \
+         `fno inbox decisions set`, then run `fno inbox operator ack {} \
          --outcome law:<id>|capture:<fu-id>|node:<id>|nothing` before this turn ends.",
         turn.turn_id, turn.kind, turn.excerpt, turn.turn_id
     ))
+}
+
+const CORRECTION_SUBJECT: &str = "user-corrections-are-product-fixes";
+
+/// The live law the correction gate stands on, read from the store at the
+/// refusal so a superseded copy never speaks for it. An unreadable store
+/// names the subject and the read command instead.
+fn correction_law(store: Result<crate::decision_index::Index, String>) -> String {
+    let newest = store.ok().and_then(|index| {
+        index
+            .rows
+            .into_iter()
+            .filter(|r| r.get("subject").and_then(Value::as_str) == Some(CORRECTION_SUBJECT))
+            .max_by(|a, b| {
+                let ts = |r: &Value| r.get("ts").and_then(Value::as_str).unwrap_or("").to_owned();
+                ts(a).cmp(&ts(b))
+            })
+    });
+    match newest
+        .as_ref()
+        .and_then(|r| r.get("decision").and_then(Value::as_str))
+    {
+        Some(text) => format!("The live law ({CORRECTION_SUBJECT}): {text}"),
+        None => format!(
+            "The live law sits under decision {CORRECTION_SUBJECT}; read it with \
+             `fno backlog decisions {CORRECTION_SUBJECT}`."
+        ),
+    }
 }
 
 /// The node id from the resident manifest, when THIS stop's session is the
@@ -1603,6 +1631,27 @@ fn git_delivery_prefix(repo_root: &Path) -> PathBuf {
 mod tests {
     use super::goal_arbitration::StopDecisionEvent;
     use super::*;
+
+    #[test]
+    fn the_correction_refusal_quotes_the_live_law_or_names_the_read() {
+        let row = |ts: &str, text: &str| serde_json::json!({"subject": CORRECTION_SUBJECT, "ts": ts, "decision": text});
+        let index = crate::decision_index::Index {
+            rows: vec![
+                row("2026-11-09T00:00:00Z", "old copy"),
+                row("2026-11-10T00:00:00Z", "Fix the delivery gap."),
+            ],
+            damaged: 0,
+        };
+        let live = correction_law(Ok(index));
+        assert!(live.contains("Fix the delivery gap."), "{live}");
+        assert!(!live.contains("old copy"), "{live}");
+        assert!(!live.contains("is a product change for every fno user"));
+        let unread = correction_law(Err("no store".into()));
+        assert!(
+            unread.contains("fno backlog decisions user-corrections-are-product-fixes"),
+            "{unread}"
+        );
+    }
 
     #[test]
     fn promise_ending_turn_stamps_no_waiting_on_user() {
