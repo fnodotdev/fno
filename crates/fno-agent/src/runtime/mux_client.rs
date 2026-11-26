@@ -50,7 +50,7 @@ fn warn_mux_dir_unset() {
                 "mux_dir_unset",
                 &serde_json::json!({
                     "env": MUX_DIR_ENV,
-                    "effect": "in-process pane send answers nothing until the launcher exports it",
+                    "effect": "in-process pane send and read answer nothing until the launcher exports it",
                 }),
             )
             .ok();

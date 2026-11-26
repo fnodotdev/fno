@@ -322,8 +322,8 @@ fn pane_of(row: &RegistryEntry) -> Option<&MuxRef> {
         .filter(|m| !m.session.trim().is_empty() && m.pane_id >= 1)
 }
 
-/// The last `n` lines of a mux pane's scrollback, through the shared pane
-/// reader; `None` when the mux does not answer or the pane is blank.
+/// The last `n` lines of a mux pane's visible text, through the in-process
+/// mux client; `None` when the mux does not answer or the pane is blank.
 fn read_pane(mux: &MuxRef, n: usize) -> Option<String> {
     let text = crate::mux_client::pane_read(Some(&mux.session), mux.pane_id)?;
     let lines: Vec<&str> = text.trim_end().lines().collect();
