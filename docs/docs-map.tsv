@@ -31,6 +31,7 @@ docs/architecture/blast-radius-router.md	contribute	contributor	keep	-	0	design 
 docs/architecture/claim-commands-do-provenance.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/claude-mail-pane.md	fleet	guide	move	guides/claude-mail-pane.md	0	open delivered mail in Claude Code
 docs/architecture/cloud-substrate.md	fleet	concept	keep	-	1	remote claude workers
+docs/architecture/code-scanning-rulings.md	contribute	contributor	keep	-	0	how code-scanning alerts are ruled and closed; the scoped-seat procedure
 docs/architecture/codex-thread-driver.md	contribute	contributor	keep	-	5	design note for contributors
 docs/architecture/codex-thread-sandbox-posture.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/company-boundaries.md	contribute	contributor	keep	-	3	design note for contributors
