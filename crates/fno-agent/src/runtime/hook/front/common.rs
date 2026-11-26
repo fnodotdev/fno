@@ -63,14 +63,20 @@ pub(crate) fn cwd() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// The plugin tree: the shim exports `FNO_REPO_ROOT`; Claude exports
-/// `CLAUDE_PLUGIN_ROOT`.
+/// The plugin tree: the shim exports `FNO_HOOK_PLUGIN_ROOT`; Claude exports
+/// `CLAUDE_PLUGIN_ROOT`. Not `FNO_REPO_ROOT`: the path and backlog readers
+/// take that one as the PROJECT root, so a plugin path there would point
+/// every leg and its children at the plugin tree.
 pub(crate) fn plugin_root() -> PathBuf {
-    ["FNO_REPO_ROOT", "CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"]
-        .iter()
-        .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or_else(cwd)
+    [
+        "FNO_HOOK_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_ROOT",
+        "CODEX_PLUGIN_ROOT",
+    ]
+    .iter()
+    .find_map(|k| std::env::var_os(k).filter(|v| !v.is_empty()))
+    .map(PathBuf::from)
+    .unwrap_or_else(cwd)
 }
 
 /// `git rev-parse --show-toplevel` of `dir`, or `dir` itself.
@@ -238,7 +244,7 @@ pub(crate) fn session_state_leg(event: &str) -> i32 {
 /// A pack install drops every mux script, session-state.sh among them, and
 /// with it the mux legs (gate.rs reads the same file).
 pub(crate) fn mux_profile() -> bool {
-    std::env::var_os("FNO_REPO_ROOT")
+    std::env::var_os("FNO_HOOK_PLUGIN_ROOT")
         .map(PathBuf::from)
         .is_none_or(|root| root.join("hooks/session-state.sh").is_file())
 }

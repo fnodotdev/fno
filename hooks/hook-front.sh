@@ -29,7 +29,7 @@ bins+=("$PWD"/crates/fno-agent/target/release/fno-agent \
     "$PWD"/crates/fno-agent/target/debug/fno-agent)
 for bin in "${bins[@]}"; do
     [[ -x "$bin" ]] || continue
-    if out="$(FNO_REPO_ROOT="$root" "$bin" hook front "$@" <<<"$stdin")"; then
+    if out="$(FNO_HOOK_PLUGIN_ROOT="$root" "$bin" hook front "$@" <<<"$stdin")"; then
         [[ -n "$out" ]] && printf '%s\n' "$out"
         exit 0
     fi
