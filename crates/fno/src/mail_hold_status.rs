@@ -83,7 +83,8 @@ fn mail_only_row(session_id: &str) -> bool {
     };
     let wanted = identity_key(session_id);
     let rows: Vec<&Value> = doc
-        .get("entries")
+        .get("agents")
+        .or_else(|| doc.get("entries"))
         .and_then(Value::as_array)
         .map(|entries| {
             entries
