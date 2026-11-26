@@ -12401,7 +12401,7 @@ crates/fno/src/ui/client.rs	clippy::indexing_slicing	let tabs: Vec<TabSpan> = fu
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	out.extend(tabs[start..end].iter().cloned());
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	out.push(DisplayRow::Agent(visible[i]));
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	self.draw_sideline(&mut cells[top * cols..], rows - top, cols, cols);
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	shrink(&mut spans[i]);
+crates/fno/src/ui/client/tab_label.rs	clippy::indexing_slicing	shrink(&mut spans[i]);
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	squad_agents = order.into_iter().map(|i| squad_agents[i]).collect();
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	used += span_w(&tabs[end]);
 crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	} else if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'B']) {
