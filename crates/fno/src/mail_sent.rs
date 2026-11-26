@@ -19,8 +19,30 @@ use serde_json::Value;
 
 const CODEX_SESSIONS_DIR_ENV: &str = "FNO_CODEX_SESSIONS_DIR";
 
-/// Run the leaf and return its exit code.
-pub fn run(args: &[String]) -> i32 {
+/// Run the leaf. `None` means this machine reads state the front door
+/// cannot (a configured remote store, a pinned config file, or a linked
+/// worktree whose config ladder reaches the canonical checkout), so the
+/// caller execs fno-agent, which reads all of it.
+pub fn run(args: &[String]) -> Option<i32> {
+    if !answers_in_process() {
+        return None;
+    }
+    Some(answer(args))
+}
+
+fn answers_in_process() -> bool {
+    let remote = lookup_value(Some(&global_config_path()), None, "store.remote_url")
+        .and_then(|v| v.as_str().map(|s| !s.trim().is_empty()))
+        .unwrap_or(false);
+    let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
+    let linked_worktree = project_config_path()
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|root| root.join(".git").is_file());
+    !(remote || pinned || linked_worktree)
+}
+
+fn answer(args: &[String]) -> i32 {
     let settings = Settings::load();
     let bus = bus_dir(&settings);
     let database = graph_json(&settings).with_extension("db");
@@ -72,9 +94,9 @@ fn home() -> PathBuf {
 }
 
 /// The hash id a delivered header token names: `fmail-87` reads the numbers
-/// table in the graph store, anything else passes through as typed. The
-/// store is read on this machine only; fno-agent also pulls from a
-/// configured primary, which a token no local row holds would need.
+/// table in the graph store, anything else passes through as typed. With no
+/// remote store configured (the only case this leaf answers) the one store
+/// is `local`.
 fn mail_hash(database: &Path, token: &str) -> String {
     let token = token.trim();
     if !fno_mail::address::is_mail_number(token) {

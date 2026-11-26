@@ -1356,7 +1356,11 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // RemoteMail claim this arm replaces never fires for reply.
             Some(Role::MailReply(tail.to_vec()))
         }
-        "sent" => Some(Role::MailSent(tail.to_vec())),
+        "sent" => Some(Role::MailSent(
+            std::iter::once(OsString::from(command))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
         "hold" | "dnd" | "hold-release" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(command))
                 .chain(tail.to_vec())
@@ -2469,9 +2473,15 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
         Role::MailSent(rest) => {
             let args: Vec<String> = rest
                 .iter()
+                .skip(1)
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
-            fno::cli_usage::exit(fno::mail_sent::run(&args))
+            match fno::mail_sent::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail sent", &["mail"], &rest))
+                }
+            }
         }
         Role::MailViewRenamed => {
             eprintln!("fno agent mail view was renamed: use fno agent mail show");
