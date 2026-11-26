@@ -370,8 +370,9 @@ mod tests {
             None
         );
         assert_eq!(bind_fork_child(&mut entries, CHILD, "c-3", None), Some(0));
-        assert_eq!(entries[0].role_scope.as_deref(), Some("fnh"));
-        assert_eq!(entries[0].harness_session_id.as_deref(), Some("c-3"));
+        let moved = entries.first().expect("one row");
+        assert_eq!(moved.role_scope.as_deref(), Some("fnh"));
+        assert_eq!(moved.harness_session_id.as_deref(), Some("c-3"));
     }
 
     /// A report no launch record names carries its own substrate word, and
