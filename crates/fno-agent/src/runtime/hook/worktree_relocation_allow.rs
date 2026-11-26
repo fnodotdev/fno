@@ -16,6 +16,14 @@
 //! Everything else prints `{}`, which leaves the prompt in place for the
 //! human.
 //!
+//! The claim has two sources, tried in order. A spawned worker's registry
+//! row names its node. A session that ran `fno do target init` holds a
+//! target manifest instead, whose `harness_session_id` names the session;
+//! an interactive session's enter is the case that used to prompt every
+//! time. Both sources admit the same shape: one recorded worktree of this
+//! repo, verified by the record round-trip below. A sibling, an outside
+//! dir, or a session neither source names keeps its ask.
+//!
 //! Paths are canonicalized before the compare, so a symlink cannot point the
 //! session elsewhere.
 //!
@@ -54,7 +62,8 @@ pub fn run(_args: &[String]) -> i32 {
     let payload: Payload = serde_json::from_str(raw.trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
     let own = own_worktree(&payload.session_id, &cwd);
-    let Some((decision, reason)) = classify(&payload, own.as_deref()) else {
+    let own_ref = own.as_ref().map(|(p, s)| (p.as_path(), *s));
+    let Some((decision, reason)) = classify(&payload, own_ref) else {
         return super::emit_allow();
     };
     super::emit_guard_row_reason(&cwd, GUARD, "EnterWorktree", decision, reason);
@@ -77,7 +86,7 @@ pub fn run(_args: &[String]) -> i32 {
                     "hookEventName": "PermissionRequest",
                     "decision": {
                         "behavior": "deny",
-                        "message": deny_message(&payload, own.as_deref())
+                        "message": deny_message(&payload, own_ref.map(|(p, _)| p))
                     }
                 }
             });
@@ -101,16 +110,64 @@ pub fn run(_args: &[String]) -> i32 {
 
 const GUARD: &str = "worktree-relocation-allow";
 
-/// The worktree this session claims: `<base>/<repo>/<node>` for the node its
-/// registry row carries. No row, no node or no such folder means no claim.
-fn own_worktree(session: &str, cwd: &Path) -> Option<PathBuf> {
+/// The worktree this session claims, from the first source that resolves:
+/// the registry row a spawn wrote, then the target manifest init wrote for
+/// the session. The tag names the source on the allow row, so a later
+/// reader tells a spawn-lane allow from a manifest-lane one.
+fn own_worktree(session: &str, cwd: &Path) -> Option<(PathBuf, &'static str)> {
     if session.is_empty() {
         return None;
     }
+    registry_claim(session, cwd)
+        .map(|p| (p, "own_worktree"))
+        .or_else(|| manifest_claim(session, cwd).map(|p| (p, "own_manifest")))
+}
+
+/// The registry-row claim: `<base>/<repo>/<node>` for the node the spawn
+/// wrote. No row, no node or no such folder means no claim here.
+fn registry_claim(session: &str, cwd: &Path) -> Option<PathBuf> {
     let home = crate::paths::AgentsHome::from_env_opt()?;
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
     let node = claimed_node(&registry, session)?;
     own_worktree_in(&bases(cwd), &crate::paths::canonical_repo_root(cwd)?, &node)
+}
+
+/// The target-manifest claim: the spaces manifest whose
+/// `harness_session_id` names this session. Init wrote it, so the session
+/// id match is the binding; the record round-trip and the owner_cwd
+/// equality still decide the path, the same as the registry leg.
+fn manifest_claim(session: &str, cwd: &Path) -> Option<PathBuf> {
+    let dir = crate::paths::space_dir_opt(cwd)?.join("worktrees");
+    let bases = bases(cwd);
+    let repo = crate::paths::canonical_repo_root(cwd)?;
+    manifest_claim_in(session, &dir, &bases, &repo)
+}
+
+/// [`manifest_claim`] with the directories as parameters, so the tests
+/// exercise the predicate with no spaces root in the loop.
+fn manifest_claim_in(session: &str, dir: &Path, bases: &[PathBuf], repo: &Path) -> Option<PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let Ok(content) = std::fs::read_to_string(entry.path().join("target-state.md")) else {
+            continue;
+        };
+        if super::stop::first_raw_field(&content, &["harness_session_id"]).as_deref()
+            != Some(session)
+        {
+            continue;
+        }
+        let node = super::stop::first_raw_field(&content, &["graph_node_id"]);
+        let real = node
+            .filter(|node| node.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+            .and_then(|node| own_worktree_in(bases, repo, &node));
+        if let Some(real) = real {
+            let owner = super::stop::first_raw_field(&content, &["owner_cwd"])
+                .and_then(|owner| PathBuf::from(owner).canonicalize().ok());
+            if owner.is_some_and(|owner| owner == real) {
+                return Some(real);
+            }
+        }
+    }
+    None
 }
 
 fn claimed_node(registry: &crate::state::Registry, session: &str) -> Option<String> {
@@ -207,10 +264,15 @@ fn path_call(payload: &Payload) -> Option<&str> {
 /// only a hook's decisions, so without the row a parked worker looks the
 /// same as one whose hook never ran, and without the reason the residual
 /// asks cannot be classified after the fact.
-fn classify(payload: &Payload, own: Option<&Path>) -> Option<(&'static str, &'static str)> {
+fn classify(
+    payload: &Payload,
+    own: Option<(&Path, &'static str)>,
+) -> Option<(&'static str, &'static str)> {
     let raw = path_call(payload)?;
-    if own.is_some_and(|own| allows(payload, own)) {
-        return Some(("allow", "own_worktree"));
+    if let Some((own, source)) = own {
+        if allows(payload, own) {
+            return Some(("allow", source));
+        }
     }
     let reason = if payload_cwd(payload).join(raw).canonicalize().is_err() {
         "nonexistent"
@@ -340,15 +402,30 @@ mod tests {
         let declined = call(&repo, &outside.to_string_lossy());
         let gone = call(&repo, &base.join("gone").to_string_lossy());
         assert_eq!(
-            classify(&inside, Some(&wt)),
+            classify(&inside, Some((wt.as_path(), "own_worktree"))),
             Some(("allow", "own_worktree"))
         );
-        assert_eq!(classify(&declined, Some(&wt)), Some(("ask", "not_own")));
+        // The manifest source answers allow with its own tag, so a later
+        // reader tells which claim source resolved.
+        assert_eq!(
+            classify(&inside, Some((wt.as_path(), "own_manifest"))),
+            Some(("allow", "own_manifest"))
+        );
+        assert_eq!(
+            classify(&declined, Some((wt.as_path(), "own_manifest"))),
+            Some(("ask", "not_own"))
+        );
         assert_eq!(classify(&declined, None), Some(("ask", "own_unresolved")));
-        assert_eq!(classify(&gone, Some(&wt)), Some(("deny", "nonexistent")));
+        assert_eq!(
+            classify(&gone, Some((wt.as_path(), "own_worktree"))),
+            Some(("deny", "nonexistent"))
+        );
         assert_eq!(classify(&gone, None), Some(("deny", "nonexistent")));
-        assert_eq!(classify(&other, Some(&wt)), None);
-        assert_eq!(classify(&create, Some(&wt)), None);
+        assert_eq!(classify(&other, Some((wt.as_path(), "own_worktree"))), None);
+        assert_eq!(
+            classify(&create, Some((wt.as_path(), "own_worktree"))),
+            None
+        );
     }
 
     #[test]
@@ -448,5 +525,83 @@ mod tests {
         assert_eq!(own_worktree_in(&all, &repo, "foreign"), None);
         assert_eq!(own_worktree_in(&all, &repo, "unrecorded"), None);
         assert!(unrecorded.exists());
+    }
+
+    /// One manifest in a spaces worktrees dir, with the fields the claim
+    /// reads. The real manifest carries frontmatter and a body; the reader
+    /// scans lines, so a flat body stands in for both.
+    fn manifest(dir: &Path, name: &str, session: &str, owner: &str, node: &str) {
+        let wt_dir = dir.join(name);
+        std::fs::create_dir_all(&wt_dir).unwrap();
+        std::fs::write(
+            wt_dir.join("target-state.md"),
+            format!(
+                "harness_session_id: {session}\nowner_cwd: \"{owner}\"\ngraph_node_id: {node}\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_session_manifest_claims_its_worktree_through_the_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("checkout");
+        let state = tmp.path().join("state");
+        let base = crate::paths_cli::legacy_worktrees_base(&state);
+        let wt = checkout(&base, &repo, "renamed", "node", true);
+        let real = wt.canonicalize().unwrap();
+        let all = vec![base.clone()];
+
+        // Admit arm: the session's own manifest naming the recorded
+        // worktree in owner_cwd resolves the claim.
+        let spaces = tmp.path().join("spaces-a");
+        manifest(&spaces, "x-node", "s-a", &real.to_string_lossy(), "node");
+        assert_eq!(
+            manifest_claim_in("s-a", &spaces, &all, &repo),
+            Some(real.clone())
+        );
+
+        // Withhold arm, foreign session: another caller with no manifest of
+        // its own is not admitted by one naming a different session.
+        assert_eq!(manifest_claim_in("s-b", &spaces, &all, &repo), None);
+
+        // Withhold arm, planted owner_cwd: the node resolves to the real
+        // worktree, but owner_cwd names an unrecorded existing dir, so the
+        // equality check refuses.
+        let planted = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&planted).unwrap();
+        let spaces = tmp.path().join("spaces-c");
+        manifest(&spaces, "x-c", "s-c", &planted.to_string_lossy(), "node");
+        assert_eq!(manifest_claim_in("s-c", &spaces, &all, &repo), None);
+
+        // Withhold arm, unrecorded node: the record round-trip fails, so an
+        // existing but unrecorded checkout admits nothing.
+        let unrecorded = checkout(&base, &repo, "renamed", "unrecorded2", false);
+        let spaces = tmp.path().join("spaces-d");
+        manifest(
+            &spaces,
+            "x-d",
+            "s-d",
+            &unrecorded.canonicalize().unwrap().to_string_lossy(),
+            "unrecorded2",
+        );
+        assert_eq!(manifest_claim_in("s-d", &spaces, &all, &repo), None);
+
+        // Withhold arm, charset: a graph_node_id with a path separator is
+        // skipped before any record probe.
+        let spaces = tmp.path().join("spaces-e");
+        manifest(
+            &spaces,
+            "x-e",
+            "s-e",
+            &real.to_string_lossy(),
+            "node/../../escape",
+        );
+        assert_eq!(manifest_claim_in("s-e", &spaces, &all, &repo), None);
+
+        // Withhold arm, no manifest at all.
+        let spaces = tmp.path().join("spaces-f");
+        std::fs::create_dir_all(&spaces).unwrap();
+        assert_eq!(manifest_claim_in("s-a", &spaces, &all, &repo), None);
     }
 }

@@ -1580,7 +1580,10 @@ fn mtime_secs(p: &Path) -> Option<u64> {
 
 /// First non-empty, non-`null` value among `keys`, first matching line wins,
 /// quotes and whitespace stripped. Mirrors the shim's `grep | sed | tr` chain.
-fn first_raw_field(content: &str, keys: &[&str]) -> Option<String> {
+/// The raw value of the first line whose trimmed key is named, quotes
+/// stripped, `null` and empty read as absent. Shared with the relocation
+/// hook's manifest claim, which reads the same manifest shape.
+pub(crate) fn first_raw_field(content: &str, keys: &[&str]) -> Option<String> {
     for line in content.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
