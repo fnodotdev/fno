@@ -2948,7 +2948,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spent_budget_launches_nothing_and_red_names_the_clearing_key() {
+    fn a_refused_head_launches_nothing_and_red_names_its_clearing_key() {
         let w = World::new("skills/x/SKILL.md\n");
         w.with_baseline();
         let now = Utc::now();
@@ -2966,6 +2966,22 @@ mod tests {
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("evals.gate.daily_usd"), "{post}");
+
+        // An undeclared head lane is refused before launch too. The head never
+        // reroutes, and the clearing hint leads the status text.
+        let mut lane = World::new("skills/x/SKILL.md\n");
+        lane.room = None;
+        World::config(lane.dir.path(), "[evals.gate]\nlane = \"no-such-lane\"\n");
+        lane.with_baseline();
+        lane.tick(true, Utc::now());
+        assert!(lane.spawns.borrow().is_empty(), "no doomed launch");
+        let post = lane.posts.borrow().last().cloned().unwrap();
+        assert!(post.starts_with("failure head lane refused"), "{post}");
+        assert!(
+            post.contains("routing.models"),
+            "clearing hint kept: {post}"
+        );
+        assert!(post.contains("unknown lane 'no-such-lane'"), "{post}");
     }
 
     #[test]
@@ -3126,25 +3142,6 @@ mod tests {
             assert!(note.contains("disarmed pr 7"), "{state}: {note}");
             assert!(note.contains(&format!("({word}")), "{state}: {note}");
         }
-    }
-
-    #[test]
-    fn an_undeclared_head_lane_refuses_red_without_a_launch() {
-        // The head never reroutes: an undeclared lane posts its refusal and
-        // names the declared lanes, instead of launching a run that dies on it.
-        let mut w = World::new("skills/x/SKILL.md\n");
-        w.room = None;
-        World::config(w.dir.path(), "[evals.gate]\nlane = \"no-such-lane\"\n");
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        assert!(w.spawns.borrow().is_empty(), "no doomed launch");
-        let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.starts_with("failure head lane refused"), "{post}");
-        assert!(
-            post.contains("routing.models"),
-            "clearing hint kept: {post}"
-        );
-        assert!(post.contains("unknown lane 'no-such-lane'"), "{post}");
     }
 
     #[test]
