@@ -123,7 +123,7 @@ fn widths(root: &Root, machines: &[Machine]) -> Widths {
     }
 }
 
-fn table(root: &Root) -> Div {
+fn table(root: &Root, w: Widths) -> Div {
     let p = root.palette;
     let adv = root.adv;
     let mut out = div()
@@ -145,7 +145,7 @@ fn table(root: &Root) -> Div {
         seat_w,
         title_w,
         ..
-    } = widths(root, machines);
+    } = w;
     let head = |t: &str, chars: usize| col(t.to_string(), chars, Role::Hint, root, adv);
     let mut heads = div()
         .flex()
@@ -549,14 +549,13 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             .overflow_y_scroll()
             .pb_8()
     };
-    let table_min = widths(
-        root,
-        root.board
-            .fleet()
-            .map(|f| f.machines.as_slice())
-            .unwrap_or_default(),
-    )
-    .min_w;
+    let machines = root
+        .board
+        .fleet()
+        .map(|f| f.machines.as_slice())
+        .unwrap_or_default();
+    let w = widths(root, machines);
+    let table_min = w.min_w;
     let columns = div()
         .flex()
         .flex_row()
@@ -568,7 +567,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             column("board-table")
                 .flex_1()
                 .min_w(table_min)
-                .child(table(root)),
+                .child(table(root, w)),
         )
         .child(
             column("board-next")
