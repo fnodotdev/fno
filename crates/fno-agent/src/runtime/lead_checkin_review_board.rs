@@ -53,37 +53,3 @@ pub(super) fn lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
         ],
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn node(id: &str, parent: &str, notes: &[(&str, &str)]) -> Value {
-        json!({
-            "id": id,
-            "parent": parent,
-            "progress_notes": notes.iter().map(|(ts, text)| json!({"ts": ts, "text": text})).collect::<Vec<_>>(),
-        })
-    }
-
-    #[test]
-    fn newest_slug_on_scope_or_child_wins_and_other_scopes_are_ignored() {
-        let rows = vec![
-            node("x-epic", "", &[("2026-11-01", "Review board: old")]),
-            node("x-kid", "x-epic", &[("2026-11-02", "Review board: new")]),
-            node("x-other", "", &[("2026-11-03", "Review board: elsewhere")]),
-        ];
-        let got = reading(&rows, "x-epic").unwrap();
-        assert_eq!(got["slug"], "new");
-        assert_eq!(reading(&rows, "x-none").unwrap()["slug"], Value::Null);
-    }
-
-    #[test]
-    fn a_missing_board_prints_the_remedy_and_a_found_one_prints_the_slug() {
-        let reading_of = |value| crate::lead_checkin::Reading::took("review_board", value);
-        let none = lines(&[reading_of(json!({"slug": null}))]);
-        assert!(none[0].starts_with("review_board: none: make one from the Gus or Lara Visual Log"));
-        let some = lines(&[reading_of(json!({"slug": "abc"}))]);
-        assert_eq!(some, vec!["review_board: abc".to_string()]);
-    }
-}

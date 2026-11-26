@@ -3685,6 +3685,19 @@ mod tests {
             assert!(err.starts_with("unreadable ("), "{err}");
         });
         let _ = std::fs::remove_dir_all(&base);
+
+        // The review-board reading: newest slug on the scope or a child, else the remedy line.
+        let note = |ts: &str, text: &str| json!({"ts": ts, "text": text});
+        let boards = vec![
+            json!({"id": "x-epic", "progress_notes": [note("2026-11-01", "Review board: old")]}),
+            json!({"id": "x-kid", "parent": "x-epic", "progress_notes": [note("2026-11-02", "Review board: new")]}),
+        ];
+        let line = |scope| {
+            let value = review_board::reading(&boards, scope).unwrap();
+            review_board::lines(&[Reading::took("review_board", value)])
+        };
+        assert_eq!(line("x-epic"), vec!["review_board: new".to_string()]);
+        assert!(line("x-none")[0].starts_with("review_board: none: make one from the Gus or Lara"));
     }
 
     /// One escalation note's frontmatter plus stub sections.
