@@ -12385,13 +12385,13 @@ crates/fno/src/ui/client.rs	clippy::indexing_slicing	cells[r * cols + col + 1] =
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	cells[r * cols + col] = Cell {
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	cells[row * cols + end] = blank;
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	cells[row * cols + start - 1] = blank;
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	cleaned.push(bytes[i]);
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	cleaned2.push(cleaned[j]);
+crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	cleaned.push(bytes[i]);
+crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	cleaned2.push(cleaned[j]);
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	hit: tabs[end].hit,
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	hit: tabs[start - 1].hit,
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	if !row_is_inert(&rows[cur]) {
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	if bytes[i..].starts_with(&[0x1b, b'[', b'C']) {
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'A']) {
+crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	if bytes[i..].starts_with(&[0x1b, b'[', b'C']) {
+crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'A']) {
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	if end < cols && cells[row * cols + end].flags & cell_flags::WIDE_SPACER != 0 {
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	if matches!(rows[i as usize], DisplayRow::Agent(_)) {
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	if start > 0 && start < cols && cells[row * cols + start].flags & cell_flags::WIDE_SPACER != 0 {
@@ -12404,9 +12404,11 @@ crates/fno/src/ui/client.rs	clippy::indexing_slicing	self.draw_sideline(&mut cel
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	shrink(&mut spans[i]);
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	squad_agents = order.into_iter().map(|i| squad_agents[i]).collect();
 crates/fno/src/ui/client.rs	clippy::indexing_slicing	used += span_w(&tabs[end]);
-crates/fno/src/ui/client.rs	clippy::indexing_slicing	} else if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'B']) {
+crates/fno/src/ui/client/selector_keys.rs	clippy::indexing_slicing	} else if cleaned[j..].starts_with(&[0x1b, b'[', b'1', b';', b'2', b'B']) {
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = proto::ensure_mux_dir();
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = raw_out(b"\\x07");
+crates/fno/src/ui/client/key_dispatch.rs	clippy::let_underscore_must_use	let _ = raw_out(b"\\x07");
+crates/fno/src/ui/client/move_pick.rs	clippy::let_underscore_must_use	let _ = raw_out(b"\\x07");
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = tx.send((chars, outcome));
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = tx.send((gen, backlog_board::BoardMsg::CommandDone { notice }));
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = tx.send((gen, result));
@@ -12416,12 +12418,12 @@ crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = tx.send(outc
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = tx.send(result);
 crates/fno/src/ui/client.rs	clippy::let_underscore_must_use	let _ = write_msg(&mut sock_w, &ClientMsg::Detach).await;
 crates/fno/src/ui/client.rs	clippy::too_many_lines	async fn attach_and_run(
-crates/fno/src/ui/client.rs	clippy::too_many_lines	async fn dispatch_event(
-crates/fno/src/ui/client.rs	clippy::too_many_lines	async fn selector_keys(
+crates/fno/src/ui/client/key_dispatch.rs	clippy::too_many_lines	pub(super) async fn dispatch_event(
+crates/fno/src/ui/client/selector_keys.rs	clippy::too_many_lines	pub(super) async fn selector_keys(
 crates/fno/src/ui/client.rs	clippy::too_many_lines	fn compose_at(&self, now: Instant) -> Frame {
 crates/fno/src/ui/client.rs	clippy::too_many_lines	fn local_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
 crates/fno/src/ui/client.rs	clippy::too_many_lines	fn new(term: (u16, u16), session: String, layout: LayoutView) -> Self {
-crates/fno/src/ui/client.rs	clippy::unwrap_used	Some((a.attach_id.clone().unwrap(), a.squad))
+crates/fno/src/ui/client/selector_keys.rs	clippy::unwrap_used	Some((a.attach_id.clone().unwrap(), a.squad))
 crates/fno/src/ui/client/agent_group.rs	clippy::indexing_slicing	if let DisplayRow::Agent(n) = &rows[j as usize] {
 crates/fno/src/ui/client/agent_group.rs	clippy::indexing_slicing	rows[..at]
 crates/fno/src/ui/client/agent_launcher.rs	clippy::indexing_slicing	&chars[..chars.len() - ws]
@@ -12655,7 +12657,6 @@ crates/fno/src/ui/client/mods.rs	clippy::let_underscore_must_use	let _ = tx.send
 crates/fno/src/ui/client/mods.rs	clippy::let_underscore_must_use	let _ = tx.send((0, OrgMsg::Mods(Landed::Installed(read))));
 crates/fno/src/ui/client/mods.rs	clippy::let_underscore_must_use	let _ = tx.send((0, OrgMsg::Mods(Landed::Paned(what, done))));
 crates/fno/src/ui/client/mods.rs	clippy::too_many_lines	pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
-crates/fno/src/ui/client/move_pick.rs	clippy::let_underscore_must_use	let _ = raw_out(b"\\x07");
 crates/fno/src/ui/client/needs_view.rs	clippy::indexing_slicing	let mine_rows = &projection.rows[..projection.mine_shown];
 crates/fno/src/ui/client/needs_view.rs	clippy::indexing_slicing	let need_rows = &projection.rows[projection.mine_shown..];
 crates/fno/src/ui/client/needs_view.rs	clippy::too_many_lines	pub(crate) fn needs_overlay_lines(
