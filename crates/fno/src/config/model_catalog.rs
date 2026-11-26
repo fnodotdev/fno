@@ -606,6 +606,19 @@ fn facts_for<'a>(
         .and_then(|v| v.get(provider))
         .filter(|v| v.is_object());
     let vendor = reach.vendor.get(provider);
+    let linked = linked_catalog(provider, vendor, record, catalog);
+    facts_with(routes, vendor, record, linked)
+}
+
+/// The catalog provider a provider's model names come from: the reach
+/// vendor's catalog id, else the same id, else the first catalog id whose
+/// api host matches the record's base_url.
+fn linked_catalog<'a>(
+    provider: &str,
+    vendor: Option<&VendorReach>,
+    record: Option<&serde_json::Value>,
+    catalog: Option<&'a Catalog>,
+) -> Option<&'a CatalogProvider> {
     let mut linked: Option<&CatalogProvider> = None;
     if let Some(v) = vendor {
         if let Some(c) = &v.catalog {
@@ -639,6 +652,16 @@ fn facts_for<'a>(
             }
         }
     }
+    linked
+}
+
+/// The facts half of [`facts_for`], once the catalog link is known.
+fn facts_with<'a>(
+    routes: &[String],
+    vendor: Option<&VendorReach>,
+    record: Option<&serde_json::Value>,
+    linked: Option<&'a CatalogProvider>,
+) -> Option<(ProviderFacts, Option<&'a CatalogProvider>)> {
     let npm_protocol = |cp: &CatalogProvider| -> Option<String> {
         match cp.npm.as_deref() {
             Some("@ai-sdk/anthropic") => Some("anthropic".to_string()),
@@ -1266,8 +1289,10 @@ mod tests {
         };
         // The consent is one key field: a protocol field would close codex.
         assert_eq!(
-            steps[0],
-            "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            steps.first().map(String::as_str),
+            Some(
+                "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            )
         );
         // codex routes openai: a keyed openai record is Ready, an
         // anthropic-only vendor is Unreachable by protocol.
@@ -1304,8 +1329,10 @@ mod tests {
         };
         assert_eq!(key_env, "OPENROUTER_API_KEY");
         assert_eq!(
-            steps[0],
-            "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            steps.first().map(String::as_str),
+            Some(
+                "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            )
         );
     }
 
