@@ -4582,7 +4582,7 @@ fn bye_flushes_the_final_dirty_frame_first() {
                 cursor_col: 0,
                 cursor_visible: true,
                 scroll_offset: 0,
-                history_lines: 0,
+                ..Default::default()
             };
             dirty.lock().unwrap().insert(7, frame.clone());
             let stats: PaneStats = Arc::default();

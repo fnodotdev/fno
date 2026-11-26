@@ -1058,6 +1058,47 @@
         }
       ]
     },
+    "BlockSpan": {
+      "description": "One command block's rows inside a [`Frame`] (v135). `top` and `bottom` are\ninclusive viewport rows, clamped into `0..rows`. They come from grid anchors\nthat drift under reflow, so a client treats them as a paint hint and names\nthe block by `seq` when it picks one.",
+      "properties": {
+        "bottom": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit": {
+          "description": "The command's exit status; `None` when the shell reported none.",
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "selected": {
+          "description": "This block holds the pane's block selection.",
+          "type": "boolean"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "top": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "seq",
+        "top",
+        "bottom",
+        "selected"
+      ],
+      "type": "object"
+    },
     "BuildMark": {
       "description": "The mark's wire form. `position` rides only on `Waiting` and is omitted\nwhen the lane read cannot name it (the hourglass alone is honest).",
       "properties": {
@@ -1794,6 +1835,35 @@
           },
           "required": [
             "BlockSelect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "(v135) Select the block named by `seq` (the whole command + output span)\nand bring it into view, as a click on its gutter. A `seq` the pane no\nlonger retains replies with a `Notice`.",
+          "properties": {
+            "BlockPick": {
+              "properties": {
+                "pane": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "seq": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pane",
+                "seq"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "BlockPick"
           ],
           "type": "object"
         },
@@ -4325,6 +4395,13 @@
     "Frame": {
       "description": "A complete rendered screen: `rows * cols` cells in row-major order plus the\ncursor. Self-contained by construction - drawing a `Frame` never requires\nany earlier message.",
       "properties": {
+        "blocks": {
+          "description": "(v135) The command blocks that touch this viewport, oldest first, as\nviewport rows. A client paints its gutter from these and picks one by\n`seq` (`ClientMsg::BlockPick`). Empty for a pane with no OSC 133 blocks.",
+          "items": {
+            "$ref": "#/$defs/BlockSpan"
+          },
+          "type": "array"
+        },
         "cells": {
           "items": {
             "$ref": "#/$defs/Cell"
@@ -7614,7 +7691,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 134,
+  "proto_version": 135,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

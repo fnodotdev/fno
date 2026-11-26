@@ -442,8 +442,45 @@ fn paint_frame(
         let solid = focused && window.is_window_active();
         paint_cursor(frame, solid, m, p, origin, window, cx);
     }
+    paint_block_gutter(frame, m, p, origin, window);
     if frame.scroll_offset > 0 {
         paint_scroll_badge(frame, m, p, origin, window, cx);
+    }
+}
+
+/// One thin bar per visible command block at the pane's left edge, the width
+/// of the click target in `mouse::gutter_hit`. The selected block takes the
+/// accent, a failed one the error hue, and the rest sit quiet.
+fn paint_block_gutter(
+    frame: &Frame,
+    m: &Metrics,
+    p: &Palette,
+    origin: Point<Pixels>,
+    window: &mut Window,
+) {
+    let width = m.cell.width * crate::mouse::GUTTER_WIDTH;
+    let left = origin.x - m.cell.width * crate::mouse::GUTTER_LEFT;
+    for b in &frame.blocks {
+        // A quiet block is dimmed, so the failed and the selected one stand
+        // out in either theme.
+        let (hue, dim) = match (b.selected, b.exit) {
+            (true, _) => (p.accent, false),
+            (false, Some(code)) if code != 0 => (p.error_mark, false),
+            _ => (p.faint, true),
+        };
+        // A quarter cell of gap above each bar marks where a block starts. A
+        // block cut off by the viewport top keeps its full bar.
+        let gap = if b.top > 0 {
+            m.cell.height * 0.25
+        } else {
+            px(0.0)
+        };
+        let rows = (b.bottom.saturating_sub(b.top) + 1) as f32;
+        let at = point(left, origin.y + m.cell.height * b.top as f32 + gap);
+        window.paint_quad(fill(
+            Bounds::new(at, size(width, m.cell.height * rows - gap)),
+            color(hue, dim),
+        ));
     }
 }
 

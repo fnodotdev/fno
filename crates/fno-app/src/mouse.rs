@@ -67,6 +67,32 @@ pub fn hit(x: f32, y: f32, cell: (f32, f32), panes: &[(u64, Rect)]) -> Option<Hi
     })
 }
 
+/// The command block gutter sits in the half-cell padding left of a pane's
+/// grid, so it never covers a glyph. It starts `GUTTER_LEFT` cells left of
+/// column 0 and is `GUTTER_WIDTH` cells wide. The paint and the click target
+/// read the same two numbers.
+pub const GUTTER_LEFT: f32 = 0.45;
+pub const GUTTER_WIDTH: f32 = 1.0 / 3.0;
+
+/// The pane row under the point when it lies in that pane's gutter. Anything
+/// else is `None`.
+pub fn gutter_hit(x: f32, y: f32, cell: (f32, f32), panes: &[(u64, Rect)]) -> Option<Hit> {
+    let (px, _) = pad(cell);
+    let across = (x - px) / cell.0 - 0.5;
+    let (row, _) = area_cell(x, y, cell);
+    panes.iter().find_map(|&(pane, r)| {
+        let beside = across - f32::from(r.x);
+        let inside_rows = (r.y as f32..(r.y + r.rows) as f32).contains(&row);
+        (inside_rows && (-GUTTER_LEFT..-GUTTER_LEFT + GUTTER_WIDTH).contains(&beside)).then(|| {
+            Hit {
+                pane,
+                row: (row - r.y as f32) as u16,
+                col: 0,
+            }
+        })
+    })
+}
+
 /// The cell under the point clamped into one pane, for a drag that leaves
 /// the pane it started in: the selection stops at the pane's edge.
 pub fn clamped(x: f32, y: f32, cell: (f32, f32), pane: u64, r: Rect) -> Hit {
@@ -207,6 +233,29 @@ mod tests {
                 col: 0
             })
         );
+    }
+
+    #[test]
+    fn the_gutter_is_the_padding_left_of_the_grid() {
+        let cell = (30.0, 20.0);
+        let panes = [(
+            2,
+            Rect {
+                x: 4,
+                y: 0,
+                rows: 5,
+                cols: 8,
+            },
+        )];
+        let (px, py) = pad(cell);
+        let at = |col: f32| (px + (4.0 + 0.5 + col) * cell.0, py + 0.5 * cell.1 + 1.0);
+        let (x, y) = at(-0.3);
+        assert_eq!(gutter_hit(x, y, cell, &panes).map(|h| h.row), Some(0));
+        // Over column 0's own glyph and past the padding both miss.
+        let (x, y) = at(0.1);
+        assert_eq!(gutter_hit(x, y, cell, &panes), None);
+        let (x, y) = at(-0.6);
+        assert_eq!(gutter_hit(x, y, cell, &panes), None);
     }
 
     #[test]

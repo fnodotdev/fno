@@ -3703,6 +3703,27 @@ impl Root {
             return;
         }
         let panes = self.grids();
+        // A click in a pane's gutter picks the command block beside it.
+        if let Some(hit) = mouse::gutter_hit(x, y, self.cell(), &panes) {
+            let seq = self.frames.get(&hit.pane).and_then(|f| {
+                f.blocks
+                    .iter()
+                    .rev()
+                    .find(|b| b.top <= hit.row && hit.row <= b.bottom)
+                    .map(|b| b.seq)
+            });
+            if let Some(seq) = seq {
+                fno::ui_usage::click("app", "block-gutter");
+                if hit.pane != self.layout.focus {
+                    self.send(ClientMsg::Command(Command::FocusPane(hit.pane)));
+                }
+                self.send(ClientMsg::BlockPick {
+                    pane: hit.pane,
+                    seq,
+                });
+                return;
+            }
+        }
         if let Some(hit) = mouse::hit(x, y, self.cell(), &panes) {
             fno::ui_usage::click("app", "pane");
             let rect = panes.iter().find(|(id, _)| *id == hit.pane).map(|p| p.1);

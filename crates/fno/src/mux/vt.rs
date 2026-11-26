@@ -26,7 +26,7 @@ use rio_vt::selection::{Selection, SelectionType};
 
 use fno_proto::vt_text::square_text_char;
 
-use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
+use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, BlockSpan, Cell, Color, Frame};
 
 pub use fno_proto::layout::ShellActivity;
 
@@ -522,7 +522,51 @@ impl Pane {
             cursor_visible: !scrolled && self.term.mode().contains(Mode::SHOW_CURSOR),
             scroll_offset: offset.max(0).min(u16::MAX as i32) as u16,
             history_lines,
+            blocks: self.block_spans(),
         }
+    }
+
+    /// The completed command blocks that touch the viewport, as inclusive
+    /// viewport rows. A viewport row `r` holds absolute row `viewport_top_abs()
+    /// + r`. A running block is left out: a pick selects finished output only.
+    /// The alternate screen (vim) has no blocks, so it gets none. Anchors drift
+    /// under reflow, so rows clamp into the viewport and a client picks a block
+    /// by `seq`, never by row.
+    fn block_spans(&self) -> Vec<BlockSpan> {
+        let rows = self.rows as i64;
+        if rows == 0 || self.term.mode().contains(Mode::ALT_SCREEN) {
+            return Vec::new();
+        }
+        let top = self.viewport_top_abs();
+        self.blocks
+            .iter()
+            .filter_map(|b| {
+                // `end_abs` is the row the next prompt lands on, so a block's
+                // own rows stop one short of it: two blocks never share a row.
+                let (first, last) = (b.start_abs - top, (b.end_abs - 1).max(b.start_abs) - top);
+                if last < 0 || first >= rows {
+                    return None;
+                }
+                Some(BlockSpan {
+                    seq: b.seq,
+                    top: first.clamp(0, rows - 1) as u16,
+                    bottom: last.clamp(0, rows - 1) as u16,
+                    exit: b.exit,
+                    selected: self.selected_block == Some(b.seq),
+                })
+            })
+            .collect()
+    }
+
+    /// Select block `seq` and bring it into view, as a gutter click. `false`
+    /// when the pane no longer retains it.
+    pub fn block_pick(&mut self, seq: u64) -> bool {
+        if !self.blocks.iter().any(|b| b.seq == seq) {
+            return false;
+        }
+        self.set_block_selection(seq);
+        self.selected_block = Some(seq);
+        true
     }
 
     /// The visible screen as trimmed plain text (test/debug helper; the wire
@@ -3116,6 +3160,38 @@ mod tests {
         run_named(&mut pane, "echo two", "d\ne\nf", 0);
         run_named(&mut pane, "echo three", "g\nh\ni", 0);
         pane
+    }
+
+    #[test]
+    fn the_frame_names_each_visible_block_and_a_pick_selects_one() {
+        let mut pane = three_blocks();
+        let frame = pane.frame();
+        // Every span sits inside the viewport, and the newest block ends it.
+        assert!(!frame.blocks.is_empty(), "blocks ride the frame");
+        assert!(frame
+            .blocks
+            .iter()
+            .all(|b| b.top <= b.bottom && b.bottom < frame.rows));
+        assert!(frame.blocks.iter().all(|b| !b.selected));
+
+        assert!(pane.block_pick(1));
+        let picked: Vec<u64> = pane
+            .frame()
+            .blocks
+            .iter()
+            .filter(|b| b.selected)
+            .map(|b| b.seq)
+            .collect();
+        assert_eq!(
+            picked,
+            vec![1],
+            "the pick brings block 1 into view, selected"
+        );
+
+        assert!(
+            !pane.block_pick(99),
+            "a block the pane no longer holds is refused"
+        );
     }
 
     #[test]
