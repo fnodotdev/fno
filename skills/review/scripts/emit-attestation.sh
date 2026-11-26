@@ -756,4 +756,4 @@ if [[ "$reviewer" == "peer" ]]; then
 elif [[ "$reviewer_context" == "fresh" ]]; then
   review_level_word="fresh"
 fi
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count target_repo_root=${repo_root_target:-inline}" >&2
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context stamp_provenance=$stamp_provenance review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count target_repo_root=${repo_root_target:-inline}" >&2
