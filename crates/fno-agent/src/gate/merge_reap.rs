@@ -308,7 +308,7 @@ pub(crate) fn scan_pr_nodes(
         if !bound {
             continue;
         }
-        if let Some(nid) = e.get("id").and_then(Value::as_str) {
+        if let Some(nid) = row_id(e) {
             if !nid.is_empty() && !out.iter().any(|x| x == nid) {
                 out.push(nid.to_string());
             }
@@ -344,6 +344,11 @@ pub(crate) fn branch_node_ids(home: &AgentsHome, head_ref: &str) -> Vec<String> 
     scan_branch_nodes(&rows, head_ref)
 }
 
+/// The id of one graph row, if it carries one.
+fn row_id(row: &Value) -> Option<&str> {
+    row.get("id").and_then(Value::as_str)
+}
+
 /// The rows whose id the branch names. A branch names a node the graph does
 /// not hold (a deleted node, a ticket-shaped slug) binds nothing.
 pub(crate) fn scan_branch_nodes(entries: &[Value], head_ref: &str) -> Vec<String> {
@@ -352,7 +357,7 @@ pub(crate) fn scan_branch_nodes(entries: &[Value], head_ref: &str) -> Vec<String
     };
     entries
         .iter()
-        .filter_map(|e| e.get("id").and_then(Value::as_str))
+        .filter_map(row_id)
         .filter(|id| *id == named)
         .map(str::to_string)
         .take(1)
