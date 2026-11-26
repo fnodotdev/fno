@@ -48,7 +48,7 @@ pub fn cap_for(path: &str) -> usize {
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-pub(crate) const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/bin/client.rs";
+const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/bin/client.rs";
 /// The binary-direct doors `run` dispatches through, split out of client.rs.
 pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/bin/doors/client_doors.rs";
 /// The module tables client.rs hands argv[0] to, in `run` or before it: each
