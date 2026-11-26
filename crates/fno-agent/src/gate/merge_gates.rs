@@ -793,6 +793,25 @@ fn comment_only_on<P: GateReads>(probes: &P, cwd: &Path, pr: u64, touched: &[&st
     })
 }
 
+/// The hold for an open look ask on this PR. Any repo gets it, paint paths
+/// declared or not: a worker or lead that asked the user for a look has made
+/// the merge wait for the answer. `touched` names the paint files when the PR
+/// touches the paint surface.
+fn open_look_hold(root: &Path, pr: u64, touched: Option<&[&str]>) -> Option<Blocker> {
+    let ask = open_look_ask(root, pr)?;
+    let surface = match touched {
+        Some(files) => format!("touches the paint surface ({})", files.join(", ")),
+        None => "has a look the user was asked for".to_string(),
+    };
+    Some(Blocker::held(
+        "visual_look_pending",
+        format!(
+            "PR {pr} {surface}; look question {ask} is open and unanswered, so the merge \
+             holds until the user answers it; a stale ask clears when its page closes"
+        ),
+    ))
+}
+
 /// The visual verdicts that hold a merge: a user decline at this head, or a
 /// look ask the user has not answered yet. A missing look with no ask is a
 /// process condition and only warns.
@@ -844,7 +863,7 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
     }
     let paint_paths = crate::agents_config::visual_paint_paths(cwd);
     if paint_paths.is_empty() {
-        return (None, None);
+        return (open_look_hold(&root, pr, None), None);
     }
     let Some(files) = pr_file_paths(probes, cwd, pr) else {
         // An unreadable file list is evidence, not a user decline.
@@ -864,7 +883,7 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
         .map(String::as_str)
         .collect();
     if touched.is_empty() {
-        return (None, None);
+        return (open_look_hold(&root, pr, None), None);
     }
     // Comments and code names cannot move a pixel, so a look would judge
     // nothing. The code diff alone clears the gate: no shots, no ruling, no
@@ -920,19 +939,8 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
     // The user was asked for this look and has not answered: the merge
     // waits for the answer. Only an ask with no page at all is the process
     // condition that warns.
-    if let Some(ask) = open_look_ask(&root, pr) {
-        return (
-            Some(Blocker::held(
-                "visual_look_pending",
-                format!(
-                    "PR {pr} touches the paint surface ({}); look question {ask} is open and \
-                     unanswered, so the merge holds until the user answers it; a stale ask \
-                     clears when its page closes",
-                    touched.join(", ")
-                ),
-            )),
-            None,
-        );
+    if let Some(hold) = open_look_hold(&root, pr, Some(&touched)) {
+        return (Some(hold), None);
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let shots = node_id
