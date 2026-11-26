@@ -15,7 +15,7 @@ pub(super) fn reading(
     scope: &str,
     members: &std::collections::HashSet<String>,
 ) -> Value {
-    let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
+    let text = |row: &Value, key: &str| row[key].as_str().map(str::to_string);
     let mut newest: Option<(String, String)> = None;
     for row in rows {
         let on_scope = [text(row, "id"), text(row, "slug")]
@@ -25,7 +25,7 @@ pub(super) fn reading(
         if !on_scope {
             continue;
         }
-        let Some(notes) = row.get("progress_notes").and_then(Value::as_array) else {
+        let Some(notes) = row["progress_notes"].as_array() else {
             continue;
         };
         for note in notes {
@@ -49,7 +49,7 @@ pub(super) fn lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
     if !reading.ok {
         return vec![format!("READER FAILED review_board: {}", reading.error)];
     }
-    match reading.value.get("slug").and_then(Value::as_str) {
+    match reading.value["slug"].as_str() {
         Some(slug) => vec![format!("review_board: {slug}")],
         None => vec![
             "review_board: none: make one from the Gus or Lara Visual Log, then post it with `fno backlog note <epic> \"Review board: <slug>\"`"

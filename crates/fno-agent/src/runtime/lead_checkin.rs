@@ -1377,8 +1377,7 @@ fn collect_readings(
             let members: std::collections::HashSet<String> = folded
                 .as_ref()
                 .ok()
-                .and_then(|f| f.get("fold"))
-                .map(|f| de::parse::<de::FoldView>(f))
+                .map(|f| de::parse::<de::FoldView>(&f["fold"]))
                 .unwrap_or_default()
                 .nodes
                 .iter()
