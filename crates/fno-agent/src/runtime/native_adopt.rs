@@ -292,10 +292,10 @@ pub(crate) fn bind_fork_child(
         e.session_id = Some(child.to_string());
     }
     e.short_id = crate::client_commands::derived_short_id(child);
-    if pid.is_some() {
-        e.pid = pid;
-        e.pid_start_time = None;
-    }
+    // The parent's pid names the process this row replaces: a child with no
+    // known pid leaves none rather than a dead one.
+    e.pid = pid;
+    e.pid_start_time = None;
     Some(i)
 }
 

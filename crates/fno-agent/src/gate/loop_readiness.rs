@@ -316,12 +316,11 @@ fn stop_leg_from_events(
     };
     let data = snapshot.get("data").unwrap_or(&Value::Null);
     // The stop that proves the refresh carries the id the snapshot named.
-    let snapshot_session = data
+    let proof_session = data
         .get("session_id")
         .and_then(Value::as_str)
         .unwrap_or(session)
         .to_string();
-    let session = snapshot_session.as_str();
     let entry_state = data
         .get("entry_state")
         .and_then(Value::as_str)
@@ -355,11 +354,12 @@ fn stop_leg_from_events(
     }
     let correlated_stop = rows.iter().skip(snapshot_index + 1).any(|event| {
         event.get("type").and_then(Value::as_str) == Some("stop_decision")
-            && event.pointer("/data/session_id").and_then(Value::as_str) == Some(session)
+            && event.pointer("/data/session_id").and_then(Value::as_str)
+                == Some(proof_session.as_str())
             && event
                 .pointer("/data/correlation_id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| id.starts_with(&format!("stop:{session}:")))
+                .is_some_and(|id| id.starts_with(&format!("stop:{proof_session}:")))
     });
     if correlated_stop {
         ReadinessLeg::ready()

@@ -351,7 +351,8 @@ pub(crate) fn handle_session_report(
 
     // A claude session no row holds may fork one a row holds. The argv read
     // runs here, outside the lock, and only for a mint.
-    let fork_parent = (harness.as_harness() == Harness::Claude && pending_mint.is_some())
+    let fork_eligible = harness.as_harness() == Harness::Claude && pending_mint.is_some();
+    let fork_parent = fork_eligible
         .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
         .flatten()
         .map(|(parent, pid)| (parent, Some(pid)))
@@ -360,10 +361,7 @@ pub(crate) fn handle_session_report(
             // at launch. When the argv is unreadable (the pid is gone), the
             // record still proves which session this one continues.
             let parent = launch_record.as_ref()?.launch.resume.clone()?;
-            (harness.as_harness() == Harness::Claude
-                && pending_mint.is_some()
-                && parent != session_id)
-                .then_some((parent, None))
+            (fork_eligible && parent != session_id).then_some((parent, None))
         });
 
     // A claude session reporting against an id a row ALREADY holds
