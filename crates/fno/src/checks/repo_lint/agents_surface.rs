@@ -313,19 +313,11 @@ fn outside_callers(
     root: &Path,
     top: &BTreeSet<String>,
 ) -> std::io::Result<BTreeMap<String, Vec<usize>>> {
-    let listed = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z"])
-        .output()?;
-    if !listed.status.success() {
-        return Err(std::io::Error::other(
-            String::from_utf8_lossy(&listed.stderr).trim().to_string(),
-        ));
-    }
+    let listed = super::git_capture(root, &["ls-files", "-z"])
+        .ok_or_else(|| std::io::Error::other("git ls-files exited non-zero"))?;
     let mention = static_regex(r"\bfno-agent[ \t]+([a-z][a-z0-9-]*)");
     let mut found = BTreeMap::new();
-    for rel in String::from_utf8_lossy(&listed.stdout).split('\0') {
+    for rel in listed.split('\0') {
         if rel.is_empty()
             || rel.starts_with("crates/")
             || [CALLERS_REL, HIDDEN_REL, "scripts/ci/command-baseline.txt"].contains(&rel)
