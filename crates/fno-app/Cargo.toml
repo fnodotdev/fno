@@ -23,6 +23,12 @@ path = "src/lib.rs"
 name = "fno-app"
 path = "src/main.rs"
 
+# The platform text system must be built on the main thread, so this test
+# owns main instead of running under the libtest harness.
+[[test]]
+name = "text_system"
+harness = false
+
 # The app links fno through `fno::app_api` and the modules fno already
 # exports. fno never depends on this crate. It takes the `app` feature only:
 # the web bridge, the session-bundle transfer and the PDF viewer stay behind
