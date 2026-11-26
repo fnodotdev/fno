@@ -20,6 +20,8 @@ This page answers four questions. Which cross-tree guards mark a real second imp
 
 **The bus read rules.** Single owner, generated artifact. `crates/fno-agent/src/runtime/bus_read.rs` owns which bus rows are mail (`deliverable`), which are retracted (`withdrawn_ids`), how a cursor file reads, and the cursor-bounded unread walk. fno-agent's drain and its `mail unread --mine` leaf use it. The fno front door answers `mail unread` in process from the generated copy at `crates/fno/src/bus_read.rs`. `generated-artifacts.tsv` records the copy. The bus directory comes from `config_doctor::bus_dir`, the one resolver fno has for the mail tree.
 
+**The hold status line.** Two owners, one gap named. fno-agent's `mail_cli/hold.rs` owns every hold write and `--off`. The fno front door answers `mail hold --status` in process from `crates/fno/src/mail_hold_status.rs`. It reads the hold store, the registry row's `delivery_policy` and the self-identity copy. When the global config moves the state root, it hands the argv to fno-agent, because the front door resolves only `$FNO_HOME` and `$HOME/.fno`. The status wording and `canonical_handle` now exist in both files. The fno-agent `--status` arm stays until `status_line` has a generated copy, which needs a `cargo build` regen.
+
 **The tick timestamp parser.** Single owner. `event_store.rs` owns `parse_rfc3339_ms`. The indexed writer and incremental tick fold share it, so both retain the same millisecond maxima.
 
 ## The discriminator

@@ -3006,6 +3006,7 @@ pub use reader_state::{IsolatedRead, ReaderState};
 // shrink-only under the file-budget gate.
 mod hold_marks;
 
+pub(crate) use hold_marks::hold_dir;
 pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
