@@ -24,6 +24,7 @@
 
 use crate::graph_store::WorkState;
 use crate::pid::{Pid, SignalResult};
+pub use crate::proc_table::parse_etime;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -679,31 +680,6 @@ fn count_mcp_children_of_spares(table: &[ProcRow]) -> usize {
         .iter()
         .filter(|row| spare_pids.contains(&row.ppid) && names_stdio_mcp_server(&row.args))
         .count()
-}
-
-/// Parse `ps -o etime=`: `[[DD-]HH:]MM:SS`.
-///
-/// `etimes` (elapsed SECONDS, no parsing) exists on Linux and NOT on macOS, so
-/// the portable column is the formatted one. `None` on anything unparseable,
-/// which reads as "unknown age" and therefore never reaps: an age the gate
-/// cannot establish is not evidence the process is old.
-pub fn parse_etime(raw: &str) -> Option<u64> {
-    let raw = raw.trim();
-    let (days, rest) = match raw.split_once('-') {
-        Some((d, rest)) => (d.parse::<u64>().ok()?, rest),
-        None => (0, raw),
-    };
-    let mut parts = rest.split(':').rev();
-    let secs = parts.next()?.parse::<u64>().ok()?;
-    let mins = parts.next()?.parse::<u64>().ok()?;
-    let hours = match parts.next() {
-        Some(h) => h.parse::<u64>().ok()?,
-        None => 0,
-    };
-    if parts.next().is_some() {
-        return None;
-    }
-    Some(days * 86_400 + hours * 3_600 + mins * 60 + secs)
 }
 
 /// Read the process table once per sweep.
