@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(got.get("fno-agent"), Some(&11), "{got:?}");
         // A door table whose marker moved refuses by file and marker, never
         // a silent zero for its words.
-        inputs.agents.tables[0].2 = "pub fn renamed() {}".into();
+        inputs.agents.tables.first_mut().expect("fixture table").2 = "pub fn renamed() {}".into();
         let lost = counts(&inputs).unwrap_err();
         assert!(
             lost.contains("t.rs") && lost.contains("\"pub fn client_dispatch\""),
@@ -649,7 +649,7 @@ mod tests {
         let words: BTreeSet<String> = ["zz-homeless", "census", "help"].map(String::from).into();
         let homes = check_homes(&words, &BTreeSet::from(["census".to_string()])).unwrap_err();
         assert!(
-            homes.len() == 1 && homes[0].contains("`zz-homeless`"),
+            matches!(homes.as_slice(), [only] if only.contains("`zz-homeless`")),
             "{homes:?}"
         );
     }

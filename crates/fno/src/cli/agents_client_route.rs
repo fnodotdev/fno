@@ -79,7 +79,8 @@ pub fn client_word(word: &str) -> &str {
     MAPPED
         .iter()
         .find(|(from, _)| *from == word)
-        .map_or(word, |(_, to)| to[0])
+        .and_then(|(_, to)| to.first().copied())
+        .unwrap_or(word)
 }
 
 fn prefixed(prefix: &[&str], rest: &[OsString]) -> Vec<OsString> {

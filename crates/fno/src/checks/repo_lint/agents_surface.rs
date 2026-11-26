@@ -481,12 +481,15 @@ mod tests {
         let found = BTreeMap::from([("skills/x/SKILL.md".to_string(), vec![3])]);
         let callers = caller_drift(&found, &BTreeMap::new());
         assert!(
-            callers.len() == 1 && callers[0].contains("skills/x/SKILL.md:3"),
+            matches!(callers.as_slice(), [only] if only.contains("skills/x/SKILL.md:3")),
             "{callers:?}"
         );
         let slack = BTreeMap::from([("skills/x/SKILL.md".to_string(), 2)]);
         let lower = caller_drift(&found, &slack);
-        assert!(lower[0].contains("Lower the row to 1"), "{lower:?}");
+        assert!(
+            lower.iter().any(|f| f.contains("Lower the row to 1")),
+            "{lower:?}"
+        );
         assert!(caller_drift(
             &found,
             &BTreeMap::from([("skills/x/SKILL.md".to_string(), 1)])
