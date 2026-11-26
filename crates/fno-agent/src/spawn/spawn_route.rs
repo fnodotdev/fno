@@ -127,7 +127,7 @@ fn codex_seam(route: &str, substrate: &str, cwd: &Path) -> RouteSeam {
     }
     let (_, provider, model, effort) = match target_identity(route, cwd) {
         Ok(identity) => identity,
-        Err(line) => return RouteSeam::Refuse(line),
+        Err(RefusalLine(line)) => return RouteSeam::Refuse(line),
     };
     match crate::codex_route::resolve_codex_route(cwd, &provider, model.trim()) {
         Err(e) => RouteSeam::Refuse(refused(route, e.message())),
@@ -179,28 +179,31 @@ pub fn route_vendor(route: &str, cwd: &Path) -> Option<String> {
     (!vendor.is_empty()).then_some(vendor)
 }
 
+/// A spawn refusal line, in the door's own words.
+struct RefusalLine(String);
+
 /// A `--route` value's identity: the pair form, else a declared lane. Answers
 /// (provider as written, provider lowercased, model, effort).
 fn target_identity(
     route: &str,
     cwd: &Path,
-) -> Result<(String, String, String, Option<String>), String> {
+) -> Result<(String, String, String, Option<String>), RefusalLine> {
     let (provider, model, effort) = match parse_target(route) {
         Some((p, m)) => (p, m, None),
         None => {
             let Some(row) = lane_row(route, cwd) else {
-                return Err(format!(
+                return Err(RefusalLine(format!(
                     "--route takes 'provider,model' or a declared lane name; got {}",
                     py_repr(route)
-                ));
+                )));
             };
             let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
             if field("vendor").is_empty() {
-                return Err(format!(
+                return Err(RefusalLine(format!(
                     "--route {} names a lane that declares no route; no worker launched, \
                      node stays dispatchable.",
                     py_repr(route)
-                ));
+                )));
             }
             let effort = Some(field("effort")).filter(|e| !e.is_empty());
             (field("vendor"), field("model"), effort)
@@ -209,7 +212,7 @@ fn target_identity(
     // resolve_explicit_route: a blank provider or model resolves nothing.
     let pname = provider.trim().to_lowercase();
     if pname.is_empty() || model.trim().is_empty() {
-        return Err(refused(route, ROUTE_KEYLESS));
+        return Err(RefusalLine(refused(route, ROUTE_KEYLESS)));
     }
     Ok((provider, pname, model, effort))
 }
@@ -221,7 +224,7 @@ pub fn resolve_target(
     cwd: &Path,
     env_get: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Target, String> {
-    let (provider, pname, model, effort) = target_identity(route, cwd)?;
+    let (provider, pname, model, effort) = target_identity(route, cwd).map_err(|r| r.0)?;
     let ctx = RouteCtx::Peer(pname.clone());
     let mut env = match claude_route(cwd, &pname, model.trim(), &ctx, env_get) {
         ClaudeRoute::Routed { env, .. } => env,

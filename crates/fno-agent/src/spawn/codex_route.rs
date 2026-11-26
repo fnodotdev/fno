@@ -450,8 +450,8 @@ api_key_env = "FNO_TEST_ZAI_KEY"
         assert_eq!(argv.last().unwrap(), "sid");
         // codex-cli 0.166 refuses a nameless provider and `wire_api = chat`.
         assert_eq!(
-            route.config_args[1],
-            "model_providers.zai-openai={ name = 'zai-openai', base_url = 'https://api.z.ai/api/coding/paas/v4', env_key = 'FNO_TEST_ZAI_KEY', wire_api = 'responses' }"
+            route.config_args.get(1).map(String::as_str),
+            Some("model_providers.zai-openai={ name = 'zai-openai', base_url = 'https://api.z.ai/api/coding/paas/v4', env_key = 'FNO_TEST_ZAI_KEY', wire_api = 'responses' }")
         );
         // The picker's one-field consent record (no protocol, so the claude
         // lane reads it too) opens codex through the reach openai endpoint.
@@ -459,13 +459,16 @@ api_key_env = "FNO_TEST_ZAI_KEY"
         std::env::set_var("OPENROUTER_API_KEY", "or-key");
         let route = resolve_codex_route(fx.cwd(), "openrouter", "openai/gpt-5.5").unwrap();
         assert!(
-            route.config_args[1].contains(
+            route.config_args.get(1).is_some_and(|t| t.contains(
                 "base_url = 'https://openrouter.ai/api/v1', env_key = 'OPENROUTER_API_KEY'"
-            ),
+            )),
             "{:?}",
             route.config_args
         );
-        assert_eq!(route.config_args[3], "model_provider='openrouter'");
+        assert_eq!(
+            route.config_args.get(3).map(String::as_str),
+            Some("model_provider='openrouter'")
+        );
         assert_eq!(route.key_env, "OPENROUTER_API_KEY");
         std::env::remove_var("OPENROUTER_API_KEY");
         std::env::remove_var("FNO_TEST_ZAI_KEY");
