@@ -53,6 +53,9 @@ pub(crate) mod de;
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
 
+#[path = "lead_checkin_review_board.rs"]
+mod review_board;
+
 #[path = "lead_checkin_rate_limits.rs"]
 mod rate_limits;
 
@@ -1368,6 +1371,10 @@ fn collect_readings(
     });
     let h_parked = spawn_reading(beat_started, "parked", || r_parked());
     let h_prompt_parked = spawn_reading(beat_started, "prompt_parked", || prompt_parked::reading());
+    let h_review_board = spawn_reading(beat_started, "review_board", {
+        let (rows, scope) = (rows.clone(), scope.clone());
+        move || review_board::reading(&rows, &scope)
+    });
     // The two input pseudos spawn with the leaves and await at their declared
     // positions: their graph scans overlap the leaf readers instead of
     // front-loading the beat's serial path.
@@ -1590,6 +1597,7 @@ fn collect_readings(
     h_self_hold.collect_into(&mut readings, beat_started);
     h_parked.collect_into(&mut readings, beat_started);
     h_prompt_parked.collect_into(&mut readings, beat_started);
+    h_review_board.collect_into(&mut readings, beat_started);
 
     readings
 }
@@ -2459,6 +2467,7 @@ fn render_lines_with(
     lines.extend(posture::lines(readings));
     lines.extend(peer_blocked::lines(readings));
     lines.extend(prompt_parked::lines(readings));
+    lines.extend(review_board::lines(readings));
     lines.extend(crate::backlog::attention_ledger::checkin_lines(readings));
 
     match failed("refusal_rate") {
