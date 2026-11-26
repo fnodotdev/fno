@@ -29,7 +29,7 @@ In emit order, inside the single plan doc's `## Execution Strategy` waves:
 | `## File Ownership Map` | optional | Per-task file ownership for parallel-wave conflict detection |
 | `## Out of Scope` | optional | Explicit non-goals |
 
-Quick plans skip waves entirely and carry `kill_criteria` in frontmatter (never a `## Kill Criteria` heading — the heading form is invisible to the stamp/validate parser) — they do not produce wave headers.
+Quick plans skip waves entirely and carry `kill_criteria` in the `## Gate records` fence (never a `## Kill Criteria` heading, a legacy form) — they do not produce wave headers.
 
 ## Obsidian slug rules
 

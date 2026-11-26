@@ -261,7 +261,7 @@ A PR can merge while checks at its head have not passed. That run ends `DoneMerg
 Every one of those measures an artifact, so operational silence cannot falsify the gate: a recurring deliverable can ship, pass CI, get reviewed, and never once run.
 Grooming died this death three times.
 
-A plan may therefore declare `done_probes` in its frontmatter - up to 3 shell commands that assert the thing actually ran:
+A plan may therefore declare `done_probes` in its `## Gate records` fence (legacy frontmatter still reads) - up to 3 shell commands that assert the thing actually ran:
 
 ```yaml
 done_probes:
