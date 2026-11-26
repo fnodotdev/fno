@@ -1128,32 +1128,32 @@ mod tests {
 
     fn open_page(question_id: &str, team: &str) -> (String, String) {
         let text = format!(
-            "---\nquestion_id: {question_id}\nstatus: open\nasked_at: 2026-10-20T15:32:09Z\nteam: {team}\nnode: x-0c2a\n---\nbody\n"
+            "---\nquestion_id: {question_id}\nstatus: open\nasked_at: 2026-10-20T15:32:09Z\nteam: {team}\nnode: lead-node\n---\nbody\n"
         );
         (format!("{question_id}-ask"), text)
     }
 
-    /// A lead re-scoped with x-d02f added still sees the questions its pages
-    /// were written under, and a lead whose scope shares no node does not.
+    /// A lead re-scoped with one more node added still sees the questions its
+    /// pages were written under, and a lead whose scope shares no node does not.
     #[test]
     fn a_re_scoped_lead_still_sees_its_open_questions() {
-        let old_team = "x-0c2a,x-8b8d,x-b720,x-c530,x-d742,x-e8fd,x-eff0,x-f1d3";
+        let old_team = "lead-a,lead-b,lead-c,lead-d,lead-e,lead-f,lead-g,lead-h";
         let pages = vec![
             open_page("q-63c90fdc", old_team),
             open_page("q-499a7db0", old_team),
-            open_page("q-other01", "x-zz01,x-zz02"),
+            open_page("q-other01", "lead-x,lead-y"),
         ];
-        let widened = format!("{old_team},x-d02f");
+        let widened = format!("{old_team},lead-w");
         let rows = held_from_pages(&pages, &widened, &[], 0);
         let ids: Vec<&str> = rows
             .iter()
             .filter_map(|r| r["question_id"].as_str())
             .collect();
         assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
-        let other = held_from_pages(&pages, "x-zz01", &[], 0);
+        let other = held_from_pages(&pages, "lead-x", &[], 0);
         assert_eq!(other.len(), 1, "{other:?}");
         let mut partly = pages.clone();
-        partly.push(open_page("q-partly1", "x-0c2a,x-zz09"));
+        partly.push(open_page("q-partly1", "lead-a,lead-z"));
         let rows = held_from_pages(&partly, &widened, &[], 0);
         assert_eq!(
             rows.len(),
