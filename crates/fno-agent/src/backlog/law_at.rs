@@ -117,10 +117,11 @@ impl LawAt {
 
 /// The `door:send` subjects for one recipient: the recipient as typed, plus
 /// `by-name:<recipient>` when it is not session-id-shaped (a uuid or an
-/// 8-hex fno id), so a law about addressing by name can match.
+/// 8-hex fno id), so a law about addressing by name can match. A system
+/// arm address (`fno/quiet-recovery`) names no session, so it stays bare.
 pub fn send_subjects(recipient: &str) -> Vec<String> {
     let mut out = vec![recipient.to_string()];
-    if !crate::session_truth::is_session_id_prefix(recipient) {
+    if !recipient.contains('/') && !crate::session_truth::is_session_id_prefix(recipient) {
         out.push(format!("by-name:{recipient}"));
     }
     out
@@ -245,6 +246,7 @@ mod tests {
         let uuid = "0e0b4dc7-e6b9-454a-b0dc-ebc0a2dd33a6";
         assert_eq!(send_subjects(uuid), [uuid]);
         assert_eq!(send_subjects("a8a39a7a"), ["a8a39a7a"]);
+        assert_eq!(send_subjects("fno/quiet-recovery"), ["fno/quiet-recovery"]);
     }
 
     #[test]
