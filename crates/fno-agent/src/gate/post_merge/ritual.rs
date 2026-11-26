@@ -924,10 +924,19 @@ impl Ritual {
     /// Sidecar-derived node id(s) for this PR when reconcile closed nothing:
     /// the dominant path closes + stamps the node at the ship gate, so
     /// `.closed[]` is empty and the scan recovers repo-scoped.
-    fn recover_node_for_pr(&self) -> Vec<String> {
+    /// The PR's binding wins. Its head branch names the node when no binding
+    /// reads (a node closed without a PR link still ships through its branch).
+    fn recover_node_for_pr(&mut self) -> Vec<String> {
         let home = crate::paths::AgentsHome::from_env();
         let slug = self.resolve_origin_slug();
-        crate::merge_reap::pr_node_ids(&home, self.pr, slug.as_deref())
+        let bound = crate::merge_reap::pr_node_ids(&home, self.pr, slug.as_deref());
+        if !bound.is_empty() {
+            return bound;
+        }
+        let (_, head_ref, _) = self.merged_state();
+        head_ref
+            .map(|b| crate::merge_reap::branch_node_ids(&home, &b))
+            .unwrap_or_default()
     }
 
     /// Persist one merge-triggered cleanup request before deferring: the
@@ -1077,6 +1086,9 @@ impl Ritual {
             };
             self.step("judgment", SKIPPED, &format!("reason={reason}; {inputs}"));
             return;
+        }
+        if self.node_ids.iter().all(|n| n.is_empty()) {
+            self.node_ids = self.recover_node_for_pr();
         }
         if self.node_ids.iter().all(|n| n.is_empty()) {
             self.step(

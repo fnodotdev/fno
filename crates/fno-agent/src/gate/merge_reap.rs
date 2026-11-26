@@ -333,6 +333,32 @@ pub(crate) fn pr_node_ids(home: &AgentsHome, pr: i64, slug: Option<&str>) -> Vec
     scan_pr_nodes(&rows, pr, slug, &aliases)
 }
 
+/// The node a PR's head branch names, when the graph holds that node. A
+/// node that closed with no PR link (the ship gate binds by branch) still
+/// ships through its branch, so this recovers what `pr_node_ids` misses.
+pub(crate) fn branch_node_ids(home: &AgentsHome, head_ref: &str) -> Vec<String> {
+    let store = crate::backlog::api::Store::new(&crate::gc_sweep::graph_path(home));
+    let Ok(rows) = crate::backlog::api::rows(&store) else {
+        return Vec::new();
+    };
+    scan_branch_nodes(&rows, head_ref)
+}
+
+/// The rows whose id the branch names. A branch names a node the graph does
+/// not hold (a deleted node, a ticket-shaped slug) binds nothing.
+pub(crate) fn scan_branch_nodes(entries: &[Value], head_ref: &str) -> Vec<String> {
+    let Some(named) = crate::eval::correction_fold::node_from_branch(head_ref) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|e| e.get("id").and_then(Value::as_str))
+        .filter(|id| *id == named)
+        .map(str::to_string)
+        .take(1)
+        .collect()
+}
+
 /// A request minted before its node ids were readable (a renamed repo, an
 /// unbound PR) carries `node_ids: []` forever, and the doneness read holds an
 /// empty list. Re-ask the graph at reap time, so a later alias or binding fix
@@ -1217,6 +1243,20 @@ mod tests {
         assert_eq!(scan_pr_nodes(&entries, 4101, slug, &aliases), ["x-a"]);
         assert_eq!(scan_pr_nodes(&entries, 4170, slug, &aliases), ["x-b"]);
         assert!(scan_pr_nodes(&entries, 4170, slug, &BTreeMap::new()).is_empty());
+    }
+
+    #[test]
+    fn scan_branch_nodes_binds_the_node_the_branch_names() {
+        let entries = vec![
+            json!({"id": "x-31e0", "status": "done"}),
+            json!({"id": "x-2f48", "pr_number": 4100}),
+        ];
+        assert_eq!(
+            scan_branch_nodes(&entries, "feature/x-31e0-reap-rows"),
+            ["x-31e0"]
+        );
+        assert!(scan_branch_nodes(&entries, "feature/x-9999-gone").is_empty());
+        assert!(scan_branch_nodes(&entries, "main").is_empty());
     }
 
     fn stamps() -> u128 {
