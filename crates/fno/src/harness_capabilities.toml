@@ -1325,6 +1325,9 @@ headless = "unmeasured"
 state = "unmeasured"
 
 [harness.cursor-agent]
+# Which fresh-context reviewer this harness offers for `/fno:review --fresh`:
+# native (its own subagent or fork), package (an installed package adds one), none (no measured fresh path).
+fresh_review = "none"
 mail_header_at = true
 permission_bypass = ["--force"]
 permission_modes = ["force", "yolo"]
