@@ -658,7 +658,7 @@ fn names_stdio_mcp_server(args: &str) -> bool {
 
 /// True when argv names Claude Code pool machinery: the daemon's spare pool
 /// (`claude bg-spare ...`) or its pty host (`claude bg-pty-host ...`). Same
-/// shapes `spawn_context::is_claude_pool_machinery` matches; mirrored here
+/// shapes `self_identity::is_claude_pool_machinery` matches; mirrored here
 /// because the sweep reads its own flat [`ProcRow`] table, not the census.
 fn is_claude_spare(args: &str) -> bool {
     args.split_whitespace()

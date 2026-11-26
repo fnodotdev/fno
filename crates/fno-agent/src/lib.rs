@@ -90,6 +90,7 @@ pub mod runtime;
 pub use eval::proc_table;
 pub use runtime::identity_markers;
 pub use runtime::pid;
+pub use spawn::self_identity;
 
 // The flat `crate::<module>` paths stay valid: each module moved into a
 // group directory is re-exported here under its old name.
