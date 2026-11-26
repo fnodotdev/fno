@@ -676,7 +676,7 @@ fn live_dir(cwd: &str) -> Option<PathBuf> {
     ]);
     let git_dir = super::bounded_stdout(cmd, None, 3)?;
     let git_dir = PathBuf::from(git_dir.trim());
-    (!git_dir.as_os_str().is_empty() && git_dir.is_dir()).then(|| git_dir.join("fno").join("live"))
+    (!git_dir.as_os_str().is_empty() && git_dir.is_dir()).then(|| git_dir.join("fno/live"))
 }
 
 /// Whether a stamp younger than `throttle` seconds stands.

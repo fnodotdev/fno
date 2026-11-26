@@ -70,6 +70,12 @@ crossing	crates/fno-agent/src/runtime/daemon/fleet_arms.rs	crate::scrape::fno_bi
 crossing	crates/fno-agent/src/runtime/delivery/pane.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agent/src/runtime/gc.rs	let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agent/src/runtime/gc_native.rs	let mut child = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-agent/src/runtime/hook/front/common.rs	pub(crate) fn fno_bin() -> Option<PathBuf> {
+crossing	crates/fno-agent/src/runtime/hook/front/post_tool.rs	let mut cmd = Command::new(super::fno_bin()?);
+crossing	crates/fno-agent/src/runtime/hook/front/stop.rs	let fno = super::fno_bin();
+crossing	crates/fno-agent/src/runtime/hook/front/stop.rs	let Some(fno) = super::fno_bin() else {
+crossing	crates/fno-agent/src/runtime/hook/front/user_prompt.rs	if let Some(fno) = super::fno_bin() {
+crossing	crates/fno-agent/src/runtime/hook/front/user_prompt.rs	let fno = super::fno_bin();
 crossing	crates/fno-agent/src/runtime/hook/join_partition_guard.rs	let mut cmd = std::process::Command::new("fno");
 crossing	crates/fno-agent/src/runtime/lead_checkin.rs	let mut argv = vec![fno_bin()];
 crossing	crates/fno-agent/src/runtime/lead_checkin_prompt_parked.rs	let mut value = reading_with(&reg, &crate::scrape::fno_bin(), Some(&home.manifests_dir()))?;
@@ -150,6 +156,7 @@ resolver	crates/fno-agent/src/paths_cli.rs	fn default_data_home() -> PathBuf {
 resolver	crates/fno-agent/src/paths_cli.rs	fn default_state_home() -> PathBuf {
 resolver	crates/fno-agent/src/runtime/board_render_arm.rs	fn run_render_pass_within(deadline: Duration) -> Result<(), (i32, String)> {
 resolver	crates/fno-agent/src/runtime/harness_reader.rs	pub fn establish(harness: &str) -> Result<IsolatedRoot, String> {
+resolver	crates/fno-agent/src/runtime/hook/front/common.rs	pub(crate) fn fno_bin() -> Option<PathBuf> {
 resolver	crates/fno-agent/src/runtime/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
 resolver	crates/fno-agent/src/runtime/mail_cli/pane_prepare.rs	fn run_mux_captured(args: &[String], timeout_s: u64) -> Result<Output, String> {
 resolver	crates/fno-agent/src/runtime/mcp/client.rs	fn state_log_path() -> PathBuf {
