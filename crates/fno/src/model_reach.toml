@@ -6,7 +6,7 @@ routes = ["anthropic"]
 native_catalog = "anthropic"
 
 [harness.codex]
-routes = []            # codex speaks openai; the door refuses a routed codex pick today
+routes = ["openai"]    # `--route` on codex runs the headless lane (codex_route.rs)
 native_catalog = "openai"
 
 [harness.opencode]
@@ -16,8 +16,16 @@ own_list = true        # `opencode models --pure` is the ready list
 catalog = "zai"
 builtin = true         # the built-in preset `provider_route.rs` serves
 anthropic = { base_url = "https://api.z.ai/api/anthropic", key_env = "ZAI_API_KEY", key_file = "~/.fno/.env" }
+openai = { base_url = "https://api.z.ai/api/v1", key_env = "ZAI_API_KEY", key_file = "~/.fno/.env" }
 haiku_model = "glm-4.7"
 
 [vendor.deepseek]
 catalog = "deepseek"
 anthropic = { base_url = "https://api.deepseek.com/anthropic", key_env = "DEEPSEEK_API_KEY" }
+
+# A gateway: one key reaches every vendor's models. No builtin bit, so a
+# config record is the consent to bill it.
+[vendor.openrouter]
+catalog = "openrouter"
+anthropic = { base_url = "https://openrouter.ai/api", key_env = "OPENROUTER_API_KEY" }
+openai = { base_url = "https://openrouter.ai/api/v1", key_env = "OPENROUTER_API_KEY" }
