@@ -722,6 +722,52 @@ fn events_dir(repo: &Path) -> Option<PathBuf> {
 /// Re-surface an unconsumed born-with-why offer once, as a reminder the
 /// harness owns. One project-local byte cursor: an offer surfaces once in
 /// total across sessions. Never blocks; every miss answers nothing.
+/// Scan the journal past the cursor and advance it, under the cursor lock.
+/// The lock comes back with the scan, so it holds for the whole offer.
+fn scan_past_cursor(dir: &Path, events: &Path) -> Option<(CursorLock, Scan)> {
+    let mut cursor = dir.join(".think-offer-cursor");
+    if fs::symlink_metadata(&cursor).is_ok_and(|m| m.file_type().is_symlink()) {
+        match resolve_symlink(&cursor) {
+            Some(p) => cursor = p,
+            None => return None,
+        }
+    }
+    let mut lock_dir = cursor.as_os_str().to_owned();
+    lock_dir.push(".lock.d");
+    let Some(lock) = CursorLock::acquire(PathBuf::from(lock_dir)) else {
+        return None;
+    };
+    if recover_gc_cursor(&cursor, events).is_none() {
+        return None;
+    }
+    let Ok(size) = fs::metadata(events).map(|m| m.len()) else {
+        return None;
+    };
+    let mut offset = fs::read_to_string(&cursor)
+        .ok()
+        .map(|t| t.replace([' ', '\n'], ""))
+        .filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|t| t.parse::<u64>().ok())
+        .unwrap_or(0);
+    // A shrunk or rotated journal resets to the start.
+    if offset > size {
+        offset = 0;
+    }
+    if offset >= size {
+        return None;
+    }
+    // Only the slice measured above: an append racing this scan belongs to
+    // the next run. A short read leaves the cursor put, so the next turn
+    // re-scans instead of burning a live offer.
+    let Some(slice) = read_slice(events, offset, size - offset) else {
+        return None;
+    };
+    let scan = scan_offers(&String::from_utf8_lossy(&slice));
+    // Best effort, as the script's write was.
+    fs::write(&cursor, size.to_string()).ok();
+    Some((lock, scan))
+}
+
 fn born_with_why_offer(_args: &[String]) -> i32 {
     // Overload skip before the cursor: the offer re-surfaces next turn.
     if super::overloaded() {
@@ -745,46 +791,9 @@ fn born_with_why_offer(_args: &[String]) -> i32 {
     if !events.is_file() {
         return 0;
     }
-    let mut cursor = dir.join(".think-offer-cursor");
-    if fs::symlink_metadata(&cursor).is_ok_and(|m| m.file_type().is_symlink()) {
-        match resolve_symlink(&cursor) {
-            Some(p) => cursor = p,
-            None => return 0,
-        }
-    }
-    let mut lock_dir = cursor.as_os_str().to_owned();
-    lock_dir.push(".lock.d");
-    let Some(_lock) = CursorLock::acquire(PathBuf::from(lock_dir)) else {
+    let Some((_lock, scan)) = scan_past_cursor(&dir, &events) else {
         return 0;
     };
-    if recover_gc_cursor(&cursor, &events).is_none() {
-        return 0;
-    }
-    let Ok(size) = fs::metadata(&events).map(|m| m.len()) else {
-        return 0;
-    };
-    let mut offset = fs::read_to_string(&cursor)
-        .ok()
-        .map(|t| t.replace([' ', '\n'], ""))
-        .filter(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
-        .and_then(|t| t.parse::<u64>().ok())
-        .unwrap_or(0);
-    // A shrunk or rotated journal resets to the start.
-    if offset > size {
-        offset = 0;
-    }
-    if offset >= size {
-        return 0;
-    }
-    // Only the slice measured above: an append racing this scan belongs to
-    // the next run. A short read leaves the cursor put, so the next turn
-    // re-scans instead of burning a live offer.
-    let Some(slice) = read_slice(&events, offset, size - offset) else {
-        return 0;
-    };
-    let scan = scan_offers(&String::from_utf8_lossy(&slice));
-    // Best effort, as the script's write was.
-    fs::write(&cursor, size.to_string()).ok();
     if scan.nid.is_empty() {
         return 0;
     }
