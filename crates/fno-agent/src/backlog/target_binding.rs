@@ -472,24 +472,8 @@ fn fork(req: &Request, parent: &Value, scope: &str, cwd: &Path) -> Receipt {
              ({command}). {id} stays open with its own PR and plan.",
             born.id
         ),
-        next: Some(fork_remedy(&born.id, merge_granted(cwd))),
+        next: Some(format!("fno do target start {} --no-merge", born.id)),
     }
-}
-
-/// The remedy line for a forked child. `--no-merge` stays only where no merge
-/// grant resolves, so a configured lead is not handed a refusal it never asked for.
-fn fork_remedy(child: &str, merge_granted: bool) -> String {
-    if merge_granted {
-        format!("fno do target start {child}")
-    } else {
-        format!("fno do target start {child} --no-merge")
-    }
-}
-
-/// The same grant the merge gate reads: `auto_merge.enabled` or `TARGET_AUTO_MERGE=1`.
-fn merge_granted(cwd: &Path) -> bool {
-    std::env::var("TARGET_AUTO_MERGE").ok().as_deref() == Some("1")
-        || crate::spawn::agents_config::auto_merge_enabled(cwd)
 }
 
 impl Receipt {
@@ -720,14 +704,5 @@ mod tests {
         assert_eq!(r.exit_code(), 1);
         r.verdict = "adopt";
         assert_eq!(r.exit_code(), 0);
-    }
-
-    #[test]
-    fn fork_remedy_names_no_merge_only_without_a_merge_grant() {
-        assert_eq!(
-            fork_remedy("x-child", false),
-            "fno do target start x-child --no-merge"
-        );
-        assert_eq!(fork_remedy("x-child", true), "fno do target start x-child");
     }
 }
