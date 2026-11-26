@@ -3206,7 +3206,7 @@ pub fn rename_agent_displacing(
     Ok((old_name, new_name.to_string(), priors))
 }
 
-/// Put rows back as [`rename_agent_snapshotting`] saw them, in one
+/// Put rows back as [`rename_agent_displacing`] saw them, in one
 /// transaction: name, aliases and node of the source and of every displaced
 /// holder, so no label resolves to two rows and no alias trail of the undone
 /// rename survives. Each row that gets its name back journals the reverse
