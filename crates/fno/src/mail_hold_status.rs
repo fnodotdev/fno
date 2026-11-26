@@ -15,7 +15,7 @@ const MAIL_ONLY: &str = "bus-only";
 
 /// Run the leaf. `None` means the argv needs fno-agent.
 pub fn run(args: &[String]) -> Option<i32> {
-    if args.len() != 1 || args[0] != "--status" || state_root_is_configured() {
+    if !matches!(args, [only] if only == "--status") || state_root_is_configured() {
         return None;
     }
     let registry = crate::ui::agents_view::registry_path();
