@@ -571,6 +571,15 @@ fn fno_agent_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Pat
     cmd.args(action);
     cmd.args(rest);
     cmd.envs(fno::cli_usage::exec_env());
+    // The agent's in-process mux client reads the socket dir from this one
+    // variable; a user shell exports none, so the front door's resolution
+    // rides along.
+    if std::env::var_os("FNO_MUX_DIR")
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        cmd.env("FNO_MUX_DIR", proto::mux_dir());
+    }
     let error = cmd.exec();
     eprintln!("{label}: could not run fno-agent: {error}");
     1
