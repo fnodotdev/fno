@@ -185,13 +185,11 @@ fn launch_lane(
     if reroute && !on_fallback && resolve(&lane).is_err() {
         lane = FALLBACK_LANE.to_string();
     }
-    if reroute {
-        return resolve(&lane).map(|_| lane);
-    }
-    // The seat that prices its own pick (the lead) never reroutes: an
-    // undeclared lead lane holds on its own price or refuses at the runner,
-    // it never silently rides the free fallback and dodges its budget hold.
-    Ok(lane)
+    // Every seat refuses an undeclared pick before the launch, so a doomed
+    // run never starts and the red names the declared lanes. Only the worker
+    // reroutes. The lead and the head keep their pick: the lead's budget hold
+    // prices it, and the head grades the PR, so neither may swap lanes.
+    resolve(&lane).map(|_| lane)
 }
 
 /// The lane a run moves to when it cannot ride its own: the main lane's
@@ -2045,7 +2043,19 @@ fn launch_head(
         );
         return format!("head {} over budget", short(&pr.sha));
     }
-    let lane = lane_with_room(p.repo, &lane, d.now, d.room);
+    // The head grades the PR, so it never reroutes. An undeclared lane posts
+    // its refusal here instead of launching a run that dies on it.
+    let lane = match launch_lane(p.repo, &lane, false, false, d.now, d.room) {
+        Ok(lane) => lane,
+        Err(cause) => {
+            finish(
+                "failure",
+                &format!("head lane refused: {cause}. Clear: declare the lane in routing.models or set evals.gate.lane to a declared lane."),
+                DONE.into(),
+            );
+            return format!("head {} lane refused", short(&pr.sha));
+        }
+    };
     let workers = tasks.iter().filter(|t| t.prompt.is_some()).count();
     let cost = (workers * REPEATS) as f64 * lane_attempt_usd(p.repo, &lane);
     // A covering task grades the head's own build. A `cli/`-only head needs no
@@ -3114,6 +3124,21 @@ mod tests {
             assert!(note.contains("disarmed pr 7"), "{state}: {note}");
             assert!(note.contains(&format!("({word}")), "{state}: {note}");
         }
+    }
+
+    #[test]
+    fn an_undeclared_head_lane_refuses_red_without_a_launch() {
+        // The head never reroutes: an undeclared lane posts its refusal and
+        // names the declared lanes, instead of launching a run that dies on it.
+        let mut w = World::new("skills/x/SKILL.md\n");
+        w.room = None;
+        World::config(w.dir.path(), "[evals.gate]\nlane = \"no-such-lane\"\n");
+        w.with_baseline();
+        w.tick(true, Utc::now());
+        assert!(w.spawns.borrow().is_empty(), "no doomed launch");
+        let post = w.posts.borrow().last().cloned().unwrap();
+        assert!(post.starts_with("failure head lane refused"), "{post}");
+        assert!(post.contains("unknown lane 'no-such-lane'"), "{post}");
     }
 
     #[test]
