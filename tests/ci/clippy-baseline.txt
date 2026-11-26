@@ -11953,7 +11953,6 @@ crates/fno-app/src/chat/mod.rs	clippy::let_underscore_must_use	let _ = socket.se
 crates/fno-app/src/chat/mod.rs	clippy::let_underscore_must_use	let _ = tx.send(Msg::Ended);
 crates/fno-app/src/chat/view.rs	clippy::indexing_slicing	let (a, b) = (w[0], w[1]);
 crates/fno-app/src/chat/view.rs	clippy::too_many_lines	fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
-crates/fno-app/src/grid.rs	clippy::let_underscore_must_use	let _ = line.paint(at, m.cell.height, window, cx);
 crates/fno-app/src/hq.rs	clippy::let_underscore_must_use	let _ = self.asks.send(Ask::Refresh);
 crates/fno-app/src/keys.rs	clippy::indexing_slicing	if &bytes[i..i + 3] != b"\\x1b[?" {
 crates/fno-app/src/keys.rs	clippy::indexing_slicing	match &bytes[start..end] {
