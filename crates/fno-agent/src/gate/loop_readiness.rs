@@ -317,7 +317,7 @@ fn stop_leg_from_events(
     let data = snapshot.get("data").unwrap_or(&Value::Null);
     // The stop that proves the refresh carries the id the snapshot named.
     let proof_session = data
-        .get("session_id")
+        .pointer("/session_id")
         .and_then(Value::as_str)
         .unwrap_or(session)
         .to_string();
