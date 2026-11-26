@@ -77,6 +77,19 @@ struct Episode {
     quota_reset_at: Option<i64>,
 }
 
+/// A tool call the transcript shows open: a `tool_use` with no `tool_result`
+/// yet. A foreground wait (a REST poll loop inside one Bash call) leaves
+/// exactly this at the tail while it runs, so the worker is busy, not quiet.
+/// Fields: call id, start in unix seconds, timeout in milliseconds.
+struct OpenCall {
+    id: String,
+    started_s: i64,
+    timeout_ms: i64,
+}
+
+/// The harness default for a tool call that names no timeout (Claude Bash).
+const DEFAULT_CALL_TIMEOUT_MS: i64 = 120_000;
+
 #[derive(Default)]
 pub(super) struct Tail {
     pub(super) activity: i64,
@@ -84,6 +97,91 @@ pub(super) struct Tail {
     failed: bool,
     read: bool,
     pub(super) touched: i64,
+    open_calls: Vec<OpenCall>,
+}
+
+impl Tail {
+    /// True while an open tool call has not yet passed its own timeout. The
+    /// call's timeout is its bound: past it, the call is stale, and the
+    /// ladder reads the worker quiet again.
+    pub(super) fn call_open(&self, now: i64) -> bool {
+        self.open_calls
+            .iter()
+            .any(|call| now * 1000 < call.started_s * 1000 + call.timeout_ms)
+    }
+}
+
+/// The timeout a tool call declares, in milliseconds. Claude `input.timeout`
+/// and Codex `timeout_ms` both carry it; a call that names none gets the
+/// harness default.
+fn declared_timeout_ms(input: Option<&Value>) -> i64 {
+    input
+        .and_then(|v| {
+            v.get("timeout")
+                .or_else(|| v.get("timeout_ms"))
+                .and_then(Value::as_i64)
+        })
+        .filter(|ms| *ms > 0)
+        .unwrap_or(DEFAULT_CALL_TIMEOUT_MS)
+}
+
+/// Fold one transcript row into the set of open tool calls. Claude carries
+/// calls as `message.content` items (`tool_use` opens, `tool_result` closes).
+/// Codex carries them as payload items (`function_call` opens,
+/// `function_call_output` closes), with arguments as a JSON string.
+fn fold_tool_calls(
+    row: &Value,
+    payload: &Value,
+    event: &str,
+    at: Option<i64>,
+    open: &mut Vec<OpenCall>,
+) {
+    if let Some(items) = row.pointer("/message/content").and_then(Value::as_array) {
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("tool_use") => {
+                    if let (Some(id), Some(started_s)) =
+                        (item.get("id").and_then(Value::as_str), at)
+                    {
+                        open.push(OpenCall {
+                            id: id.to_string(),
+                            started_s,
+                            timeout_ms: declared_timeout_ms(item.get("input")),
+                        });
+                    }
+                }
+                Some("tool_result") => {
+                    if let Some(id) = item.get("tool_use_id").and_then(Value::as_str) {
+                        open.retain(|call| call.id != id);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    match event {
+        "function_call" => {
+            if let (Some(id), Some(started_s)) =
+                (payload.get("call_id").and_then(Value::as_str), at)
+            {
+                let args = payload
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .and_then(|text| serde_json::from_str::<Value>(text).ok());
+                open.push(OpenCall {
+                    id: id.to_string(),
+                    started_s,
+                    timeout_ms: declared_timeout_ms(args.as_ref()),
+                });
+            }
+        }
+        "function_call_output" => {
+            if let Some(id) = payload.get("call_id").and_then(Value::as_str) {
+                open.retain(|call| call.id != id);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
@@ -120,6 +218,7 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
             .and_then(Value::as_str)
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.timestamp());
+        fold_tool_calls(&row, payload, event, timestamp, &mut out.open_calls);
         if event == "task_started" {
             out.failed = false;
             out.started_at = timestamp.or(out.started_at);
@@ -851,6 +950,12 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let Some(tail) = transcript_tail else {
                 return Ok(());
             };
+            // A tool call still open inside its own timeout is a worker in
+            // a foreground wait (a REST loop, a long test run). Not quiet.
+            // A dead pid cannot be waiting on its own call, so it skips the hold.
+            if !dead && tail.call_open(now) {
+                return Ok(());
+            }
             // A worker whose newest help route still parks it waits on the
             // route's own owner, the sweep's timer or a human answer, so the
             // ladder holds. Activity newer than the row lifts the park back
@@ -1112,6 +1217,74 @@ mod tests {
             ts = crate::provider_cap::epoch_to_rfc3339(ts),
             stamp = stamp,
         )
+    }
+
+    fn transcript_with(rows: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, rows.join("\n")).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn an_open_tool_call_reads_not_quiet_until_its_own_timeout_then_quiet() {
+        // The Bash call opens at T with a 10-minute timeout and no result
+        // row: the worker is inside a foreground wait. Past the timeout the
+        // call is stale and the ladder reads the worker quiet again.
+        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        let (_dir, path) = transcript_with(&[
+            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_open","name":"Bash","input":{"command":"rest-loop","timeout":600000}}]}}"#,
+        ]);
+        let tail = tail(&path, None).unwrap();
+        assert!(
+            tail.call_open(opened + 60),
+            "an open call inside its timeout is not quiet"
+        );
+        assert!(
+            tail.call_open(opened + 599),
+            "the call still holds one second before its bound"
+        );
+        assert!(
+            !tail.call_open(opened + 601),
+            "the same call past its timeout reads quiet"
+        );
+    }
+
+    #[test]
+    fn a_closed_tool_call_never_holds_the_ladder() {
+        let (_dir, path) = transcript_with(&[
+            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_done","name":"Bash","input":{"command":"ls","timeout":600000}}]}}"#,
+            r#"{"type":"user","timestamp":"2026-11-25T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_done","content":"ok"}]}}"#,
+        ]);
+        let tail = tail(&path, None).unwrap();
+        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert!(
+            !tail.call_open(opened + 60),
+            "a call with a result is not open"
+        );
+    }
+
+    #[test]
+    fn a_codex_function_call_without_output_reads_not_quiet_inside_its_timeout() {
+        let (_dir, path) = transcript_with(&[
+            r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{\"command\":[\"sleep\",\"900\"],\"timeout_ms\":1200000}"}}"#,
+        ]);
+        let tail = tail(&path, None).unwrap();
+        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        assert!(
+            tail.call_open(opened + 900),
+            "a codex call inside its timeout is not quiet"
+        );
+        assert!(
+            !tail.call_open(opened + 1201),
+            "past its timeout it reads quiet"
+        );
     }
 
     #[test]
