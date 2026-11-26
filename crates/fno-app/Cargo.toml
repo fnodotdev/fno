@@ -11,15 +11,9 @@ rust-version = "1.92"
 description = "The fno desktop app: a native GPUI window over a running fno mux server."
 license = "Apache-2.0"
 repository = "https://github.com/fnodotdev/fno"
-# gpui is a pinned release and fno is a path dependency, so this crate ships
+# gpui-pre is a pinned release and fno is a path dependency, so this crate ships
 # as a release tarball, never to crates.io.
 publish = false
-
-# The objc 0.2 macros gate on cfg(feature = "cargo-clippy") internally;
-# every msg_send expansion warns unexpected_cfgs on a modern rustc. The
-# cfg is the macro's own, not a feature of this crate.
-[lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
 
 [lib]
 name = "fno_app"
@@ -44,15 +38,15 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 serde_json = "1"
 # The window-state file: typed structs in app_state.rs round-trip through it.
 serde = { version = "1", features = ["derive"] }
-# The window, text and input layer (Zed's UI framework). `font-kit` is the one
-# feature the macOS text system needs.
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
-# The attention signals' macOS calls: UNUserNotificationCenter (via raw
-# objc), NSSound and the Dock tile. objc/cocoa ride the lockfile at the
-# versions gpui already pins; block builds the authorization completion.
-cocoa = "0.26"
-block = "0.1"
-# Chat mode's markdown: gpui 0.2.2 ships no markdown element.
+# The window, text and input layer (Zed's UI framework), from gpui-pre: the
+# weekly crates.io snapshot of Zed main. Pinned exact, because any snapshot
+# may break the API. The fallback, if gpui-pre stops publishing, is a git rev
+# pin on the same Zed commit (0.3.14 is zed@f126950).
+gpui = { package = "gpui-pre", version = "=0.3.14", default-features = false, features = ["font-kit"] }
+# The platform layer gpui-pre splits out: gpui_platform::application() opens
+# the macOS app.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.14" }
+# Chat mode's markdown: gpui ships no markdown element.
 pulldown-cmark = { version = "0.13", default-features = false }
 # The chat composer deletes by grapheme.
 unicode-segmentation = "1"
@@ -63,13 +57,9 @@ unicode-width = "0.2"
 png = "0.18"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
-# The shot's window discovery and the window-server metadata reads:
-# NSApp enumeration (objc) and CGWindowListCopyWindowInfo
-# (core-graphics). Versions pinned to gpui's own so the graph carries
-# one copy. The image capture itself goes through Apple's
-# ScreenCaptureKit-backed screencapture tool.
-objc = "0.2"
-core-graphics = "0.24"
-# The ForeignType trait: CGImage::as_ptr for the rep's initWithCGImage.
-# Version pinned to core-graphics's own so the graph carries one copy.
-foreign-types = "0.5"
+# The macOS calls: notifications, NSSound and the Dock tile (alerts.rs),
+# and the shot's NSApp window enumeration (shot.rs). Same majors as
+# gpui-pre-macos, so the graph carries one copy of each.
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry"] }

@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
-    Bounds, ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu,
-    MenuItem, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection,
-    Window, WindowBounds, WindowOptions,
+    actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Bounds,
+    ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler,
+    FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
+    WindowBounds, WindowOptions,
 };
 
 use serde::{Deserialize, Serialize};
@@ -4536,7 +4536,7 @@ pub fn run(
     font_size: f32,
     restored: Option<super::app_state::AppState>,
 ) {
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::application().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
         cx.bind_keys([KeyBinding::new(keys::GOTO_KEY, GoTo, None)]);
         cx.bind_keys([KeyBinding::new(keys::SETTINGS_KEY, OpenSettings, None)]);
@@ -4545,6 +4545,7 @@ pub fn run(
             Menu {
                 name: "fno".into(),
                 items: vec![MenuItem::action("Settings…", OpenSettings)],
+                disabled: false,
             },
             Menu {
                 name: "Help".into(),
@@ -4552,6 +4553,7 @@ pub fn run(
                     MenuItem::action("Go to…", GoTo),
                     MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts),
                 ],
+                disabled: false,
             },
         ]);
         let window_bounds = initial_window_bounds(restored.as_ref(), cx);
