@@ -1264,7 +1264,7 @@ fn correction_gate(cwd: &Path, fire: &Fire) -> Option<String> {
     let turn = crate::operator_turns::corrections_in(&outcome)
         .into_iter()
         .next()?;
-    let law = correction_law(crate::decision_index::default_store_live());
+    let law = correction_law(crate::decision_index::default_store_live().ok());
     Some(format!(
         "operator turn {} reads as a {} and is undispositioned: \"{}\". {law} Record it with \
          `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or \
@@ -1279,22 +1279,26 @@ const CORRECTION_SUBJECT: &str = "user-corrections-are-product-fixes";
 /// The live law the correction gate stands on, read from the store at the
 /// refusal so a superseded copy never speaks for it. An unreadable store
 /// names the subject and the read command instead.
-fn correction_law(store: Result<crate::decision_index::Index, String>) -> String {
-    let newest = store.ok().and_then(|index| {
+/// The three decision-row fields the correction refusal reads.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct LawRow {
+    subject: String,
+    ts: String,
+    decision: String,
+}
+
+fn correction_law(store: Option<crate::decision_index::Index>) -> String {
+    let newest = store.and_then(|index| {
         index
             .rows
             .into_iter()
-            .filter(|r| r.get("subject").and_then(Value::as_str) == Some(CORRECTION_SUBJECT))
-            .max_by(|a, b| {
-                let ts = |r: &Value| r.get("ts").and_then(Value::as_str).unwrap_or("").to_owned();
-                ts(a).cmp(&ts(b))
-            })
+            .filter_map(|r| serde_json::from_value::<LawRow>(r).ok())
+            .filter(|r| r.subject == CORRECTION_SUBJECT && !r.decision.is_empty())
+            .max_by(|a, b| a.ts.cmp(&b.ts))
     });
-    match newest
-        .as_ref()
-        .and_then(|r| r.get("decision").and_then(Value::as_str))
-    {
-        Some(text) => format!("The live law ({CORRECTION_SUBJECT}): {text}"),
+    match newest {
+        Some(row) => format!("The live law ({CORRECTION_SUBJECT}): {}", row.decision),
         None => format!(
             "The live law sits under decision {CORRECTION_SUBJECT}; read it with \
              `fno backlog decisions {CORRECTION_SUBJECT}`."
@@ -1642,11 +1646,11 @@ mod tests {
             ],
             damaged: 0,
         };
-        let live = correction_law(Ok(index));
+        let live = correction_law(Some(index));
         assert!(live.contains("Fix the delivery gap."), "{live}");
         assert!(!live.contains("old copy"), "{live}");
         assert!(!live.contains("is a product change for every fno user"));
-        let unread = correction_law(Err("no store".into()));
+        let unread = correction_law(None);
         assert!(
             unread.contains("fno backlog decisions user-corrections-are-product-fixes"),
             "{unread}"

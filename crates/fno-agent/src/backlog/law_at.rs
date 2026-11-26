@@ -30,29 +30,39 @@ pub struct LawAt {
     pub door: Option<AtDoor>,
 }
 
+/// A refused `--at-door` value; the message names the accepted form.
+#[derive(Debug, PartialEq)]
+pub struct DoorSpecError(pub String);
+
+impl std::fmt::Display for DoorSpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 impl LawAt {
     /// Parse one `--at-door` value. A second door word on one law refuses:
     /// one law, one door. The same door again adds a subject.
-    pub fn set_door(&mut self, spec: &str) -> Result<(), String> {
+    pub fn set_door(&mut self, spec: &str) -> Result<(), DoorSpecError> {
         let (door, subject) = match spec.split_once(':') {
             Some((d, s)) => (d.trim(), Some(s.trim())),
             None => (spec.trim(), None),
         };
         if !DOORS.contains(&door) {
-            return Err(format!(
+            return Err(DoorSpecError(format!(
                 "--at-door takes {}[:<subject-glob>], not {spec:?}",
                 DOORS.join("|")
-            ));
+            )));
         }
         let at = self.door.get_or_insert_with(|| AtDoor {
             door: door.to_string(),
             subjects: Vec::new(),
         });
         if at.door != door {
-            return Err(format!(
+            return Err(DoorSpecError(format!(
                 "--at-door names one door per law; this law already names {}",
                 at.door
-            ));
+            )));
         }
         if let Some(s) = subject.filter(|s| !s.is_empty()) {
             at.subjects.push(s.to_string());
@@ -229,9 +239,9 @@ mod tests {
         at.commands.push("fno agent mail send *".into());
         at.set_door("send:by-name:*").unwrap();
         at.set_door("send:@*").unwrap();
-        let err = at.set_door("spawn").unwrap_err();
+        let err = at.set_door("spawn").unwrap_err().0;
         assert!(err.contains("already names send"), "{err}");
-        let err = LawAt::default().set_door("teleport").unwrap_err();
+        let err = LawAt::default().set_door("teleport").unwrap_err().0;
         assert!(err.contains("send|spawn|merge"), "{err}");
 
         let mut row = Map::new();
