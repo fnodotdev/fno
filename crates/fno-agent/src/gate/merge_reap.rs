@@ -1235,7 +1235,7 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn scan_pr_nodes_binds_additional_prs_and_renamed_repo() {
+    fn scan_pr_and_branch_nodes_bind_the_node_a_pr_or_branch_names() {
         let entries = vec![
             json!({"id": "x-a", "pr_number": 4061, "pr_url": "https://github.com/fnodotdev/fno/pull/4061",
                    "additional_prs": [4107, {"url": "https://github.com/fnodotdev/fno/pull/4101"}]}),
@@ -1248,20 +1248,17 @@ mod tests {
         assert_eq!(scan_pr_nodes(&entries, 4101, slug, &aliases), ["x-a"]);
         assert_eq!(scan_pr_nodes(&entries, 4170, slug, &aliases), ["x-b"]);
         assert!(scan_pr_nodes(&entries, 4170, slug, &BTreeMap::new()).is_empty());
-    }
 
-    #[test]
-    fn scan_branch_nodes_binds_the_node_the_branch_names() {
-        let entries = vec![
+        let branch_entries = vec![
             json!({"id": "x-aaaa", "status": "done"}),
             json!({"id": "x-bbbb", "pr_number": 4100}),
         ];
         assert_eq!(
-            scan_branch_nodes(&entries, "feature/x-aaaa-reap-rows"),
+            scan_branch_nodes(&branch_entries, "feature/x-aaaa-reap-rows"),
             ["x-aaaa"]
         );
-        assert!(scan_branch_nodes(&entries, "feature/x-cccc-gone").is_empty());
-        assert!(scan_branch_nodes(&entries, "main").is_empty());
+        assert!(scan_branch_nodes(&branch_entries, "feature/x-cccc-gone").is_empty());
+        assert!(scan_branch_nodes(&branch_entries, "main").is_empty());
     }
 
     fn stamps() -> u128 {
