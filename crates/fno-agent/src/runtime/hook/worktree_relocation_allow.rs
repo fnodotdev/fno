@@ -264,7 +264,10 @@ fn path_call(payload: &Payload) -> Option<&str> {
 /// only a hook's decisions, so without the row a parked worker looks the
 /// same as one whose hook never ran, and without the reason the residual
 /// asks cannot be classified after the fact.
-fn classify(payload: &Payload, own: Option<(&Path, &str)>) -> Option<(&'static str, &'static str)> {
+fn classify(
+    payload: &Payload,
+    own: Option<(&Path, &'static str)>,
+) -> Option<(&'static str, &'static str)> {
     let raw = path_call(payload)?;
     if let Some((own, source)) = own {
         if allows(payload, own) {
