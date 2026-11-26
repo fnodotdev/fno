@@ -4637,14 +4637,6 @@ async fn attach_and_run(
     }
 }
 
-/// Fold raw search-mode bytes, carrying escape state in `esc` ACROSS reads so an
-/// ESC-prefixed sequence broken at a read boundary never exits the search or
-/// leaks its tail into the query. A whole CSI sequence (`ESC [ ` params `x`) is
-/// consumed up to and including its final byte (`0x40..=0x7e`) and swallowed, so
-/// a MULTI-byte sequence - PageUp `ESC [ 5 ~`, Ctrl-Arrow `ESC [ 1; 5 A` - never
-/// leaks its param/final tail into the typed query (gemini review, HIGH). A bare
-/// Esc surfaces as [`SearchKey::Esc`]; everything else is a [`SearchKey::Byte`].
-/// A lone trailing ESC stays pending until the next byte disambiguates it.
 /// Query-length ceiling. Far above any real search term; only bounds the scan
 /// cost against a held key or a paste. (gemini review, MEDIUM)
 const MAX_SEARCH_QUERY: usize = 256;
