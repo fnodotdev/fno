@@ -99,7 +99,8 @@ route_on_pane = true
 # the five inherited rows were wrong.
 #
 # claude, measured 2026-08-28: hooks/hooks.json declares a `Stop` group whose
-# command is hooks/target-stop-hook.sh, which shells loop-check.
+# command is hooks/hook-front.sh Stop; its target-stop leg is the entry
+# hooks/target-stop-hook.sh wraps, which shells loop-check.
 loop_participation = "native"
 loop_extension = ""
 command_surface = "slash"
@@ -2375,7 +2376,7 @@ reason = "no fno hook registration for muse (no plugin hook file and no capabili
 
 [harness.claude.hooks.session_state]
 state = "supported"
-via = ["hooks/session-state.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "crates/fno-agent/src/runtime/hook/session_state.rs"]
+via = ["hooks/hook-front.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # PermissionRequest fires as claude is about to ask (code.claude.com/docs/en/hooks),
 # so it is the blocked producer. The permission_prompt Notification fires
@@ -2486,7 +2487,7 @@ reason = "no session-state push for muse (no fno hook registration; the per-harn
 
 [harness.claude.hooks.event_rules]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/target-stop-hook.sh", "crates/fno-agent/src/runtime/hook/stop.rs"]
+via = ["hooks/hooks.json", "hooks/hook-front.sh", "crates/fno-agent/src/runtime/hook/stop.rs"]
 
 [harness.codex.hooks.event_rules]
 state = "supported"
