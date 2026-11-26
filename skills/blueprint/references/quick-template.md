@@ -1,6 +1,6 @@
 # Quick Plan Template
 
-Single flat markdown file for bugs, focused features, and single-session work. One `.md` == one PR == one node, with no folder, no `00-INDEX.md`, and no phase files. Frontmatter is **mandatory** on every plan, quick or not, and holds scalar keys only: `status` and `kind` always ride in it. The nested and list keys (`code_index`, `kill_criteria`, `done_probes`, `consolidation`, `surface`, `sources`, and the stamp's `urls` and `session_ids`) live in one fenced YAML block under a `## Gate records` section after `## Execution Strategy`. Obsidian properties cannot render nested YAML. Any top-level `decisions_acknowledged` rides with them. A `## Kill Criteria` heading is a legacy form; new plans do not use it.
+Single flat markdown file for bugs, focused features, and single-session work. One `.md` == one PR == one node, with no folder, no `00-INDEX.md`, and no phase files. Frontmatter is **mandatory** on every plan, quick or not, and holds scalar keys only: `status` and `kind` always ride in it. The nested and list keys live in one fenced YAML block under a `## Gate records` section after `## Execution Strategy`. They are `code_index`, `kill_criteria`, `done_probes`, `consolidation`, `surface` and `sources`, and the stamp's `urls` and `session_ids`. Obsidian properties cannot render nested YAML. Any top-level `decisions_acknowledged` rides with them. A `## Kill Criteria` heading is a legacy form. New plans do not use it.
 
 ---
 
@@ -208,12 +208,12 @@ tasks:
 
 ```yaml
 # code_index: the step 2-index receipt. main_sha is the origin/main sha the
-#                                 # plan read; providers is one entry per index
-#                                 # asked, or [] when none is present. MANDATORY
+#                                 # plan read. providers is one entry per index
+#                                 # asked. With no index present, write []. MANDATORY
 #                                 # on plans created after 2026-09-17: the
 #                                 # validator's Code Index Audit refuses a plan
 #                                 # that skipped a present index. status is
-#                                 # answered | unavailable | error; fresh is
+#                                 # answered | unavailable | error. fresh is
 #                                 # yes | no | unknown.
 code_index:
   main_sha: <7-40 hex>                     # the origin/main sha the plan read

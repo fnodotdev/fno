@@ -56,7 +56,7 @@ Each gate loads only when its trigger fires. The bodies (with verbatim scripts) 
 | Cross-project peer heads-up | a `peers` block exists and a Files-to-Modify row matches a peer surface (step 3a-bis) |
 | Epic decomposition (`group N`) | see [references/epic-decomposition.md](references/epic-decomposition.md) - `group`/`max_prs:`/`scope: epic` |
 
-**Kill Criteria (MANDATORY, every plan - the one gate that is always inline).** Every plan `/blueprint` writes MUST declare `kill_criteria:` in the `## Gate records` fence (including quick plans). Legacy frontmatter still reads; a `## Kill Criteria` heading is not authored. Emit these defaults when the plan does not override:
+**Kill Criteria (MANDATORY, every plan - the one gate that is always inline).** Every plan `/blueprint` writes MUST declare `kill_criteria:` in its `## Gate records` fence. Quick plans do too. Legacy frontmatter still reads. Never author a `## Kill Criteria` heading. If the plan does not override them, emit these defaults:
 
 ```yaml
 kill_criteria:
@@ -82,10 +82,7 @@ input decides which path runs; the output shape is always the same (`plan == PR
 | A raw idea / feature description | **[Single-doc creation](#single-doc-creation-idea-input)** | Write a fresh single `.md` with full frontmatter |
 | A plan that reads `status: ready`, changed by a new ruling, a seat order, or a landed blocker | **[Amend](#amend-a-plan-that-is-already-ready)** | Edit the plan in place: read rulings once, validate once, hand to execute |
 
-`quick` is a **size knob** on either path (fewer sections, single task), not a
-separate mode - a quick plan still carries full frontmatter (`claims`,
-`executor`, `status`) and `kill_criteria` in its `## Gate records` fence. Waves live in the doc's `## Execution Strategy`
-block; there is no `00-INDEX.md` and no phase files.
+`quick` is a **size knob** on either path (fewer sections, single task), not a separate mode. A quick plan still carries full frontmatter (`claims`, `executor`, `status`). Its `kill_criteria` sits in its `## Gate records` fence. Waves live in the doc's `## Execution Strategy` block. There is no `00-INDEX.md` and no phase files.
 
 A batched dispatch can run this skill up to three times in sequence. Each run still produces exactly one `.md`. When two of the three share a shape, step 2d absorbs the sibling into one node before either becomes a plan.
 
@@ -188,7 +185,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
    - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open. A fact only the user can settle (a decision conflict, a product call) is not a `- [ ]` line. File it with `fno inbox outstanding ask --question-file <file> --node <id>` and cite the question id in Context.
-   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in `done_probes:` in the `## Gate records` fence so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
+   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Put that command under `done_probes:` in the `## Gate records` fence. The stop gate reads it there. The probe rules are in [the done_probes gate](references/blueprint-gates.md).
 
    Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it. A plan with a UI question shows its options as a rendered visual mockup (an artifact page or images), never an ASCII text block.
 
@@ -510,7 +507,7 @@ When the input to `/blueprint` is a path to an existing design doc (produced by 
    - >= 50% exist -> brownfield; < 50% exist -> greenfield
 4. Build ## Execution Strategy (waves YAML block)
 5. Brownfield only: ## File Ownership Map, ## Patterns to Reuse
-6. Update frontmatter: status -> ready (design stays a draft until `--finalize`), execution_mode, waves; the default kill_criteria goes in the `## Gate records` fence
+6. Update frontmatter: status -> ready, execution_mode, waves. A design stays a draft until `--finalize`. The default kill_criteria goes in the `## Gate records` fence.
 7. On `--finalize`: validate the proposed ready + `acceptance_contract: compiled-v1` contract (every task acceptance reference resolves) and atomically stamp both
 8. Write atomically (tempfile + os.replace in same directory)
 9. Auto-intake to backlog via `fno backlog intake` (handled by skill body)

@@ -90,7 +90,7 @@ A plan built on node text can send a worker after work that already shipped. The
 
 The plan must carry:
 
-- a `code_index:` block in the `## Gate records` fence (legacy frontmatter still reads) with `main_sha:` (the 7-to-40-hex sha the plan read) and `providers:` (a list, or `[]`)
+- a `code_index:` block in the `## Gate records` fence. It holds `main_sha:` (the 7-to-40-hex sha the plan read) and `providers:` (a list, or `[]`). Legacy frontmatter still reads.
 - one `- name: <name>` entry per provider detection prints for the plan's repo, whatever its status
 - `status:` (`answered` | `unavailable` | `error`) and `fresh:` (`yes` | `no` | `unknown`) on every entry. A finalized `true` or `false` reads as `yes` or `no`, since finalize re-serializes YAML
 - `## Existence audit` as the plan's first `##` heading, with at least one table row
@@ -409,9 +409,7 @@ block is absent, and only the engine-wide defaults (if any) apply.
 
 ## done_probes: operational evidence (MANDATORY for recurring deliverables)
 
-A plan whose deliverable is **recurring or operational** - a scheduler, a
-watcher, a daemon, a cadence, a LaunchAgent, anything whose value is that it
-keeps running - MUST declare 1-2 `done_probes` in its `## Gate records` fence.
+A plan whose deliverable is **recurring or operational** - a scheduler, a watcher, a daemon, a cadence, a LaunchAgent, anything whose value is that it keeps running - MUST declare 1-2 `done_probes` in its `## Gate records` fence.
 Everything else omits the field entirely.
 
 `fno-agent loop-check` runs each probe as the final `DonePRGreen` conjunct and

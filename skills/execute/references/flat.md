@@ -38,7 +38,7 @@ If no frontend-craft executor is installed, plain execution is fine.
 
 ## 2. Execute Changes
 
-**Before each numbered change**: the plan's `kill_criteria:` block is the thing to evaluate. It sits in the `## Gate records` fence, or in frontmatter on a legacy plan; `fno do phase kill-check` reads both. On a fired predicate, stop, emit `<aborted reason="{name}">MISSION ABORTED: {reason}</aborted>`, and make no further changes:
+**Before each numbered change**: the plan's `kill_criteria:` block is the thing to evaluate. It sits in the `## Gate records` fence, or in frontmatter on a legacy plan. `fno do phase kill-check` reads both. On a fired predicate, stop, emit `<aborted reason="{name}">MISSION ABORTED: {reason}</aborted>`, and make no further changes:
 
 ```bash
 PLAN_PATH="$1"   # the .md file path passed to /execute
