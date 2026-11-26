@@ -10,7 +10,9 @@ The reserved names have since drifted from the dispatch surface, and the table b
 
 ## Mechanism: per-spawn env
 
-Each worker is a fresh `claude --bg` process, which speaks the **Anthropic** Messages API. A provider is usable here only via its Anthropic-compatible endpoint (z.ai: `https://api.z.ai/api/anthropic`; DeepSeek: `https://api.deepseek.com/anthropic`). The OpenAI-protocol endpoints the same vendors publish (z.ai's `/api/coding/paas/v4`) are for OpenAI-SDK consumers and a future codex/openai lane, not for a claude worker; a provider whose `protocol` is not `anthropic` is skipped here with a notice.
+Each worker is a fresh `claude --bg` process, which speaks the **Anthropic** Messages API. A provider is usable here only via its Anthropic-compatible endpoint (z.ai: `https://api.z.ai/api/anthropic`; DeepSeek: `https://api.deepseek.com/anthropic`). OpenRouter serves an Anthropic skin at `https://openrouter.ai/api`, so a claude worker runs any OpenRouter model through it. A provider whose `protocol` is not `anthropic` is skipped here with a notice.
+
+The OpenAI-protocol endpoints the same vendors publish (z.ai's `/api/v1`, OpenRouter's `/api/v1`) serve the codex lane. `fno agent spawn -H codex --as headless --route <provider>/<model>` passes them to codex as `-c model_providers.<provider>` tokens, and the env carries only the key. A codex thread refuses `--route`, because every codex thread shares one app-server. The reach table (`crates/fno-agent/src/model_reach.toml`) states each vendor's endpoints. A `model_routing.providers` record of any protocol is the consent to bill a vendor that is not built in.
 
 Routing stamps these env vars into the worker at spawn time:
 
