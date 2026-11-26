@@ -193,10 +193,11 @@ pub(crate) fn emit_guard_row_reason(
 ) {
     let path =
         crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
-    let mut data = json!({"guard": guard, "decision": decision, "tool": tool});
-    if !reason.is_empty() {
-        data["reason"] = json!(reason);
-    }
+    let data = if reason.is_empty() {
+        json!({"guard": guard, "decision": decision, "tool": tool})
+    } else {
+        json!({"guard": guard, "decision": decision, "tool": tool, "reason": reason})
+    };
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
         "type": "guard_decision",
