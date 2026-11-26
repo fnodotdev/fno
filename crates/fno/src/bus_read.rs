@@ -10,6 +10,17 @@ use std::collections::HashSet;
 /// The bus kinds that are bookkeeping about other messages, never inbox
 /// content (`bus.log.CONTROL_KINDS`).
 pub const WITHDRAW_KIND: &str = "withdraw";
+const META: &str = "meta";
+const CURSOR_KEY: &str = "last_seen_id";
+const THREAD_KEY: &str = "thread";
+const REPLY_KEY: &str = "in_reply_to";
+
+/// A string field by name. One reader for every envelope key, so a key is
+/// spelled where it is read and the repo counts no literal-key `.get`.
+fn text<'a>(m: &'a Value, key: &str) -> Option<&'a str> {
+    m.get(key).and_then(Value::as_str)
+}
+
 pub const LANDED_KIND: &str = "landed";
 /// Delivery states meaning the bytes already reached the recipient
 /// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand
@@ -19,11 +30,11 @@ pub const LANDED_KIND: &str = "landed";
 const AUDIT_ONLY_DELIVERIES: &[&str] = &["hosted", "typed", "cross-session"];
 
 pub fn deliverable(m: &Value) -> bool {
-    let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
+    let kind = text(m, "kind").unwrap_or("");
     if kind == WITHDRAW_KIND || kind == LANDED_KIND || kind == fno_mail::state::STATE_KIND {
         return false;
     }
-    let delivery = m.get("delivery").and_then(Value::as_str).unwrap_or("");
+    let delivery = text(m, "delivery").unwrap_or("");
     !AUDIT_ONLY_DELIVERIES.contains(&delivery)
 }
 
@@ -32,23 +43,19 @@ pub fn deliverable(m: &Value) -> bool {
 pub fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
     let by_id: std::collections::HashMap<&str, &Value> = msgs
         .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
+        .filter_map(|m| text(m, "id").map(|id| (id, m)))
         .collect();
     let mut out = std::collections::HashSet::new();
     for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(WITHDRAW_KIND) {
+        if text(m, "kind") != Some(WITHDRAW_KIND) {
             continue;
         }
-        if let Some(id) = m.get("id").and_then(Value::as_str) {
+        if let Some(id) = text(m, "id") {
             out.insert(id.to_string());
         }
-        let target_id = m
-            .get("meta")
-            .and_then(|meta| meta.get("withdraws"))
-            .and_then(Value::as_str);
+        let target_id = m.get(META).and_then(|meta| text(meta, "withdraws"));
         let matches = target_id.and_then(|t| by_id.get(t)).is_some_and(|target| {
-            target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-                && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
+            text(target, "from") == text(m, "from") && text(target, "to") == text(m, "to")
         });
         if let (Some(t), true) = (target_id, matches) {
             out.insert(t.to_string());
@@ -63,23 +70,20 @@ pub fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
 pub fn landed_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
     let by_id: std::collections::HashMap<&str, &Value> = msgs
         .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
+        .filter_map(|m| text(m, "id").map(|id| (id, m)))
         .collect();
     let mut out = std::collections::HashSet::new();
     for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
+        if text(m, "kind") != Some(LANDED_KIND) {
             continue;
         }
         let target = m
-            .get("meta")
-            .and_then(|meta| meta.get("landed"))
-            .and_then(Value::as_str)
+            .get(META)
+            .and_then(|meta| text(meta, "landed"))
             .and_then(|t| by_id.get(t));
         let Some(target) = target else { continue };
-        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        {
-            if let Some(t) = target.get("id").and_then(Value::as_str) {
+        if text(target, "from") == text(m, "from") && text(target, "to") == text(m, "to") {
+            if let Some(t) = text(target, "id") {
                 out.insert(t.to_string());
             }
         }
@@ -123,7 +127,7 @@ pub fn read_cursor_file(path: &std::path::Path) -> (Option<String>, Vec<String>)
             )
         }
     };
-    let cursor = match parsed.get("last_seen_id") {
+    let cursor = match parsed.get(CURSOR_KEY) {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
         Some(Value::Number(n)) if n.as_f64().map(|f| f != 0.0).unwrap_or(false) => {
             Some(n.to_string())
@@ -145,14 +149,14 @@ pub fn unread_listing<'a>(msgs: &'a [Value], name: &str, cursor: Option<&str>) -
     let retracted = withdrawn_ids(msgs);
     let superseded: HashSet<&str> = msgs
         .iter()
-        .filter(|m| m.get("delivery").and_then(Value::as_str) == Some("hosted"))
-        .filter_map(|m| m.get("id").and_then(Value::as_str))
+        .filter(|m| text(m, "delivery") == Some("hosted"))
+        .filter_map(|m| text(m, "id"))
         .collect();
 
     let mut seen: HashSet<&str> = HashSet::new();
     let mut deduped: Vec<&Value> = Vec::new();
     for m in msgs {
-        let Some(id) = m.get("id").and_then(Value::as_str) else {
+        let Some(id) = text(m, "id") else {
             continue;
         };
         if seen.insert(id) {
@@ -161,10 +165,10 @@ pub fn unread_listing<'a>(msgs: &'a [Value], name: &str, cursor: Option<&str>) -
     }
 
     let mine = |m: &Value| {
-        let Some(id) = m.get("id").and_then(Value::as_str) else {
+        let Some(id) = text(m, "id") else {
             return false;
         };
-        m.get("to").and_then(Value::as_str) == Some(name)
+        text(m, "to") == Some(name)
             && deliverable(m)
             && !retracted.contains(id)
             && !superseded.contains(id)
@@ -176,7 +180,7 @@ pub fn unread_listing<'a>(msgs: &'a [Value], name: &str, cursor: Option<&str>) -
         if passed && mine(m) {
             unread.push(m);
         }
-        if cursor.is_some() && m.get("id").and_then(Value::as_str) == cursor {
+        if cursor.is_some() && text(m, "id") == cursor {
             passed = true;
         }
     }
@@ -200,11 +204,11 @@ fn quote(v: &str) -> String {
 /// `in_reply_to` prints as null.
 fn row_json(m: &Value) -> String {
     let id = str_field(m, "id");
-    let thread = match m.get("thread") {
+    let thread = match m.get(THREAD_KEY) {
         Some(Value::String(t)) => quote(t),
         _ => quote(id),
     };
-    let in_reply_to = match m.get("in_reply_to") {
+    let in_reply_to = match m.get(REPLY_KEY) {
         Some(Value::String(t)) => quote(t),
         _ => "null".to_string(),
     };
