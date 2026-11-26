@@ -2371,12 +2371,7 @@ crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	.find(|w| w[0] == "
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	.find(|w| w[0] == "--sock")
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	.map(|w| PathBuf::from(w[1]));
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	.map(|w| w[1].to_string());
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	args.push(String::from_utf8_lossy(&buf[start..i]).into_owned());
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	for &pid in &pids[..filled as usize] {
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	for handle in &handles[..got as usize / mem::size_of::<u64>()] {
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	matches!(pair[0].as_str(), "--resume" | "-r" | "--session-id") && pair[1] == session_id
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	parse_procargs2(&buf[..size])
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	pids[..filled as usize]
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	return crate::agents_top::run(&args[1..]);
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	row["codex_home"] = json!(readiness.codex_home);
@@ -2388,22 +2383,8 @@ crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	row["live_version"]
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	row["on_restart"] = json!(format!(
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	row["sock"] = json!(sock.display().to_string());
 crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	row["survives"] = json!(format!(
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
-crates/fno-agent/src/eval/census.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
-crates/fno-agent/src/eval/census.rs	clippy::too_many_lines	fn process_table_libproc() -> (Vec<ProcRow>, usize) {
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	if unsafe {
 crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
 crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let filled = unsafe {
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let got = unsafe {
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let got_task = unsafe {
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut bsd: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut info: KinfoProcScratch = unsafe { mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut info: ProcBsdShortInfo = unsafe { std::mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut task: libc::proc_taskinfo = unsafe { mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let mut thread: libc::proc_threadinfo = unsafe { mem::zeroed() };
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let thread_written = unsafe {
-crates/fno-agent/src/eval/census.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {
 crates/fno-agent/src/eval/census_reads.rs	clippy::indexing_slicing	let arg = args[index].as_str();
 crates/fno-agent/src/eval/context_audit.rs	clippy::indexing_slicing	"bytes": records[*i].get("bytes"),
 crates/fno-agent/src/eval/context_audit.rs	clippy::indexing_slicing	"provenance": records[*i].get("provenance"),
@@ -3390,6 +3371,17 @@ crates/fno-agent/src/eval/otel_read.rs	clippy::indexing_slicing	assert_eq!(missi
 crates/fno-agent/src/eval/otel_read.rs	clippy::indexing_slicing	assert_ne!(missing["status"], "healthy");
 crates/fno-agent/src/eval/otlp_export.rs	clippy::let_underscore_must_use	let _ = std::fs::rename(&tmp, path);
 crates/fno-agent/src/eval/otlp_export.rs	clippy::let_underscore_must_use	let _ = writeln!(f, "{row}");
+crates/fno-agent/src/eval/proc_table.rs	clippy::disallowed_methods	.output()
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	args.push(String::from_utf8_lossy(&buf[start..i]).into_owned());
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	for &pid in &pids[..filled as usize] {
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	parse_procargs2(&buf[..size])
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
+crates/fno-agent/src/eval/proc_table.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
+crates/fno-agent/src/eval/proc_table.rs	clippy::too_many_lines	fn process_table_libproc() -> (Vec<ProcRow>, usize) {
+crates/fno-agent/src/eval/proc_table.rs	clippy::undocumented_unsafe_blocks	if unsafe {
+crates/fno-agent/src/eval/proc_table.rs	clippy::undocumented_unsafe_blocks	let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+crates/fno-agent/src/eval/proc_table.rs	clippy::undocumented_unsafe_blocks	let filled = unsafe {
 crates/fno-agent/src/eval/prove_it_verdicts.rs	clippy::indexing_slicing	assert_eq!(g[0]["verdict"], "PASS");
 crates/fno-agent/src/eval/prove_it_verdicts.rs	clippy::indexing_slicing	assert_eq!(row["open"], true, "routed-but-unruled stays open");
 crates/fno-agent/src/eval/prove_it_verdicts.rs	clippy::indexing_slicing	assert_eq!(row["ruled_by"], "d-1");
@@ -5954,10 +5946,8 @@ crates/fno-agent/src/runtime/claims.rs	clippy::indexing_slicing	out.push(HEX[(b 
 crates/fno-agent/src/runtime/claims.rs	clippy::let_underscore_must_use	let _ = CALLER_IDENTITY.set(held);
 crates/fno-agent/src/runtime/claims.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_dir_all(lock_dir);
 crates/fno-agent/src/runtime/claims.rs	clippy::let_underscore_must_use	let _ = std::fs::write(lock_dir.join("owner"), &token);
-crates/fno-agent/src/runtime/claims.rs	clippy::undocumented_unsafe_blocks	let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
 crates/fno-agent/src/runtime/claims.rs	clippy::undocumented_unsafe_blocks	let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
 crates/fno-agent/src/runtime/claims.rs	clippy::undocumented_unsafe_blocks	let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-crates/fno-agent/src/runtime/claims.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {
 crates/fno-agent/src/runtime/claims.rs	clippy::undocumented_unsafe_blocks	unsafe {
 crates/fno-agent/src/runtime/claims_classify.rs	clippy::too_many_lines	pub fn classify_with_basis_and_exclusivity(
 crates/fno-agent/src/runtime/claims_long_holds.rs	clippy::indexing_slicing	assert_eq!(lines[0], "single-flight holds over 12m:");
@@ -6959,9 +6949,6 @@ crates/fno-agent/src/runtime/gc.rs	clippy::let_underscore_must_use	let _ = emitt
 crates/fno-agent/src/runtime/gc.rs	clippy::let_underscore_must_use	let _ = emitter.emit("state_reap", &state_reap_event_payload(&summary));
 crates/fno-agent/src/runtime/gc.rs	clippy::let_underscore_must_use	let _ = journal.append(
 crates/fno-agent/src/runtime/gc.rs	clippy::too_many_lines	pub fn maybe_retirement_sweep(
-crates/fno-agent/src/runtime/gc.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
-crates/fno-agent/src/runtime/gc.rs	clippy::undocumented_unsafe_blocks	let alive = |p: u32| unsafe { libc::kill(p as libc::pid_t, 0) } == 0;
-crates/fno-agent/src/runtime/gc.rs	clippy::undocumented_unsafe_blocks	unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
 crates/fno-agent/src/runtime/gc.rs	clippy::unwrap_used	*failure_in_flight.lock().unwrap() = Some((
 crates/fno-agent/src/runtime/gc.rs	clippy::unwrap_used	*failure_in_flight.lock().unwrap() = Some((None, e.to_string()));
 crates/fno-agent/src/runtime/gc.rs	clippy::unwrap_used	let held = failure.lock().unwrap().take();
@@ -10498,6 +10485,25 @@ crates/fno-agent/src/spawn/sandbox_probe.rs	clippy::let_underscore_must_use	let 
 crates/fno-agent/src/spawn/sandbox_probe.rs	clippy::let_underscore_must_use	let _ = pipe.write_all(&payload);
 crates/fno-agent/src/spawn/sandbox_probe.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(path);
 crates/fno-agent/src/spawn/sandbox_probe.rs	clippy::too_many_lines	pub fn probe_codex_sandbox(
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	(argv[0].to_lowercase().contains("claude") && after_bin.first() == Some(&"daemon"))
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	assert_eq!(owned.rejected[0].owner.as_deref(), Some("owner-x"));
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	if harness == &families[0] && !same_session_id(seen, value) {
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	if let Ok(text) = std::str::from_utf8(&buf[start..i]) {
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let (_m, _h, value) = &unresolved[0];
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let after_bin = &argv[1..];
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().map_err(|_| ())?) as usize;
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let buf = &buf[..size];
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let exe = argv[0].to_lowercase();
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	let value = ids[0].to_string();
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	session_id: Some(thread_rows[0].to_string()),
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
+crates/fno-agent/src/spawn/self_identity.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
+crates/fno-agent/src/spawn/self_identity.rs	clippy::undocumented_unsafe_blocks	if unsafe {
+crates/fno-agent/src/spawn/self_identity.rs	clippy::undocumented_unsafe_blocks	let mut pid: u32 = unsafe { libc::getppid() } as u32;
+crates/fno-agent/src/spawn/self_identity.rs	clippy::undocumented_unsafe_blocks	let ppid = unsafe { libc::getppid() } as u32;
+crates/fno-agent/src/spawn/self_identity.rs	clippy::undocumented_unsafe_blocks	let ppid: u32 = unsafe { libc::getppid() } as u32;
+crates/fno-agent/src/spawn/self_identity.rs	clippy::undocumented_unsafe_blocks	unsafe { libc::getppid() } as u32,
+crates/fno-agent/src/spawn/self_identity.rs	clippy::unwrap_used	let single_family: String = distinct.iter().next().unwrap().to_string();
 crates/fno-agent/src/spawn/session_origin.rs	clippy::indexing_slicing	digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 crates/fno-agent/src/spawn/session_origin.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&path);
 crates/fno-agent/src/spawn/spawn_admission.rs	clippy::indexing_slicing	Some(cut) => (body[..cut].to_vec(), body[cut..].to_vec()),
@@ -10566,26 +10572,6 @@ crates/fno-agent/src/spawn/spawn_compose.rs	clippy::indexing_slicing	reason = ar
 crates/fno-agent/src/spawn/spawn_compose.rs	clippy::indexing_slicing	reason = argv[i]["--take-over=".len()..].to_string();
 crates/fno-agent/src/spawn/spawn_compose.rs	clippy::indexing_slicing	scan: crate::spawn_admission::scan_projection(&argv[1..]),
 crates/fno-agent/src/spawn/spawn_compose.rs	clippy::too_many_lines	fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	(argv[0].to_lowercase().contains("claude") && after_bin.first() == Some(&"daemon"))
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	assert_eq!(owned.rejected[0].owner.as_deref(), Some("owner-x"));
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	if harness == &families[0] && !same_session_id(seen, value) {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	if let Ok(text) = std::str::from_utf8(&buf[start..i]) {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let (_m, _h, value) = &unresolved[0];
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let after_bin = &argv[1..];
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().map_err(|_| ())?) as usize;
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let buf = &buf[..size];
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let exe = argv[0].to_lowercase();
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	let value = ids[0].to_string();
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	session_id: Some(thread_rows[0].to_string()),
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	&& walk_finds_no_harness_from_table(&ancestry_table(), &census::hidden_process, unsafe {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	Ok(pid) => match unsafe { libc::kill(pid as libc::pid_t, 0) } {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	if unsafe {
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	let mut pid: u32 = unsafe { libc::getppid() } as u32;
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	let ppid = unsafe { libc::getppid() } as u32;
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::undocumented_unsafe_blocks	let ppid: u32 = unsafe { libc::getppid() } as u32;
-crates/fno-agent/src/spawn/spawn_context.rs	clippy::unwrap_used	let single_family: String = distinct.iter().next().unwrap().to_string();
 crates/fno-agent/src/spawn/spawn_contract.rs	clippy::indexing_slicing	match parts[2].chars().next()?.to_ascii_lowercase() {
 crates/fno-agent/src/spawn/spawn_edge.rs	clippy::indexing_slicing	assert!(payload["spawned_by_session"].is_null());
 crates/fno-agent/src/spawn/spawn_edge.rs	clippy::indexing_slicing	assert_eq!(payload["lane"], "thread");
@@ -12025,6 +12011,35 @@ crates/fno/src/mux/server/link_drive.rs	clippy::indexing_slicing	let child = cor
 crates/fno/src/mux/server/link_drive.rs	clippy::indexing_slicing	let child = core.panes[&pane].pty.child_pid().unwrap();
 crates/fno/src/mux/server/tests/link_gate_tests.rs	clippy::indexing_slicing	let child = core.panes[&pane].pty.child_pid().unwrap();
 crates/fno/src/mux/server/tests/link_gate_tests.rs	clippy::indexing_slicing	let offset = |core: &Core| core.panes[&pane].vt.display_offset();
+crates/fno/src/proc_table.rs	clippy::disallowed_methods	.output()
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	args.push(String::from_utf8_lossy(&buf[start..i]).into_owned());
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	for &pid in &pids[..filled as usize] {
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().ok()?) as usize;
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	parse_procargs2(&buf[..size])
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
+crates/fno/src/proc_table.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
+crates/fno/src/proc_table.rs	clippy::too_many_lines	fn process_table_libproc() -> (Vec<ProcRow>, usize) {
+crates/fno/src/proc_table.rs	clippy::undocumented_unsafe_blocks	if unsafe {
+crates/fno/src/proc_table.rs	clippy::undocumented_unsafe_blocks	let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+crates/fno/src/proc_table.rs	clippy::undocumented_unsafe_blocks	let filled = unsafe {
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	(argv[0].to_lowercase().contains("claude") && after_bin.first() == Some(&"daemon"))
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	if harness == &families[0] && !same_session_id(seen, value) {
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	if let Ok(text) = std::str::from_utf8(&buf[start..i]) {
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let (_m, _h, value) = &unresolved[0];
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let after_bin = &argv[1..];
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let argc = i32::from_ne_bytes(buf[0..4].try_into().map_err(|_| ())?) as usize;
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let buf = &buf[..size];
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let exe = argv[0].to_lowercase();
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	let value = ids[0].to_string();
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	session_id: Some(thread_rows[0].to_string()),
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] != 0 {
+crates/fno/src/self_identity.rs	clippy::indexing_slicing	while i < buf.len() && buf[i] == 0 {
+crates/fno/src/self_identity.rs	clippy::undocumented_unsafe_blocks	if unsafe {
+crates/fno/src/self_identity.rs	clippy::undocumented_unsafe_blocks	let mut pid: u32 = unsafe { libc::getppid() } as u32;
+crates/fno/src/self_identity.rs	clippy::undocumented_unsafe_blocks	let ppid = unsafe { libc::getppid() } as u32;
+crates/fno/src/self_identity.rs	clippy::undocumented_unsafe_blocks	let ppid: u32 = unsafe { libc::getppid() } as u32;
+crates/fno/src/self_identity.rs	clippy::undocumented_unsafe_blocks	unsafe { libc::getppid() } as u32,
+crates/fno/src/self_identity.rs	clippy::unwrap_used	let single_family: String = distinct.iter().next().unwrap().to_string();
 crates/fno/src/sessions/agents_history.rs	clippy::disallowed_methods	.output()
 crates/fno/src/sessions/agents_history.rs	clippy::indexing_slicing	Some(args[2..].to_vec())
 crates/fno/src/sessions/agents_history.rs	clippy::indexing_slicing	if args.len() < 3 || args[0].to_str()? != "agents" || args[1].to_str()? != "history" {

@@ -237,7 +237,7 @@ INITIAL_PLAN_PATH="${TARGET_PLAN_PATH:-}"
 unset TARGET_INPUT TARGET_PLAN_PATH
 
 # ── Provider detection ───────────────────────────────────────────────
-# Mirrors HARNESS_SESSION_MARKERS in crates/fno-agent/src/runtime/claims.rs: session
+# Mirrors HARNESS_SESSION_MARKERS in crates/fno-agent/src/runtime/identity_markers.rs: session
 # markers first (non-blank-after-strip, so the *[![:space:]]* glob matches its
 # .strip()), then bare-non-empty plugin-root hints, then the claude default.
 detect_provider() {

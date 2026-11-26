@@ -7,19 +7,9 @@
 //! `fno-agent report --kind join` once, bounded and fail-open. Hook commands
 //! carry `FNO_HOOK_CONTEXT=1`, so a hook's own fno call never joins.
 
+use crate::identity_markers::HARNESS_SESSION_MARKERS;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-/// Highest precedence first; mirrors `HARNESS_SESSION_MARKERS` in
-/// crates/fno-agent/src/runtime/claims.rs.
-const MARKERS: &[(&str, &str)] = &[
-    ("CODEX_THREAD_ID", "codex"),
-    ("CLAUDE_CODE_SESSION_ID", "claude"),
-    ("CODEX_SESSION_ID", "codex"),
-    ("GEMINI_SESSION_ID", "gemini"),
-    ("OPENCODE_SESSION_ID", "opencode"),
-    ("PI_SESSION_ID", "pi"),
-];
 
 const JOIN_BOUND: Duration = Duration::from_secs(2);
 
@@ -36,7 +26,7 @@ pub fn join_candidate(env: &dyn Fn(&str) -> Option<String>) -> Option<(&'static 
             return None;
         }
     }
-    let (harness, sid) = MARKERS
+    let (harness, sid) = HARNESS_SESSION_MARKERS
         .iter()
         .find_map(|(key, harness)| set(key).map(|sid| (*harness, sid)))?;
     let segment = !sid.contains(['/', '\\', '\0']) && sid != "." && sid != ".." && sid.len() <= 128;
@@ -113,7 +103,7 @@ mod tests {
         let split = env_of(&[("CODEX_THREAD_ID", "a"), ("CODEX_SESSION_ID", "b")]);
         assert_eq!(join_candidate(&split), None);
         assert_eq!(join_candidate(&env_of(&[])), None);
-        // The marker table mirrors claims.rs HARNESS_SESSION_MARKERS, pi included.
+        // The marker table is the copied HARNESS_SESSION_MARKERS, pi included.
         let pi = env_of(&[("PI_SESSION_ID", "pi-1")]);
         assert_eq!(join_candidate(&pi), Some(("pi", "pi-1".to_string())));
         let walk = env_of(&[("CLAUDE_CODE_SESSION_ID", "../x")]);

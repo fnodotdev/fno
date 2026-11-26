@@ -52,6 +52,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 PROVIDER_RS = "crates/fno-agent/src/spawn/provider.rs"
 CLAIMS_RS = "crates/fno-agent/src/runtime/claims.rs"
+IDENTITY_MARKERS_RS = "crates/fno-agent/src/runtime/identity_markers.rs"
 SETUP_GLOB = "SETUP-*.md"
 
 ROSTER_CONST_RE = re.compile(
@@ -149,17 +150,17 @@ def extract_provider_arms(text: str) -> tuple[str, ...]:
 
 
 def extract_marker_tables(text: str) -> dict[str, tuple[str, ...]]:
-    """First elements of each claims.rs const pair table."""
+    """First elements of each const pair table in claims.rs and identity_markers.rs."""
     out: dict[str, tuple[str, ...]] = {}
     for var in MARKER_VARS:
         match = re.search(
             rf"const {var}: &\[\(&str, &str\)\] =\s*&\[(.*?)\];", text, re.DOTALL
         )
         if not match:
-            raise GateError(f"{CLAIMS_RS}: no const {var} table found")
+            raise GateError(f"{CLAIMS_RS} + {IDENTITY_MARKERS_RS}: no const {var} table found")
         pairs = re.findall(r'\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*\)', match.group(1))
         if not pairs:
-            raise GateError(f"{CLAIMS_RS}: const {var} holds no pairs")
+            raise GateError(f"{CLAIMS_RS} + {IDENTITY_MARKERS_RS}: const {var} holds no pairs")
         out[var] = tuple(pairs)
     return out
 
@@ -171,7 +172,9 @@ def collect(root: Path) -> dict[str, Any]:
         "roster": extract_roster(provider_text),
         "setup docs": extract_setup_harnesses(root),
         "provider dispatch": extract_provider_arms(provider_text),
-        "markers": extract_marker_tables(_read(root, CLAIMS_RS)),
+        "markers": extract_marker_tables(
+            _read(root, IDENTITY_MARKERS_RS) + _read(root, CLAIMS_RS)
+        ),
     }
 
 
@@ -292,15 +295,15 @@ def _claims_rs(
     markers: tuple[str, ...],
     legacy: tuple[str, ...],
     extra: tuple[str, ...],
-) -> str:
+) -> tuple[str, str]:
     def table(var: str, values: tuple[str, ...]) -> str:
         rows = "".join(f'    ("{v}", "x"),\n' for v in values)
         return f"pub(crate) const {var}: &[(&str, &str)] = &[\n{rows}];\n"
 
     return (
         table("HARNESS_SESSION_MARKERS", markers)
-        + table("LEGACY_HARNESS_SESSION_MARKERS", legacy)
-        + table("AMBIENT_IDENTITY_FAMILIES", extra)
+        + table("LEGACY_HARNESS_SESSION_MARKERS", legacy),
+        table("AMBIENT_IDENTITY_FAMILIES", extra),
     )
 
 
@@ -317,7 +320,7 @@ def _write_tree(
     skip_roster_const: bool = False,
 ) -> None:
     (root / "docs").mkdir(parents=True, exist_ok=True)
-    for rel in (PROVIDER_RS, CLAIMS_RS):
+    for rel in (PROVIDER_RS, CLAIMS_RS, IDENTITY_MARKERS_RS):
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / PROVIDER_RS).write_text(
         provider_text
@@ -327,9 +330,9 @@ def _write_tree(
         ),
         encoding="utf-8",
     )
-    (root / CLAIMS_RS).write_text(
-        _claims_rs(markers, legacy, extra), encoding="utf-8"
-    )
+    marker_text, claims_text = _claims_rs(markers, legacy, extra)
+    (root / IDENTITY_MARKERS_RS).write_text(marker_text, encoding="utf-8")
+    (root / CLAIMS_RS).write_text(claims_text, encoding="utf-8")
     for name in setup_docs:
         # Verbatim, not uppercased: a setup doc named SETUP-.md (empty harness
         # name) is itself a fixture, and uppercasing would hide it from the glob.

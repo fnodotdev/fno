@@ -84,10 +84,13 @@ pub mod eval;
 pub mod gate;
 pub mod runtime;
 
-// The copied pid module must resolve `crate::pid` in BOTH crates (the copy
-// contract forbids `crate::` paths in the body), so the runtime module is
-// re-exported at the lib root under the name the copy carries in fno.
+// A copied module must resolve its `crate::` paths in BOTH crates (pid,
+// proc_table and the identity modules name each other), so each is
+// re-exported at the lib root under the name its copy carries in fno.
+pub use eval::proc_table;
+pub use runtime::identity_markers;
 pub use runtime::pid;
+pub use spawn::self_identity;
 
 // The flat `crate::<module>` paths stay valid: each module moved into a
 // group directory is re-exported here under its old name.
@@ -332,9 +335,9 @@ impl AgentStatus {
     /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
     /// gate. The words are the variants' serde names (`Self::as_str`);
     /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
-    /// test pins const, names and predicate together.
-    pub const LIVE_STATUSES: &'static [&'static str] =
-        &["spawning", "ready", "idle", "busy", "live", "restarting"];
+    /// test pins const, names and predicate together. The list itself lives
+    /// in `identity_markers`, which fno compiles a copy of.
+    pub const LIVE_STATUSES: &'static [&'static str] = identity_markers::LIVE_STATUSES;
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions

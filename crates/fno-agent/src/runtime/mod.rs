@@ -108,6 +108,7 @@ pub mod heal_pid;
 pub mod heal_sweep;
 pub mod hook;
 pub mod identity;
+pub mod identity_markers;
 pub mod inbox_peers;
 pub mod install_drift;
 pub mod interrupt_classify;

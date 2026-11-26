@@ -21,6 +21,8 @@ pub mod footnote_transcript;
 pub mod git_paths;
 pub mod glob;
 pub mod harness;
+#[cfg(feature = "app")]
+pub mod identity_markers;
 pub mod keeper_wire;
 pub mod legacy_env;
 #[cfg(feature = "app")]
@@ -30,6 +32,8 @@ pub mod live_store_fence;
 #[cfg(feature = "app")]
 pub mod notify_dispatch;
 pub mod pid;
+#[cfg(feature = "app")]
+pub mod proc_table;
 pub mod product_boundary;
 pub mod provider_key;
 #[cfg(feature = "app")]
@@ -38,6 +42,8 @@ pub mod registry_read;
 pub mod role_migration;
 pub mod rules;
 pub mod sandbox_door;
+#[cfg(feature = "app")]
+pub mod self_identity;
 #[cfg(feature = "app")]
 pub mod store_conn;
 #[cfg(all(test, feature = "app"))]

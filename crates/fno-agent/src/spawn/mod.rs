@@ -99,6 +99,7 @@ pub mod route_settings;
 pub mod route_slot;
 pub mod sandbox_launch;
 pub mod sandbox_probe;
+pub mod self_identity;
 pub(crate) mod session_origin;
 pub mod session_role;
 pub mod spawn_admission;
