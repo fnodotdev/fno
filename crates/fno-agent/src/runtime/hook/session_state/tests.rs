@@ -45,15 +45,30 @@ fn ev(event: &str, extra: serde_json::Value) -> adapter::HookEvent {
 
 // --- the state decision (the blocked/report side) ---
 
-/// The row map is the data: claude wires its four events onto Notification;
-/// codex wires three plus PermissionRequest as its blocked producer, with
-/// the screen backstop kept for `request_user_input`; a goal-leg PreToolUse decides
+/// The row map is the data: claude wires its four events with
+/// PermissionRequest as its blocked producer, and its Notification still
+/// reports blocked for the sandboxed network prompt, which fires no
+/// PermissionRequest. Codex wires three plus PermissionRequest, with the
+/// screen backstop kept for `request_user_input`; a goal-leg PreToolUse decides
 /// working (a continuation is a user-role row, so UserPromptSubmit never
 /// fires - the tool calls are the only signal).
 #[test]
 fn the_row_map_wires_claude_and_codex() {
     let claude = claude_job();
-    assert_eq!(claude.blocked, "Notification");
+    assert_eq!(claude.blocked, "PermissionRequest");
+    assert!(claude.screen_backstop);
+    for event in ["PermissionRequest", "Notification"] {
+        let parked = decide(
+            &claude,
+            &ev(event, json!({"tool_name": "Bash", "message": "run rm"})),
+        )
+        .unwrap();
+        assert_eq!(
+            (parked.state, parked.reason.as_str()),
+            ("blocked", "run rm"),
+            "{event}"
+        );
+    }
     for (event, word) in [
         ("UserPromptSubmit", "working"),
         ("PreToolUse", "working"),

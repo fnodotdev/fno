@@ -21,7 +21,8 @@
 //!
 //! The per-harness event map is data: `[harness.<h>.hooks.session_state]`
 //! in harness_capabilities.toml names each event's state word and the
-//! harness's blocked event ("none" = no permission-prompt producer). The
+//! harness's blocked event ("none" = no permission-prompt producer). A
+//! second blocked producer carries the word `blocked` in the event map. The
 //! adapter layer turns the raw payload into one [`crate::hook::adapter::HookEvent`];
 //! this module owns what it means.
 
@@ -59,6 +60,13 @@ pub fn run(args: &[String]) -> i32 {
     }
     let payload: serde_json::Value =
         serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+    // The relocation allow answers a claude EnterWorktree prompt and reports
+    // it only when the prompt stays up, so an allowed move never flashes the
+    // row blocked.
+    let tool = payload.get("tool_name").and_then(serde_json::Value::as_str);
+    if harness == "claude" && event == "PermissionRequest" && tool == Some("EnterWorktree") {
+        return 0;
+    }
     process(&harness, &event, &payload);
     0
 }
@@ -95,14 +103,15 @@ pub(crate) struct Decision {
 /// row's session-state wiring. `None` = this event is not wired for the
 /// harness (unknown event, or the row declares no session-state producer).
 pub(crate) fn decide(wiring: &HookWiring, ev: &HookEvent) -> Option<Decision> {
-    if wiring.blocked == ev.event {
+    let word = wiring.events.get(&ev.event).map(String::as_str);
+    if wiring.blocked == ev.event || word == Some("blocked") {
         return Some(Decision {
             state: "blocked",
             reason: ev.message.clone(),
             posture: ev.posture.clone(),
         });
     }
-    match wiring.events.get(&ev.event).map(String::as_str) {
+    match word {
         Some("working") => Some(reclassify(ev)),
         Some("done") => Some(Decision {
             state: "done",
