@@ -425,11 +425,11 @@ pub fn recipient_transcript_path(env: &SentEnv, harness: &str, session: &str) ->
 /// absence).
 fn mail_ids_in_transcript(env: &SentEnv, harness: &str, session: &str) -> Option<HashSet<String>> {
     let path = recipient_transcript_path(env, harness, session)?;
-    let text = std::fs::read_to_string(path).ok()?;
+    let raw = std::fs::read_to_string(path).ok()?;
     // The transcript is a JSONL carrier: un-escape the embedded text before
     // the id scan.
     Some(
-        crate::mail_ids::ids_in_text_with(&text.replace("\\\"", "\""), env.hash)
+        crate::mail_ids::ids_in_text_with(&raw.replace("\\\"", "\""), env.hash)
             .into_iter()
             .collect(),
     )
@@ -471,7 +471,7 @@ fn codex_transcript_path(base: &Path, session: &str) -> Option<PathBuf> {
 fn read_cursor(bus: &Path, name: &str) -> Option<String> {
     let path = bus.join("cursors").join(format!("{name}.json"));
     let label = path.file_name().and_then(|n| n.to_str()).unwrap_or(name);
-    let text = match std::fs::read_to_string(&path) {
+    let raw = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {
@@ -482,7 +482,7 @@ fn read_cursor(bus: &Path, name: &str) -> Option<String> {
             return None;
         }
     };
-    let Ok(v) = serde_json::from_str::<Value>(&text) else {
+    let Ok(v) = serde_json::from_str::<Value>(&raw) else {
         eprintln!(
             "bus cursor: ignoring corrupt cursor {label} (JSONDecodeError); rescanning retained segments"
         );

@@ -20,6 +20,8 @@ This page answers four questions. Which cross-tree guards mark a real second imp
 
 **The bus read rules.** Single owner, generated artifact. `crates/fno-agent/src/runtime/bus_read.rs` owns which bus rows are mail (`deliverable`), which are retracted (`withdrawn_ids`), how a cursor file reads, and the cursor-bounded unread walk. fno-agent's drain and its `mail unread --mine` leaf use it. The fno front door answers `mail unread` in process from the generated copy at `crates/fno/src/bus_read.rs`. `generated-artifacts.tsv` records the copy. The bus directory comes from `config_doctor::bus_dir`, the one resolver fno has for the mail tree.
 
+**The sent view and the mail id scan.** Single owner, generated artifacts. `crates/fno-agent/src/runtime/mail_sent_core.rs` owns the `mail sent` listing, the unclaimed predicate and the landed tri-state. `crates/fno-agent/src/runtime/mail_ids.rs` owns the scan for the ids a delivered header or legacy tag carries, with the header-token lookup passed in. The fno front door answers `mail sent` in process from the generated copies at `crates/fno/src/mail_sent_core.rs` and `crates/fno/src/mail_ids.rs`. `generated-artifacts.tsv` records both. Each crate supplies its own handle, config ttls and numbers-store lookup. The front door records a proven landing as a bus row only: the chats delivery mirror needs the chats store, which only fno-agent owns.
+
 **The tick timestamp parser.** Single owner. `event_store.rs` owns `parse_rfc3339_ms`. The indexed writer and incremental tick fold share it, so both retain the same millisecond maxima.
 
 ## The discriminator
