@@ -48,10 +48,16 @@ if [[ ! -x "${RUNNER_DIR}/run.sh" ]]; then
   exit 1
 fi
 
-if [[ "${DRY_RUN}" -eq 0 ]] && pgrep -f "Runner.Listener" >/dev/null 2>&1; then
-  echo "a Runner.Listener is already running. Stop it before the daemon takes over:" >&2
-  pgrep -fl "Runner.Listener" >&2 || true
-  exit 1
+# A re-run finds this daemon's own Listener, so count it as expected, not as a rival.
+if [[ "${DRY_RUN}" -eq 0 ]]; then
+  EXPECTED=0
+  if launchctl print "system/${LABEL}" >/dev/null 2>&1; then EXPECTED=1; fi
+  LISTENERS="$(pgrep -f "Runner.Listener" | wc -l | tr -d ' ')"
+  if [[ "${LISTENERS}" -gt "${EXPECTED}" ]]; then
+    echo "a Runner.Listener outside this daemon is running. Stop it before the daemon takes over:" >&2
+    pgrep -fl "Runner.Listener" >&2 || true
+    exit 1
+  fi
 fi
 
 RENDERED="$(mktemp "${TMPDIR:-/tmp}/${LABEL}.XXXXXX")"
