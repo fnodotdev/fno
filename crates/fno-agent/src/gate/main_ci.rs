@@ -293,7 +293,7 @@ fn main_ci_token_from_pages<'a>(
         }
         // The promoted sha is the previous head. Name the head still in
         // flight beside it, or the line reads as main idle on an old commit.
-        fields.insert("head".into(), json!(head_sha));
+        fields.insert("in_flight".into(), json!(head_sha));
     }
     // A pending verdict with nothing promoted names the newest settled run:
     // once a red is resolved by a newer pass the line would read bare
@@ -380,21 +380,19 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
                     )
                 }
                 None => match o.get("workflow") {
-                    Some(_) => match o.get("head").and_then(Value::as_str) {
-                        Some(head) => format!(
-                            "{} ({} at {}; head {} in flight)",
-                            field("verdict"),
-                            field("workflow"),
-                            field("sha"),
-                            head.chars().take(7).collect::<String>()
-                        ),
-                        None => format!(
-                            "{} ({} at {})",
-                            field("verdict"),
-                            field("workflow"),
-                            field("sha")
-                        ),
-                    },
+                    Some(_) if o.contains_key("in_flight") => format!(
+                        "{} ({} at {}; head {} in flight)",
+                        field("verdict"),
+                        field("workflow"),
+                        field("sha"),
+                        field("in_flight").chars().take(7).collect::<String>()
+                    ),
+                    Some(_) => format!(
+                        "{} ({} at {})",
+                        field("verdict"),
+                        field("workflow"),
+                        field("sha")
+                    ),
                     None => {
                         // A green line names its evidence set, so the check-in
                         // never offers a bare green word with nothing behind it.
@@ -989,7 +987,7 @@ mod tests {
     fn a_promoted_pending_line_names_the_head_in_flight() {
         let promoted = serde_json::json!({
             "verdict": "pending", "workflow": "cli-ci", "sha": "a3a0f06c2c",
-            "head": "6782f71106",
+            "in_flight": "6782f71106",
         });
         assert_eq!(
             main_ci_render(Some(&promoted)),
@@ -1210,7 +1208,7 @@ mod tests {
             token,
             serde_json::json!({
                 "verdict": "pending", "workflow": "cli-ci", "sha": "40bde08",
-                "head": "6889efa",
+                "in_flight": "6889efa",
             })
         );
         assert_eq!(main_ci_red_run(&token), None);
@@ -1253,7 +1251,7 @@ mod tests {
             token_at("head", &at_sha, &on_main),
             serde_json::json!({
                 "verdict": "pending", "workflow": "cli-ci", "sha": "prev",
-                "head": "head",
+                "in_flight": "head",
                 "stale": [{
                     "workflow": "release", "sha": "old1",
                     "created_at": "2026-09-28T08:00:00Z",
