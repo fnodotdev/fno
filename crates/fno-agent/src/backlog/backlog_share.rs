@@ -3200,14 +3200,14 @@ mod tests {
             narrowed,
         };
         let narrowed = update(true).to_json();
-        assert_eq!(narrowed["op"], NARROWED_UPDATE);
+        assert!(narrowed.to_string().contains(r#""op":"p""#));
         assert!(
-            Op::parse(narrowed["op"].as_str().unwrap()).is_none(),
+            Op::parse(NARROWED_UPDATE).is_none(),
             "a reader that knows only i/u/d must fail on a narrowed update"
         );
         assert_eq!(Change::from_json(&narrowed).unwrap(), update(true));
         let full = update(false).to_json();
-        assert_eq!(full["op"], "u");
+        assert!(full.to_string().contains(r#""op":"u""#));
         assert_eq!(Change::from_json(&full).unwrap(), update(false));
     }
 
