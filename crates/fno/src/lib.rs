@@ -10,6 +10,8 @@
 
 #[cfg(feature = "app")]
 pub mod app_control;
+#[cfg(feature = "app")]
+pub mod bus_read;
 pub mod chokepoint;
 #[cfg(feature = "app")]
 pub mod cli_args;
@@ -29,6 +31,8 @@ pub mod legacy_env;
 mod lenient_de;
 #[cfg(feature = "app")]
 pub mod live_store_fence;
+#[cfg(feature = "app")]
+pub mod mail_unread;
 #[cfg(feature = "app")]
 pub mod notify_dispatch;
 pub mod pid;
