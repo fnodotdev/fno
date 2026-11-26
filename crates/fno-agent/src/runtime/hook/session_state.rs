@@ -63,8 +63,10 @@ pub fn run(args: &[String]) -> i32 {
     // The relocation allow answers a claude EnterWorktree prompt and reports
     // it only when the prompt stays up, so an allowed move never flashes the
     // row blocked.
-    let tool = payload.get("tool_name").and_then(serde_json::Value::as_str);
-    if harness == "claude" && event == "PermissionRequest" && tool == Some("EnterWorktree") {
+    if harness == "claude"
+        && event == "PermissionRequest"
+        && adapter::normalize(&harness, &event, &payload).tool == "EnterWorktree"
+    {
         return 0;
     }
     process(&harness, &event, &payload);

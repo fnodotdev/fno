@@ -1714,7 +1714,7 @@ fn hook_chain_baseline_per_event() {
     let _guard = BENCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let b = bench();
     let hooks = fs::read_to_string(b.root.join("hooks/hooks.json")).unwrap();
-    let manifest: Value = serde_json::from_str(&hooks).unwrap();
+    let manifest: HooksFile = serde_json::from_str(&hooks).unwrap();
     let file = b.repo.join("notes.md");
     write(&file, "a\n");
     let path = file.display().to_string();
@@ -1727,27 +1727,30 @@ fn hook_chain_baseline_per_event() {
         ),
         ("Write", json!({"file_path": path, "content": "b\n"})),
     ];
-    let mut chains: Vec<(String, &str, Value)> = Vec::new();
+    let mut chains: Vec<(String, &str, &str, Value)> = Vec::new();
     for (tool, input) in &inputs {
         for event in ["PreToolUse", "PostToolUse"] {
             let mut payload = guard_payload(VISITOR_SID, tool, input.clone());
-            payload["hook_event_name"] = json!(event);
-            if event == "PostToolUse" {
-                payload["tool_response"] = json!({});
+            if let Some(fields) = payload.as_object_mut() {
+                fields.insert("hook_event_name".into(), json!(event));
+                if event == "PostToolUse" {
+                    fields.insert("tool_response".into(), json!({}));
+                }
             }
-            chains.push((format!("{event}_{tool}"), event, payload));
+            chains.push((format!("{event}_{tool}"), event, *tool, payload));
         }
     }
     let mut prompt = stop_payload(VISITOR_SID, None);
-    prompt["hook_event_name"] = json!("UserPromptSubmit");
-    prompt["prompt"] = json!("hello");
-    chains.push(("UserPromptSubmit".into(), "UserPromptSubmit", prompt));
+    if let Some(fields) = prompt.as_object_mut() {
+        fields.insert("hook_event_name".into(), json!("UserPromptSubmit"));
+        fields.insert("prompt".into(), json!("hello"));
+    }
+    chains.push(("UserPromptSubmit".into(), "UserPromptSubmit", "", prompt));
     let stop = stop_payload(VISITOR_SID, Some("Work continues."));
-    chains.push(("Stop".into(), "Stop", stop));
+    chains.push(("Stop".into(), "Stop", "", stop));
 
     let n = sample_count().min(20);
-    for (name, event, payload) in &chains {
-        let tool = payload["tool_name"].as_str().unwrap_or("");
+    for (name, event, tool, payload) in &chains {
         let legs = chain_commands(&manifest, event, tool);
         assert!(
             !legs.is_empty(),
@@ -1794,20 +1797,38 @@ fn hook_chain_baseline_per_event() {
 /// Every command the event's matching hooks.json groups register, in order.
 /// A matcher there is an alternation of exact tool names; an empty or absent
 /// one matches every call.
-fn chain_commands(manifest: &Value, event: &str, tool: &str) -> Vec<String> {
-    let groups = manifest["hooks"][event]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+fn chain_commands(manifest: &HooksFile, event: &str, tool: &str) -> Vec<String> {
+    let Some(groups) = manifest.hooks.get(event) else {
+        return Vec::new();
+    };
     groups
         .iter()
         .filter(|g| {
-            let m = g["matcher"].as_str().unwrap_or("");
+            let m = g.matcher.as_str();
             m.is_empty() || m == "*" || m.split('|').any(|t| t == tool)
         })
-        .flat_map(|g| g["hooks"].as_array().cloned().unwrap_or_default())
-        .filter_map(|h| h["command"].as_str().map(str::to_string))
+        .flat_map(|g| g.hooks.iter().map(|h| h.command.clone()))
+        .filter(|command| !command.is_empty())
         .collect()
+}
+
+/// The slice of hooks/hooks.json the chain fixture reads.
+#[derive(serde::Deserialize)]
+struct HooksFile {
+    hooks: BTreeMap<String, Vec<HookGroup>>,
+}
+
+#[derive(serde::Deserialize)]
+struct HookGroup {
+    #[serde(default)]
+    matcher: String,
+    hooks: Vec<HookCommand>,
+}
+
+#[derive(serde::Deserialize)]
+struct HookCommand {
+    #[serde(default)]
+    command: String,
 }
 
 /// AC12-HP: the per-turn hot path stays small. Ceilings freeze this branch's
