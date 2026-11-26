@@ -64,14 +64,20 @@ pub struct HeldRelease {
 /// digit-and-whitespace shape matches group into one backticked fold line
 /// (`` `name x26, newest 119m` ``) trailing the whole-rendered unique mail.
 pub fn render_held_release(release: &HeldRelease) -> String {
-    render_held_release_at(release, chrono::Local::now().fixed_offset())
+    render_held_release_at(
+        release,
+        chrono::Local::now().fixed_offset(),
+        crate::numbers::mail_token,
+    )
 }
 
 /// [`render_held_release`] against a fixed clock, so the fold line's
-/// `newest` age is testable.
+/// `newest` age is testable, with the id token under the caller's control:
+/// delivery passes the minting number token, a test passes identity.
 pub fn render_held_release_at(
     release: &HeldRelease,
     now: chrono::DateTime<chrono::FixedOffset>,
+    token: impl Fn(&str) -> String,
 ) -> String {
     let mut messages: Vec<&HeldMessage> = release.messages.iter().collect();
     messages.sort_by(|left, right| {
@@ -164,7 +170,7 @@ pub fn render_held_release_at(
         lines.push(render_header(
             form,
             &item.bare,
-            &message.id,
+            &token(&message.id),
             third.as_deref(),
         ));
         lines.push(item.body.clone());
@@ -318,7 +324,7 @@ fn header_sender_for<'a>(header: &'a str, id: &str) -> Option<&'a str> {
     let (inner, _) = split_header_span(header.trim())?;
     let (sender, header_id, _) = header_fields(inner)?;
     let bare = sender.strip_prefix('@').unwrap_or(sender);
-    (header_id == id && !bare.is_empty()).then_some(bare)
+    (crate::numbers::mail_hash(header_id) == id && !bare.is_empty()).then_some(bare)
 }
 
 fn header_summary(header: &str) -> Option<String> {
@@ -493,10 +499,8 @@ pub fn is_header_line(line: &str) -> bool {
     if bare.is_empty() || bare.chars().any(|c| c.is_whitespace()) {
         return false;
     }
-    let id_ok = match id.strip_prefix("fmail-") {
-        Some(hex) => hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit()),
-        None => id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty()),
-    };
+    let id_ok = fno_mail::address::is_mail_id(id)
+        || id.strip_prefix("msg-").is_some_and(|rest| !rest.is_empty());
     id_ok && subject.map_or(true, |s| !s.trim().is_empty())
 }
 
@@ -684,7 +688,7 @@ pub fn delivered_msg_id(text: &str) -> Option<String> {
     }
     let (inner, _) = split_header_span(line.trim())?;
     let (_, id, _) = header_fields(inner)?;
-    Some(id.to_string())
+    Some(crate::numbers::mail_hash(id))
 }
 
 /// The header's sender when the store backs it: the first line must parse as
@@ -697,7 +701,7 @@ pub fn verified_sender(text: &str, lookup: impl Fn(&str) -> Option<String>) -> O
     let (inner, _) = split_header_span(line.trim())?;
     let (sender, id, _) = header_fields(inner)?;
     let bare = sender.strip_prefix('@').unwrap_or(sender);
-    let stored = lookup(id)?;
+    let stored = lookup(&crate::numbers::mail_hash(id))?;
     (stored.strip_prefix('@').unwrap_or(&stored) == bare).then(|| bare.to_string())
 }
 
@@ -801,7 +805,7 @@ pub fn delivered_headers(text: &str) -> Vec<DeliveredHeader> {
                 let tail = tail.strip_prefix('⏎').unwrap_or(tail).trim();
                 out.push(DeliveredHeader {
                     sender: sender.trim_start_matches('@').to_string(),
-                    id: id.to_string(),
+                    id: crate::numbers::mail_hash(id),
                     body: tail.to_string(),
                     line_start: at == 0,
                 });
@@ -974,8 +978,27 @@ pub fn relay_parse_line(line: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
 
+    /// The number-form id cases; the one header-shape test below runs them.
+    fn number_token_cases() {
+        use fno_mail::address::{is_mail_hash, is_mail_id, is_mail_number};
+        assert!(is_mail_hash("fmail-0badc0de1234") && !is_mail_number("fmail-0badc0de1234"));
+        assert!(is_mail_number("fmail-87") && !is_mail_hash("fmail-87"));
+        assert!(is_mail_id("fmail-87") && is_mail_id("fmail-123456789012"));
+        assert!(!is_mail_id("fmail-") && !is_mail_id("fmail-8x") && !is_mail_id("msg-87"));
+        assert!(is_header_line("`@candor \u{b7} fmail-87`"));
+        assert!(is_header_line("`@candor \u{b7} fmail-87 \u{b7} hi`"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-12345678`"));
+        assert!(!is_header_line("`@candor \u{b7} fmail-8x`"));
+        assert_eq!(
+            delivered_msg_id("`@candor \u{b7} fmail-9999999`\nbody").as_deref(),
+            Some("fmail-9999999"),
+            "an unnumbered number passes through as typed"
+        );
+    }
+
     #[test]
     fn summaries_headers_classification_and_ids_hold_the_one_shape() {
+        number_token_cases();
         // Summary: first sentence, 12-word cap, empty, sentenceless, fenced.
         assert_eq!(summary_of("Fix the gate. Then ship."), "Fix the gate.");
         assert_eq!(
@@ -1335,7 +1358,7 @@ mod tests {
                 unique,
             ],
         };
-        let out = render_held_release_at(&release, now);
+        let out = render_held_release_at(&release, now, str::to_string);
         assert!(out.starts_with("4 held messages"), "{out}");
         let fold = "`fno-lead-wake x3, newest 112m`";
         assert!(out.contains(fold), "{out}");
@@ -1380,7 +1403,7 @@ mod tests {
                 },
             ],
         };
-        let twin_out = render_held_release_at(&twin, now);
+        let twin_out = render_held_release_at(&twin, now, str::to_string);
         assert!(!twin_out.contains("x2"), "{twin_out}");
         assert!(is_held_release_turn(&twin_out));
     }

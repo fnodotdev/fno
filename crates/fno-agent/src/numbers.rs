@@ -52,6 +52,9 @@ SELECT n FROM c ORDER BY n DESC LIMIT 1), ?2, ?3, ?4, strftime('%s','now')";
 
 const LOCAL_STORE: &str = "local";
 pub(crate) const NODE_KIND: &str = "n:";
+/// The kind of a delivered-mail number: `fmail-87` names the row keyed by the
+/// message's hash id. Decision labels never list it ([`labels_in`]).
+pub(crate) const MAIL_KIND: &str = "m";
 const TICK: Duration = Duration::from_secs(60);
 const MINT_BATCH: usize = 200;
 
@@ -182,6 +185,9 @@ fn node_kind(id: &str) -> Option<String> {
 /// The kind and key of every id to number: decisions and questions by hash
 /// shape, nodes by the `n:` marker the caller put on them.
 fn kind_and_key(key: &str) -> Option<(String, &str)> {
+    if fno_mail::address::is_mail_hash(key) {
+        return Some((MAIL_KIND.to_string(), key));
+    }
     match key.strip_prefix(NODE_KIND) {
         Some(id) => Some((node_kind(id)?, id)),
         None => Some((kind_of(key)?.to_string(), key)),
@@ -423,9 +429,10 @@ pub(crate) fn display_in(conn: &Connection, id: &str, current: &str) -> String {
 /// store's row wins over another store's row for one key.
 pub fn labels_in(conn: &Connection, current: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    let Ok(mut stmt) = conn
-        .prepare("SELECT key, kind, num, store FROM fno_numbers ORDER BY store = ?1, created_at")
-    else {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT key, kind, num, store FROM fno_numbers WHERE kind != 'm' \
+             ORDER BY store = ?1, created_at",
+    ) else {
         return out;
     };
     let rows = stmt.query_map(params![current], |row| {
@@ -669,6 +676,90 @@ pub fn display(id: &str) -> String {
         Some(conn) => display_in(conn, id, &current_store()),
         None => id.to_string(),
     })
+}
+
+/// The number a mail hash id holds in an open store: this store's row first,
+/// then the newest row another store holds.
+pub(crate) fn mail_number_in(conn: &Connection, hash: &str, current: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT num FROM fno_numbers WHERE kind = 'm' AND key = ?1 \
+         ORDER BY store = ?2 DESC, created_at DESC LIMIT 1",
+        params![hash, current],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// The mail hash id a number names, over an open store: this store's row
+/// first, then the newest row another store holds.
+pub(crate) fn mail_hash_in(conn: &Connection, number: i64, current: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT key FROM fno_numbers WHERE kind = 'm' AND num = ?1 \
+         ORDER BY store = ?2 DESC, created_at DESC LIMIT 1",
+        params![number, current],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// The header token of a delivered mail: `fmail-87` once the store numbers
+/// the hash id (minted on first read), the hash itself while no store can.
+/// Any id that is not a mail hash passes through.
+pub fn mail_token(id: &str) -> String {
+    if !fno_mail::address::is_mail_hash(id) {
+        return id.to_string();
+    }
+    let held = || read_store(|conn| mail_number_in(conn?, id, &current_store()));
+    let number = held().or_else(|| {
+        mint_now(&db_path(), id)?;
+        held()
+    });
+    match number {
+        Some(n) => format!("fmail-{n}"),
+        None => id.to_string(),
+    }
+}
+
+/// The number token a mail hash id already holds, `fmail-87`: a read that
+/// never mints, for listings with many rows.
+pub fn mail_token_held(id: &str) -> Option<String> {
+    if !fno_mail::address::is_mail_hash(id) {
+        return None;
+    }
+    read_store(|conn| mail_number_in(conn?, id, &current_store())).map(|n| format!("fmail-{n}"))
+}
+
+/// The header token for a read path: the held number, else the hash. Never
+/// mints, so a thread read makes no primary call per message. Delivery mints
+/// ([`mail_token`]).
+pub fn mail_token_read(id: &str) -> String {
+    mail_token_held(id).unwrap_or_else(|| id.to_string())
+}
+
+/// The hash id a typed or delivered mail token names. `fmail-87` reads the
+/// store; a hash, a legacy `msg-` id or an unnumbered number passes through
+/// as typed, so a lookup that never held the number fails where it always did.
+pub fn mail_hash(token: &str) -> String {
+    let token = token.trim();
+    if !fno_mail::address::is_mail_number(token) {
+        return token.to_string();
+    }
+    let number = token
+        .strip_prefix("fmail-")
+        .and_then(|n| n.parse::<i64>().ok());
+    let held = |n: i64| read_store(|conn| mail_hash_in(conn?, n, &current_store()));
+    number
+        .and_then(|n| held(n).or_else(|| pull_then(|| held(n))))
+        .unwrap_or_else(|| token.to_string())
+}
+
+/// One primary pull, then the read again: a number a peer minted before this
+/// machine's cache caught up still names its id. `None` with no primary set.
+fn pull_then<T>(read: impl FnOnce() -> Option<T>) -> Option<T> {
+    let remote = crate::store_remote::configured().ok().flatten()?;
+    let conn = open_write_at(&db_path()).ok()?;
+    let _ = pull(&remote, &conn);
+    read()
 }
 
 /// Every number this machine holds, for a printer with many rows.
@@ -1383,6 +1474,21 @@ mod tests {
             Some("x-1")
         );
         assert_eq!(label_in(&conn, "x-aaaa", "local").unwrap(), "x-1");
+    }
+
+    #[test]
+    fn a_mail_hash_takes_a_number_and_the_number_names_the_hash_back() {
+        let (_dir, graph, conn) = conn();
+        let (first, second) = ("fmail-0badc0de1234", "fmail-0123456789ab");
+        mint_now_at(&graph, first, None, "h");
+        mint_now_at(&graph, second, None, "h");
+        mint_now_at(&graph, first, None, "h");
+        assert_eq!(mail_number_in(&conn, first, "local"), Some(1));
+        assert_eq!(mail_number_in(&conn, second, "local"), Some(2));
+        assert_eq!(mail_hash_in(&conn, 2, "local").as_deref(), Some(second));
+        assert_eq!(mail_hash_in(&conn, 3, "local"), None);
+        // A mail row never reads as a decision label.
+        assert!(labels_in(&conn, "local").is_empty());
     }
 
     #[test]
