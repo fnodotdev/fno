@@ -235,8 +235,24 @@ impl RawRecord {
     }
 }
 
-fn reach_table() -> &'static toml::Table {
-    static REACH: OnceLock<toml::Table> = OnceLock::new();
+/// The canonical reach TOML's vendor rows, parsed once.
+#[derive(serde::Deserialize)]
+struct ReachFile {
+    #[serde(default)]
+    vendor: BTreeMap<String, ReachVendor>,
+}
+
+#[derive(serde::Deserialize)]
+struct ReachVendor {
+    #[serde(default)]
+    builtin: bool,
+    anthropic: Option<toml::Table>,
+    openai: Option<toml::Table>,
+    haiku_model: Option<String>,
+}
+
+fn reach_file() -> &'static ReachFile {
+    static REACH: OnceLock<ReachFile> = OnceLock::new();
     REACH.get_or_init(|| {
         toml::from_str(include_str!("../model_reach.toml")).expect("model_reach.toml parses")
     })
@@ -245,13 +261,13 @@ fn reach_table() -> &'static toml::Table {
 /// One vendor's `protocol` endpoint table in the canonical reach TOML
 /// (`base_url`, `key_env`, `key_file`), and whether the vendor is builtin.
 pub(crate) fn reach_endpoint(vendor: &str, protocol: &str) -> Option<(&'static toml::Table, bool)> {
-    let table = reach_table().get("vendor")?.get(vendor)?;
-    let endpoint = table.get(protocol)?.as_table()?;
-    let builtin = table
-        .get("builtin")
-        .and_then(toml::Value::as_bool)
-        .unwrap_or(false);
-    Some((endpoint, builtin))
+    let row = reach_file().vendor.get(vendor)?;
+    let endpoint = match protocol {
+        "anthropic" => row.anthropic.as_ref(),
+        "openai" => row.openai.as_ref(),
+        _ => None,
+    }?;
+    Some((endpoint, row.builtin))
 }
 
 /// The built-in vendor presets: every reach preset with `builtin = true`.
@@ -280,17 +296,9 @@ fn record_base(name: &str) -> Option<RawRecord> {
 fn reach_presets() -> &'static BTreeMap<String, (RawRecord, bool)> {
     static PRESETS: OnceLock<BTreeMap<String, (RawRecord, bool)>> = OnceLock::new();
     PRESETS.get_or_init(|| {
-        let parsed = reach_table();
         let mut out = BTreeMap::new();
-        let Some(vendor) = parsed.get("vendor").and_then(toml::Value::as_table) else {
-            return out;
-        };
-        for (name, table) in vendor {
-            let builtin = table
-                .get("builtin")
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(false);
-            let Some(endpoint) = table.get("anthropic").and_then(toml::Value::as_table) else {
+        for (name, row) in &reach_file().vendor {
+            let Some(endpoint) = row.anthropic.as_ref() else {
                 continue;
             };
             let mut raw = RawRecord::from(endpoint);
@@ -314,12 +322,8 @@ fn reach_presets() -> &'static BTreeMap<String, (RawRecord, bool)> {
                     .map(str::to_string);
             }
             raw.protocol = Some("anthropic".to_string());
-            raw.haiku_model = table
-                .get("haiku_model")
-                .and_then(toml::Value::as_str)
-                .filter(|v| !v.is_empty())
-                .map(str::to_string);
-            out.insert(name.clone(), (raw, builtin));
+            raw.haiku_model = row.haiku_model.clone().filter(|v| !v.is_empty());
+            out.insert(name.clone(), (raw, row.builtin));
         }
         out
     })
