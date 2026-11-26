@@ -162,7 +162,7 @@ pub fn run_sent(
                     "state": delivery_state.word(),
                     "state_detail": fno_mail::state::detail(&delivery_state),
                     "to": str_field(m, "to", ""),
-                    "to_kind": m.get("to_kind").cloned().unwrap_or(Value::Null),
+                    "to_kind": at(m, "to_kind").cloned().unwrap_or(Value::Null),
                     "kind": str_field(m, "kind", ""),
                     "ts": str_field(m, "ts", ""),
                     "delivery": delivery_of(m).to_string(),
@@ -213,11 +213,7 @@ pub fn run_sent(
                 }
             }
         };
-        let lane = m
-            .get("to_kind")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("?");
+        let lane = text(m, "to_kind").filter(|s| !s.is_empty()).unwrap_or("?");
         println!(
             "{}  -> {}  [{lane}/{}]  {}  {} ({state})",
             id,
@@ -363,14 +359,10 @@ fn landed_map(
         .collect();
     let mut groups: HashMap<(String, String), Vec<&Value>> = HashMap::new();
     for m in msgs {
-        let meta = m.get("meta");
-        let to_session = meta
-            .and_then(|x| x.get("to_session"))
-            .and_then(Value::as_str);
-        let to_harness = meta
-            .and_then(|x| x.get("to_harness"))
-            .and_then(Value::as_str);
-        let from_session = m.get("from_session").and_then(Value::as_str);
+        let meta = at(m, "meta");
+        let to_session = meta.and_then(|x| text(x, "to_session"));
+        let to_harness = meta.and_then(|x| text(x, "to_harness"));
+        let from_session = text(m, "from_session");
         if let (Some(ts), Some(fs)) = (to_session, from_session) {
             if !ts.is_empty() && ts == fs {
                 continue; // self-send: the sender's own transcript proves nothing
@@ -495,15 +487,22 @@ fn read_cursor(bus: &Path, name: &str) -> Option<String> {
         );
         return None;
     };
-    v.get("last_seen_id")
-        .and_then(Value::as_str)
+    text(&v, "last_seen_id")
         .filter(|s| !s.is_empty())
         .map(str::to_string)
 }
 
+/// One envelope key by name: the single place this module reads a field.
+fn at<'a>(m: &'a Value, key: &str) -> Option<&'a Value> {
+    m.get(key)
+}
+
+fn text<'a>(m: &'a Value, key: &str) -> Option<&'a str> {
+    at(m, key).and_then(Value::as_str)
+}
+
 pub fn delivery_of(m: &Value) -> &str {
-    m.get("delivery")
-        .and_then(Value::as_str)
+    text(m, "delivery")
         .filter(|s| !s.is_empty())
         .unwrap_or(DURABLE_DELIVERY)
 }
