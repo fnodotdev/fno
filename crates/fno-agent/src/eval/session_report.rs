@@ -353,7 +353,18 @@ pub(crate) fn handle_session_report(
     // runs here, outside the lock, and only for a mint.
     let fork_parent = (harness.as_harness() == Harness::Claude && pending_mint.is_some())
         .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
-        .flatten();
+        .flatten()
+        .map(|(parent, pid)| (parent, Some(pid)))
+        .or_else(|| {
+            // A typed `claude --bg --resume <old>` line recorded its target
+            // at launch. When the argv is unreadable (the pid is gone), the
+            // record still proves which session this one continues.
+            let parent = launch_record.as_ref()?.launch.resume.clone()?;
+            (harness.as_harness() == Harness::Claude
+                && pending_mint.is_some()
+                && parent != session_id)
+                .then_some((parent, None))
+        });
 
     // A claude session reporting against an id a row ALREADY holds
     // (`pending_mint` is `None` exactly in that case, per
@@ -436,12 +447,7 @@ pub(crate) fn handle_session_report(
         let Some(mut find) = find_row(&r.entries, &harness, &session_id, agent_self.as_deref())
         else {
             if let Some(i) = fork_parent.as_ref().and_then(|(parent, pid)| {
-                crate::native_adopt::bind_fork_child(
-                    &mut r.entries,
-                    parent,
-                    &session_id,
-                    Some(*pid),
-                )
+                crate::native_adopt::bind_fork_child(&mut r.entries, parent, &session_id, *pid)
             }) {
                 let entry = &mut r.entries[i];
                 entry.last_report_at = Some(now_stamp.clone());

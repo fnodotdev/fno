@@ -338,6 +338,7 @@ mod tests {
         worker.name = "fno-books-eval5".into();
         worker.harness = Some("claude".into());
         worker.node = Some("fb-e47c".into());
+        worker.role_scope = Some("fnh".into());
         worker.short_id = "3feca5b6".into();
         worker.claude_session_uuid = Some(PARENT.into());
         let mut entries = vec![worker];
@@ -355,16 +356,22 @@ mod tests {
         assert_eq!(row.short_id, "8789fe29");
         assert_eq!(row.pid, Some(1600));
         assert_eq!(row.predecessor_session_ids, vec![PARENT.to_string()]);
+        assert_eq!(row.role_scope.as_deref(), Some("fnh"));
         assert!(crate::session_report::find_row(&entries, "claude", CHILD, None).is_some());
         assert!(crate::session_report::find_row(&entries, "claude", PARENT, None).is_none());
         assert!(superseded(&entries, PARENT));
         assert!(!superseded(&entries, CHILD));
 
         // A fork of a session no row holds binds nothing: the caller mints.
+        // A launch record's resume link binds the same way with no pid, and
+        // a row in the same cwd that does not hold the named id stays put.
         assert_eq!(
             bind_fork_child(&mut entries, "unheld-parent", "c-2", None),
             None
         );
+        assert_eq!(bind_fork_child(&mut entries, CHILD, "c-3", None), Some(0));
+        assert_eq!(entries[0].role_scope.as_deref(), Some("fnh"));
+        assert_eq!(entries[0].harness_session_id.as_deref(), Some("c-3"));
     }
 
     /// A report no launch record names carries its own substrate word, and

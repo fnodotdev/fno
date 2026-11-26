@@ -272,7 +272,16 @@ fn machine_leg(harness: &str) -> ReadinessLeg {
     }
 }
 
-fn stop_leg_from_events(events: &str, harness: &str, session: &str) -> ReadinessLeg {
+/// `lineage` holds the ids the registry row holding `session` records as its
+/// predecessors. A restart mints a new id with no snapshot of its own, so the
+/// row's recorded prior id stands for it. A manifest or cwd match is no
+/// lineage: only the row's own `predecessor_session_ids` count.
+fn stop_leg_from_events(
+    events: &str,
+    harness: &str,
+    session: &str,
+    lineage: &[String],
+) -> ReadinessLeg {
     if session.trim().is_empty() {
         return ReadinessLeg::unreadable("exact harness session id is unavailable");
     }
@@ -291,7 +300,10 @@ fn stop_leg_from_events(events: &str, harness: &str, session: &str) -> Readiness
         let index = rows.len();
         if event.get("type").and_then(Value::as_str) == Some("context_snapshot")
             && event.pointer("/data/harness").and_then(Value::as_str) == Some(harness)
-            && event.pointer("/data/session_id").and_then(Value::as_str) == Some(session)
+            && event
+                .pointer("/data/session_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id == session || lineage.iter().any(|p| p == id))
         {
             latest_snapshot = Some((index, event.clone()));
         }
@@ -303,6 +315,13 @@ fn stop_leg_from_events(events: &str, harness: &str, session: &str) -> Readiness
         ));
     };
     let data = snapshot.get("data").unwrap_or(&Value::Null);
+    // The stop that proves the refresh carries the id the snapshot named.
+    let snapshot_session = data
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or(session)
+        .to_string();
+    let session = snapshot_session.as_str();
     let entry_state = data
         .get("entry_state")
         .and_then(Value::as_str)
@@ -363,7 +382,28 @@ fn stop_leg(harness: &str, session: &str, cwd: &Path) -> ReadinessLeg {
             return ReadinessLeg::unreadable(format!("session hook journal unreadable: {error}"))
         }
     };
-    stop_leg_from_events(&events, harness, session)
+    let lineage = predecessor_ids(harness, session);
+    stop_leg_from_events(&events, harness, session, &lineage)
+}
+
+/// The predecessor ids the registry row holding this session records. Empty
+/// when no row holds it or the registry is unreadable: no lineage, no leniency.
+fn predecessor_ids(harness: &str, session: &str) -> Vec<String> {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return Vec::new();
+    };
+    let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+        return Vec::new();
+    };
+    registry
+        .entries
+        .iter()
+        .filter(|e| {
+            e.harness.as_deref() == Some(harness)
+                && e.harness_session_id.as_deref() == Some(session)
+        })
+        .flat_map(|e| e.predecessor_session_ids.iter().cloned())
+        .collect()
 }
 
 /// Direct client command used by the Python admission seams. All four legs are
@@ -545,5 +585,20 @@ mod tests {
         let reason = missing.reason.as_deref().unwrap_or_default();
         assert!(reason.contains("plugin-missing"));
         assert!(reason.contains("fno config plugin install codex"));
+    }
+
+    #[test]
+    fn a_restarted_session_passes_only_through_its_rows_recorded_predecessor() {
+        let events = [
+            r#"{"type":"context_snapshot","data":{"harness":"claude","session_id":"old-1","entry_state":"startup","measurement_complete":true}}"#,
+            r#"{"type":"stop_decision","data":{"session_id":"old-1","correlation_id":"stop:old-1:1"}}"#,
+        ]
+        .join("\n");
+        let linked = stop_leg_from_events(&events, "claude", "new-2", &["old-1".to_string()]);
+        assert!(linked.state.is_ready());
+        let unlinked = stop_leg_from_events(&events, "claude", "new-2", &[]);
+        assert_eq!(unlinked.state, LegState::Blocked);
+        let reason = unlinked.reason.as_deref().unwrap_or_default();
+        assert!(reason.contains("session-hook-unobserved"));
     }
 }
