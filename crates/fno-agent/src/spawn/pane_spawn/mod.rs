@@ -272,6 +272,10 @@ pub struct ArmPlan {
     /// The seed held OUT of the argv for a post-bind turn/start (codex).
     /// `None` delivers the message inside the argv like every thread spawn.
     pub held_seed: Option<String>,
+    /// The exact first-turn text the arm delivers. The row records it as the
+    /// spawn payload so the attended guard's exact match holds; `None`
+    /// records the raw message.
+    pub delivered_seed: Option<String>,
     /// A `preassigned` binding harness starts with the id it minted, so the
     /// pane is addressable before its row exists: the id rides `--fno-id`.
     pub preassigned_id: Option<String>,
@@ -654,7 +658,16 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
         Err(refusal) => return refuse(&refusal),
     };
 
-    if let Err(exc) = write_pane_row(home, name, ctx, &pane, &bind, replacing, &spawn_trigger) {
+    if let Err(exc) = write_pane_row(
+        home,
+        name,
+        ctx,
+        &pane,
+        &bind,
+        replacing,
+        &spawn_trigger,
+        plan.delivered_seed.as_deref(),
+    ) {
         return refuse(&PaneRefusal {
             line: format!("registry row write failed: {exc}"),
             exit_code: 12,
@@ -1230,6 +1243,7 @@ pub fn write_pane_row(
     bind: &ArmBind,
     replacing: bool,
     spawn_trigger: &Option<String>,
+    delivered_seed: Option<&str>,
 ) -> Result<(), String> {
     let (status, session_id) = match bind {
         ArmBind::Bound { session_id } => (AgentStatus::Live, Some(session_id.clone())),
@@ -1256,7 +1270,10 @@ pub fn write_pane_row(
         requested_permission_mode: (ctx.provider.as_harness() == Harness::Claude)
             .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
             .flatten(),
-        spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
+        spawn_payload: delivered_seed
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| (!ctx.message.is_empty()).then(|| ctx.message.clone())),
         cwd: ctx.cwd.to_string_lossy().into_owned(),
         log_path: entry_log_path,
         status,
