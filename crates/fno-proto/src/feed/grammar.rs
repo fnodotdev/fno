@@ -892,7 +892,7 @@ static SEQUENTIAL_TAIL: std::sync::OnceLock<fn(&str, &str) -> bool> = std::sync:
 /// Install the sequential-id test. The first install wins; with none, only
 /// the hex shape reads as a node id.
 pub fn set_sequential_tail(test: fn(&str, &str) -> bool) {
-    let _ = SEQUENTIAL_TAIL.set(test);
+    SEQUENTIAL_TAIL.set(test).ok();
 }
 
 /// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the graph's node-id shape; a
