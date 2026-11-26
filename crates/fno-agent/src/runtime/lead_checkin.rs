@@ -1291,6 +1291,16 @@ fn collect_readings(
         let events_paths = events_paths.clone();
         move || Ok(rate_limits::reading(&events_paths))
     });
+    let h_law_fires = spawn_reading(beat_started, "law_fires", {
+        let events_paths = events_paths.clone();
+        let since = since.clone();
+        move || {
+            Ok(crate::law_at::fires_at_actions(
+                &events_paths,
+                since.as_deref(),
+            ))
+        }
+    });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {
         let events_paths = events_paths.clone();
@@ -1482,6 +1492,7 @@ fn collect_readings(
     h_layout.collect_into(&mut readings, beat_started);
     h_telemetry.collect_into(&mut readings, beat_started);
     h_rate_limits.collect_into(&mut readings, beat_started);
+    h_law_fires.collect_into(&mut readings, beat_started);
     h_laws.collect_into(&mut readings, beat_started);
     h_machine.collect_into(&mut readings, beat_started);
 
@@ -2107,6 +2118,15 @@ fn render_lines_with(
         Some(r) => {
             if let Some(summary) = r.value.as_str() {
                 lines.push(format!("rate limits: {summary}"));
+            }
+        }
+        _ => {}
+    }
+    match by_name("law_fires") {
+        Some(r) if !r.ok => lines.push(format!("READER FAILED law_fires: {}", r.error)),
+        Some(r) => {
+            if let Some(summary) = r.value.as_str() {
+                lines.push(format!("law fires at actions: {summary}"));
             }
         }
         _ => {}

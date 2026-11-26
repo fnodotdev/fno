@@ -151,6 +151,7 @@ pub mod graph_store;
 pub mod join_marker;
 pub mod keeper_wire;
 pub mod law_archive;
+pub mod law_at;
 pub mod law_filters;
 pub mod law_firings;
 pub mod law_match;
