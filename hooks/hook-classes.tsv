@@ -27,6 +27,7 @@ claude	PostModelSwitch	session-state.sh	wait	-
 claude	StopFailure	target-stopfailure.sh	wait	-
 claude	PostToolUse	format-on-edit.sh	wait	-
 claude	PostToolUse	edit-integrity.sh	wait	-
+claude	PostToolUse	session-state.sh	wait	-
 claude	PostToolUse	spend-drift-monitor.sh	wait	-
 claude	PostToolUse	claim-heartbeat.sh	wait	-
 claude	PostToolUse	friction-offer-inject.sh	wait	-

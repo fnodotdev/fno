@@ -2345,9 +2345,11 @@ via = ["hooks/session-state.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "c
 # so it is the blocked producer. The permission_prompt Notification fires
 # only after the prompt waits about 6 s, but it still reports blocked: a
 # sandboxed command's network prompt fires no PermissionRequest. The screen
-# backstop keeps a parked prompt whose hooks both missed.
+# backstop keeps a parked prompt whose hooks both missed. PostToolUse reports
+# working, so an approved tool clears blocked when it finishes, not at the
+# next tool call.
 [harness.claude.hooks.session_state.wiring]
-events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done", PostModelSwitch = "model", Notification = "blocked" }
+events = { UserPromptSubmit = "working", PreToolUse = "working", PostToolUse = "working", Stop = "done", PostModelSwitch = "model", Notification = "blocked" }
 blocked = "PermissionRequest"
 screen_backstop = true
 

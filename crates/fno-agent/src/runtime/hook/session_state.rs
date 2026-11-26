@@ -134,7 +134,8 @@ pub(crate) fn decide(wiring: &HookWiring, ev: &HookEvent) -> Option<Decision> {
 /// static fallbacks when it did not (the C14 feed contract). Any other tool
 /// keeps plain working.
 fn reclassify(ev: &HookEvent) -> Decision {
-    if ASK_TOOLS.contains(&ev.tool.as_str()) {
+    // A picker's PostToolUse fires after the user answered it.
+    if ev.event != "PostToolUse" && ASK_TOOLS.contains(&ev.tool.as_str()) {
         let reason = if ev.tool == "ExitPlanMode" {
             PLAN_APPROVAL.to_string()
         } else if ev.message.is_empty() {

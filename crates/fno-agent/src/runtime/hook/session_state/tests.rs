@@ -77,6 +77,12 @@ fn the_row_map_wires_claude_and_codex() {
     ] {
         assert_eq!(claude.events.get(event).map(String::as_str), Some(word));
     }
+    // An approved tool clears blocked when it ends, and an answered picker's
+    // PostToolUse reads working, not asking.
+    for tool in ["Bash", "AskUserQuestion"] {
+        let after = decide(&claude, &ev("PostToolUse", json!({"tool_name": tool}))).unwrap();
+        assert_eq!(after.state, "working", "{tool}");
+    }
     let codex = job("codex");
     assert_eq!(codex.blocked, "PermissionRequest");
     assert!(codex.screen_backstop);
