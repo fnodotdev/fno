@@ -626,6 +626,8 @@ mod tests {
         cursor_position_contract();
         tombstone_contract();
         defang_contract();
+        legacy_tag_ids_still_dedup();
+        typed_header_ids_still_dedup();
         let (_d, bus) = bus_fixture("ordinary");
         let name = "t-x-1-glm";
         let msgs = vec![
@@ -781,7 +783,6 @@ mod tests {
 
     /// The legacy `<fno_mail id="...">` receipt tags still dedup, raw or
     /// JSON-escaped; a bare id in prose is no marker and never dedups.
-    #[test]
     fn legacy_tag_ids_still_dedup() {
         let session = "ffffabcd-1111-2222-3333-444455556666";
         let dir = tempfile::tempdir().unwrap();
@@ -807,7 +808,6 @@ mod tests {
     /// A typed law header (`` `@sender · id` ``) inside a JSON-escaped
     /// transcript record dedups its id: the live lane laid the body down,
     /// and a staged row without its receipt must not re-render.
-    #[test]
     fn typed_header_ids_still_dedup() {
         let session = "ffffabcd-1111-2222-3333-444455556666";
         let dir = tempfile::tempdir().unwrap();

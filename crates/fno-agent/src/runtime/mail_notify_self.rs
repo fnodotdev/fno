@@ -421,14 +421,19 @@ mod tests {
             assert!(out.contains("state unclear"), "no unclear wording in {out}");
             assert!(out.contains("fno agent peek"), "no peek command in {out}");
             assert!(out.contains("fno agent resume"), "no wake command in {out}");
-            assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
+            assert!(
+                !out.contains("ESC to steer"),
+                "red when ESC-claim or dropped commands in {out}"
+            );
         });
+        a_rotated_row_drains_at_the_next_boundary();
+        a_live_cursor_target_keeps_the_segments_off();
     }
 
     /// A bus row the live log no longer holds still drains at the prompt
     /// boundary: the drain was down across a rotation, and the retained
-    /// segments carry the unread row.
-    #[test]
+    /// segments carry the unread row. Runs its own with_hold_env (never
+    /// call from inside one: the test env lock is not reentrant).
     fn a_rotated_row_drains_at_the_next_boundary() {
         let session = "d9daf3e8-1111-2222-3333-444455556666";
         let handle = crate::identity::canonical_handle(session);
@@ -482,7 +487,6 @@ mod tests {
     /// A cursor target the live log still holds keeps the drain on the live
     /// log: an older segment row predates the cursor's last judgment, so a
     /// second scan would relitigate it.
-    #[test]
     fn a_live_cursor_target_keeps_the_segments_off() {
         let session = "d9daf3e8-1111-2222-3333-444455556666";
         let handle = crate::identity::canonical_handle(session);
