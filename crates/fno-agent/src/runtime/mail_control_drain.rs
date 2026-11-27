@@ -18,7 +18,7 @@
 //! `control:<form>` cursors and advances nothing the prompt boundary reads.
 
 use serde_json::{json, Value};
-use std::io::{BufRead as _, Read as _};
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
 pub(crate) use crate::bus_read::{

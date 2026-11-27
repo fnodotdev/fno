@@ -110,7 +110,7 @@ pub(crate) fn read_drain_bus(bus_dir: &Path, form: &str) -> Vec<Value> {
     let rotated_out = cursor.as_deref().is_some_and(|id| {
         !msgs
             .iter()
-            .any(|m| m.get("id").and_then(Value::as_str) == Some(id))
+            .any(|m| m.pointer("/id").and_then(Value::as_str) == Some(id))
     });
     if cursor.is_none() || rotated_out {
         fno_mail::log::read_bus_segments(&bus_dir.join("messages.jsonl"))
@@ -469,12 +469,11 @@ mod tests {
                 "rotated row not drained: {out}"
             );
             assert!(out.contains("from the live log"), "live row missing: {out}");
-            let cursor: Value = serde_json::from_str(
-                &std::fs::read_to_string(cursors.join(format!("{form}.json"))).unwrap(),
-            )
-            .unwrap();
+            let (cursor, _) =
+                crate::bus_read::read_cursor_file(&cursors.join(format!("{form}.json")));
             assert_eq!(
-                cursor["last_seen_id"], "msg-fresh",
+                cursor.as_deref(),
+                Some("msg-fresh"),
                 "cursor did not advance"
             );
         });
