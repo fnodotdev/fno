@@ -127,7 +127,7 @@ pub fn emit_paths_sh_defaults() -> String {
     ));
     for (name, sub) in [
         ("LEDGER_JSON_PATH", "db/history/ledger.json"),
-        ("BRIEFS_DIR", "briefs"),
+        ("BRIEFS_DIR", "db/briefs"),
         ("POSTMORTEMS_DIR", "db/postmortems"),
         ("WORKTREES_BASE", "spaces/worktrees"),
         ("MEMORY_DIR", "memory"),
@@ -802,7 +802,7 @@ pub fn postmortems_dir(cwd: &Path) -> PathBuf {
 /// Python `paths.observer_reports_dir(project_id=...)`: the explicit
 /// override, else the configured Obsidian vault's
 /// `internal/<owner>/observer-reports/`, else
-/// `<state_dir>/observer-reports/<owner>/`. The owner (the skill-id
+/// `<state_dir>/db/observer-reports/<owner>/`. The owner (the skill-id
 /// namespace prefix) pins the report to the project that OWNS the evaluated
 /// skill, so a sweep launched from any cwd lands under internal/<owner>/
 /// instead of the ambient checkout's basename. A caller-supplied id with a
@@ -819,12 +819,11 @@ pub fn observer_reports_dir(cwd: &Path, project_id: Option<&str>) -> PathBuf {
     if let Some(vault) = obsidian_vault(cwd) {
         return vault.join("internal").join(owner).join("observer-reports");
     }
-    state_dir_resolved(cwd)
+    let state = state_dir_resolved(cwd)
         .ok()
         .filter(|d| d.is_absolute())
-        .unwrap_or_else(|| crate::decision_index::default_state_path(""))
-        .join("observer-reports")
-        .join(owner)
+        .unwrap_or_else(|| crate::decision_index::default_state_path(""));
+    crate::state_layout::place(&state, "observer-reports").join(owner)
 }
 
 /// The Obsidian vault root from config (`obsidian.enabled` + `obsidian.vault`,
@@ -914,7 +913,7 @@ pub fn emit_paths_sh_live(cwd: &Path) -> Result<String, String> {
 
     for (name, key, sub) in [
         ("LEDGER_JSON_PATH", "ledger_json", "db/history/ledger.json"),
-        ("BRIEFS_DIR", "briefs_dir", "briefs"),
+        ("BRIEFS_DIR", "briefs_dir", "db/briefs"),
         ("POSTMORTEMS_DIR", "postmortems_dir", "db/postmortems"),
         ("WORKTREES_BASE", "worktrees_base", "spaces/worktrees"),
         ("MEMORY_DIR", "memory_dir", "memory"),

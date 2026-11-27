@@ -15,10 +15,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// The registry statuses that mean "this run holds a process", the census's
-/// `LIVE_STATUSES`. Every other status is terminal.
-pub const LIVE_STATUSES: &[&str] = &["spawning", "ready", "idle", "busy", "live", "restarting"];
-
 /// Twelve-minute reconcile runs are measured (`FLIGHT_TTL_MS` in
 /// flight_gate.rs); a single-flight hold older than this shows here.
 const LONG_HOLD_S: i64 = 12 * 60;
@@ -72,10 +68,7 @@ struct Census {
 }
 
 pub(crate) fn status_word(entry: &RegistryEntry) -> String {
-    serde_json::to_value(entry.status)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .unwrap_or_default()
+    entry.status.as_str().to_string()
 }
 
 /// One pid read: `Some(true)` the recorded incarnation is running,
@@ -168,7 +161,7 @@ fn census(
 
     for (index, row) in rows.iter().enumerate() {
         let stored = status_word(row);
-        if !LIVE_STATUSES.contains(&stored.as_str()) {
+        if !crate::spawn_gate::status_is_liveish(&row.status) {
             continue;
         }
         let harness = row.harness.clone().unwrap_or_default();

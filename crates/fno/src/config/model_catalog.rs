@@ -455,6 +455,9 @@ struct ProviderFacts {
     key_file: Option<String>,
     has_record: bool,
     builtin: bool,
+    /// The reach table states this vendor's endpoint, so a record needs
+    /// only its key field (the spawn doors fill the rest).
+    reach_endpoint: bool,
 }
 
 /// The URL's host part, lowercase, for the catalog host match.
@@ -491,6 +494,28 @@ pub(crate) struct VendorReach {
     pub builtin: bool,
     /// The anthropic-protocol endpoint facts (base_url, key_env, key_file).
     pub anthropic: Option<VendorEndpoint>,
+    /// The openai-protocol endpoint the codex route reads.
+    pub openai: Option<VendorEndpoint>,
+}
+
+impl VendorReach {
+    fn endpoint(&self, protocol: &str) -> Option<&VendorEndpoint> {
+        match protocol {
+            "anthropic" => self.anthropic.as_ref(),
+            "openai" => self.openai.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+fn parse_endpoint(caps: &toml::Value, protocol: &str) -> Option<VendorEndpoint> {
+    let ep = caps.get(protocol)?.as_table()?;
+    let text = |k: &str| ep.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    Some(VendorEndpoint {
+        base_url: text("base_url").unwrap_or_default(),
+        key_env: text("key_env").unwrap_or_default(),
+        key_file: text("key_file"),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -554,24 +579,8 @@ pub(crate) fn parse_reach(toml_text: &str) -> ModelReach {
                                 .get("builtin")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false),
-                            anthropic: caps.get("anthropic").and_then(|v| v.as_table()).map(|ep| {
-                                VendorEndpoint {
-                                    base_url: ep
-                                        .get("base_url")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                    key_env: ep
-                                        .get("key_env")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or_default()
-                                        .to_string(),
-                                    key_file: ep
-                                        .get("key_file")
-                                        .and_then(|v| v.as_str())
-                                        .map(str::to_string),
-                                }
-                            }),
+                            anthropic: parse_endpoint(caps, "anthropic"),
+                            openai: parse_endpoint(caps, "openai"),
                         },
                     )
                 })
@@ -583,9 +592,11 @@ pub(crate) fn parse_reach(toml_text: &str) -> ModelReach {
 
 /// Facts for `provider`: a config record wins over a map vendor, which wins
 /// over the catalog npm rule. Returns the facts and the linked catalog
-/// provider (the model-name source).
+/// provider (the model-name source). `routes` are the protocols the
+/// harness's door carries.
 fn facts_for<'a>(
     provider: &str,
+    routes: &[String],
     reach: &'a ModelReach,
     cfg: &'a serde_json::Value,
     catalog: Option<&'a Catalog>,
@@ -595,6 +606,19 @@ fn facts_for<'a>(
         .and_then(|v| v.get(provider))
         .filter(|v| v.is_object());
     let vendor = reach.vendor.get(provider);
+    let linked = linked_catalog(provider, vendor, record, catalog);
+    facts_with(routes, vendor, record, linked)
+}
+
+/// The catalog provider a provider's model names come from: the reach
+/// vendor's catalog id, else the same id, else the first catalog id whose
+/// api host matches the record's base_url.
+fn linked_catalog<'a>(
+    provider: &str,
+    vendor: Option<&VendorReach>,
+    record: Option<&serde_json::Value>,
+    catalog: Option<&'a Catalog>,
+) -> Option<&'a CatalogProvider> {
     let mut linked: Option<&CatalogProvider> = None;
     if let Some(v) = vendor {
         if let Some(c) = &v.catalog {
@@ -628,6 +652,16 @@ fn facts_for<'a>(
             }
         }
     }
+    linked
+}
+
+/// The facts half of [`facts_for`], once the catalog link is known.
+fn facts_with<'a>(
+    routes: &[String],
+    vendor: Option<&VendorReach>,
+    record: Option<&serde_json::Value>,
+    linked: Option<&'a CatalogProvider>,
+) -> Option<(ProviderFacts, Option<&'a CatalogProvider>)> {
     let npm_protocol = |cp: &CatalogProvider| -> Option<String> {
         match cp.npm.as_deref() {
             Some("@ai-sdk/anthropic") => Some("anthropic".to_string()),
@@ -637,6 +671,23 @@ fn facts_for<'a>(
             _ => None,
         }
     };
+    let record_protocol = record
+        .and_then(|r| r.get("protocol"))
+        .and_then(|v| v.as_str())
+        .map(str::to_lowercase);
+    // The codex door reads the reach openai endpoint beneath a record of
+    // another protocol (codex_route.rs), so one record serves both lanes.
+    let openai_beneath = routes.iter().any(|r| r == "openai")
+        && record_protocol.as_deref() != Some("openai")
+        && vendor.and_then(|v| v.openai.as_ref()).is_some();
+    let has_record = record.is_some();
+    let any_record = record;
+    let record = record.filter(|_| !openai_beneath);
+    let endpoint_protocol = if openai_beneath {
+        "openai"
+    } else {
+        "anthropic"
+    };
     let rec = |k: &str| {
         record
             .and_then(|r| r.get(k))
@@ -645,7 +696,7 @@ fn facts_for<'a>(
     };
     let ven = |k: &str| {
         vendor
-            .and_then(|v| v.anthropic.as_ref())
+            .and_then(|v| v.endpoint(endpoint_protocol))
             .and_then(|ep| match k {
                 "base_url" => Some(ep.base_url.clone()),
                 "key_env" => Some(ep.key_env.clone()),
@@ -654,17 +705,25 @@ fn facts_for<'a>(
             })
     };
     let protocol = rec("protocol")
-        .or_else(|| ven("base_url").map(|_| "anthropic".to_string()))
+        .or_else(|| ven("base_url").map(|_| endpoint_protocol.to_string()))
         .or_else(|| linked.and_then(npm_protocol));
     let base_url = rec("base_url").or_else(|| ven("base_url")).or_else(|| {
         linked
             .and_then(|cp| cp.api.clone())
             .map(|api| api.strip_suffix("/v1").unwrap_or(api.as_str()).to_string())
     });
-    let key_env = rec("api_key_env")
+    // The key belongs to the vendor, not the protocol: any record's key
+    // fields win, as in codex_route.rs.
+    let key_rec = |k: &str| {
+        any_record
+            .and_then(|r| r.get(k))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let key_env = key_rec("api_key_env")
         .or_else(|| ven("key_env"))
         .or_else(|| linked.and_then(|cp| cp.env.first().cloned()));
-    let key_file = rec("api_key_file").or_else(|| ven("key_file"));
+    let key_file = key_rec("api_key_file").or_else(|| ven("key_file"));
     if protocol.is_none() {
         return None;
     }
@@ -674,8 +733,9 @@ fn facts_for<'a>(
             base_url,
             key_env,
             key_file,
-            has_record: record.is_some(),
+            has_record,
             builtin: vendor.map(|v| v.builtin).unwrap_or(false),
+            reach_endpoint: ven("base_url").is_some(),
         },
         linked,
     ))
@@ -742,8 +802,8 @@ fn rows_for_provider(
     catalog: Option<&Catalog>,
     key_present: &dyn Fn(&str, Option<&str>) -> bool,
 ) -> Option<(Vec<ModelChoice>, Vec<ModelChoice>)> {
-    let (facts, linked) = facts_for(provider, reach, cfg, catalog)?;
     let routes = reach.harness.get(harness)?;
+    let (facts, linked) = facts_for(provider, &routes.routes, reach, cfg, catalog)?;
     let native = routes.native_catalog.as_deref() == Some(provider);
     let protocol = facts.protocol.clone().unwrap_or_default();
     let key_env_s = facts.key_env.clone().unwrap_or_default();
@@ -765,7 +825,7 @@ fn rows_for_provider(
     }
     let state = if unreachable {
         let reason = if routes.routes.is_empty() {
-            format!("fno cannot launch a routed codex model yet ({provider} serves {protocol})")
+            format!("{harness} launches no routed model ({provider} serves {protocol})")
         } else {
             format!(
                 "{} speaks {}; {provider} serves {protocol}",
@@ -776,9 +836,15 @@ fn rows_for_provider(
         ModelState::Unreachable { reason }
     } else if !has_access {
         let base = facts.base_url.clone().unwrap_or_default();
-        let cmd = format!(
-            "fno config set model_routing.providers.{provider}.protocol={protocol} model_routing.providers.{provider}.base_url={base} model_routing.providers.{provider}.api_key_env={key_env_s}"
-        );
+        // A reach vendor's record needs only its key: both spawn doors fill
+        // the endpoint, and a protocol field would close the other lane.
+        let cmd = if facts.reach_endpoint {
+            format!("fno config set model_routing.providers.{provider}.api_key_env={key_env_s}")
+        } else {
+            format!(
+                "fno config set model_routing.providers.{provider}.protocol={protocol} model_routing.providers.{provider}.base_url={base} model_routing.providers.{provider}.api_key_env={key_env_s}"
+            )
+        };
         let mut steps = vec![cmd];
         if !key_env_s.is_empty() && !key_present(&key_env_s, key_file.as_deref()) {
             steps.push(format!("export {key_env_s}=<your key>"));
@@ -813,8 +879,14 @@ fn rows_for_provider(
         .into_iter()
         .map(|model| ModelChoice {
             name: model.clone(),
+            // A foreign vendor's model launches only through its route;
+            // the id alone reaches the harness's own vendor.
+            route: if native {
+                String::new()
+            } else {
+                format!("{provider}/{model}")
+            },
             model,
-            route: String::new(),
             provider: Some(provider.to_string()),
             state: state.clone(),
             key_env: facts.key_env.clone().filter(|k| !k.is_empty()),
@@ -941,15 +1013,11 @@ pub(crate) fn reach_rows(
 /// The vendor endpoint's base_url for one protocol, read from the
 /// compiled-in map.
 pub(crate) fn vendor_base_url(vendor: &str, protocol: &str) -> Option<String> {
-    if protocol != "anthropic" {
-        return None;
-    }
     let reach = parse_reach(REACH_TOML);
     reach
         .vendor
         .get(vendor)?
-        .anthropic
-        .as_ref()
+        .endpoint(protocol)
         .map(|ep| ep.base_url.clone())
 }
 
@@ -993,6 +1061,15 @@ mod tests {
             "npm": "@ai-sdk/anthropic",
             "models": {
                 "glm-5.3-flash": {"id": "glm-5.3-flash", "name": "GLM Flash"}
+            }
+        },
+        "openrouter": {
+            "name": "OpenRouter",
+            "env": ["OPENROUTER_API_KEY"],
+            "api": "https://openrouter.ai/api/v1",
+            "npm": "@openrouter/ai-sdk-provider",
+            "models": {
+                "openai/gpt-5.5": {"id": "openai/gpt-5.5", "name": "GPT-5.5"}
             }
         }
     }"#;
@@ -1080,8 +1157,22 @@ mod tests {
         assert_eq!(claude.routes, vec!["anthropic".to_string()]);
         assert_eq!(claude.native_catalog.as_deref(), Some("anthropic"));
         assert!(!claude.own_list);
-        assert!(reach.harness.get("codex").unwrap().routes.is_empty());
+        assert_eq!(
+            reach.harness.get("codex").unwrap().routes,
+            vec!["openai".to_string()]
+        );
         assert!(reach.harness.get("opencode").unwrap().own_list);
+        let or = reach.vendor.get("openrouter").unwrap();
+        assert!(!or.builtin, "a config record is the consent to bill it");
+        assert_eq!(
+            vendor_base_url("openrouter", "anthropic").as_deref(),
+            Some("https://openrouter.ai/api")
+        );
+        assert_eq!(
+            or.openai.as_ref().unwrap().base_url,
+            "https://openrouter.ai/api/v1"
+        );
+        assert_eq!(or.openai.as_ref().unwrap().key_env, "OPENROUTER_API_KEY");
         let zai = reach.vendor.get("zai").unwrap();
         assert!(zai.builtin);
         assert_eq!(
@@ -1188,7 +1279,23 @@ mod tests {
             panic!("expected Unreachable, got {:?}", row.state);
         };
         assert_eq!(reason, "claude speaks anthropic; zai-openai serves openai");
-        // codex + a routed provider: the door refuses a routed codex pick.
+        // AC1: OpenRouter lists on claude through its Anthropic skin.
+        let row = more
+            .iter()
+            .find(|r| r.provider.as_deref() == Some("openrouter"))
+            .expect("openrouter rows list on claude");
+        let ModelState::NoKey { steps, .. } = &row.state else {
+            panic!("expected NoKey, got {:?}", row.state);
+        };
+        // The consent is one key field: a protocol field would close codex.
+        assert_eq!(
+            steps.first().map(String::as_str),
+            Some(
+                "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            )
+        );
+        // codex routes openai: a keyed openai record is Ready, an
+        // anthropic-only vendor is Unreachable by protocol.
         let (ready, more) = reach_rows(
             "codex",
             &reach,
@@ -1197,7 +1304,12 @@ mod tests {
             Some(&catalog),
             &key_present,
         );
-        assert!(ready.is_empty(), "codex launches nothing routed: {ready:?}");
+        assert!(
+            ready
+                .iter()
+                .any(|r| r.provider.as_deref() == Some("zai-openai")),
+            "{ready:?}"
+        );
         let row = more
             .iter()
             .find(|r| r.provider.as_deref() == Some("deepseek"))
@@ -1205,9 +1317,22 @@ mod tests {
         let ModelState::Unreachable { reason } = &row.state else {
             panic!("expected Unreachable, got {:?}", row.state);
         };
-        assert!(
-            reason.starts_with("fno cannot launch a routed codex model yet"),
-            "{reason}"
+        assert_eq!(reason, "codex speaks openai; deepseek serves anthropic");
+        // AC2: an openai-protocol vendor with no key needs a key, never
+        // Unreachable.
+        let row = more
+            .iter()
+            .find(|r| r.provider.as_deref() == Some("openrouter"))
+            .expect("openrouter rows list on codex");
+        let ModelState::NoKey { key_env, steps } = &row.state else {
+            panic!("expected NoKey, got {:?}", row.state);
+        };
+        assert_eq!(key_env, "OPENROUTER_API_KEY");
+        assert_eq!(
+            steps.first().map(String::as_str),
+            Some(
+                "fno config set model_routing.providers.openrouter.api_key_env=OPENROUTER_API_KEY"
+            )
         );
     }
 

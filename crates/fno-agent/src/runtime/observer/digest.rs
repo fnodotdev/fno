@@ -1,6 +1,6 @@
 //! Observer digest writers: the human-readable `.md` a sweep or replay
 //! leaves under the observer-reports digests (vault `internal/<owner>/`
-//! when a vault is configured, `~/.fno/observer-reports/<owner>/` when not).
+//! when a vault is configured, `~/.fno/db/observer-reports/<owner>/` when not).
 //! Ported from `cli/src/fno/observer/cli.py` (`_write_digest`,
 //! `_write_target_digest`, `_falsifier_crosstab`).
 //!

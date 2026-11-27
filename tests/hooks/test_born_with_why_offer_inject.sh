@@ -8,7 +8,8 @@
 #   AC2-EDGE: a malformed/truncated events line is skipped, hook exits 0 and
 #             still surfaces a valid later offer.
 #   Silent  : no events file, or only non-offer events -> no output, rc=0.
-#   Wiring  : hooks.json registers the hook under UserPromptSubmit, valid JSON.
+#   Wiring  : codex-hooks.json registers the hook under UserPromptSubmit; claude
+#             runs it as a leg of hooks/hook-front.sh.
 #
 # Exit codes: 0 pass, 1 assertion failed, 77 skipped (missing deps).
 
@@ -17,7 +18,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOOK="${REPO_ROOT}/hooks/born-with-why-offer-inject.sh"
-HOOKS_JSON="${REPO_ROOT}/hooks/hooks.json"
+HOOKS_JSON="${REPO_ROOT}/hooks/codex-hooks.json"
 
 log()  { printf '[born-why-offer-hook] %s\n' "$*"; }
 fail() { printf '[born-why-offer-hook] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -30,6 +31,11 @@ command -v git     &>/dev/null || skip "git not on PATH"
 [[ -f "$HOOK" ]] || fail "hook not found at $HOOK"
 [[ -x "$HOOK" ]] || fail "hook not executable at $HOOK"
 bash -n "$HOOK" || fail "bash -n rejected $HOOK"
+# The hook is a shim into `fno-agent hook front`; it needs a binary.
+source "$REPO_ROOT/hooks/lib/agents-bin.sh"
+FNO_AGENT_BIN="$(fno_agent_bin "$REPO_ROOT")"
+[[ -n "$FNO_AGENT_BIN" ]] || skip "no fno-agent binary"
+export FNO_AGENT_BIN
 
 # Helper: extract the injected additionalContext (empty string if none).
 extract_ctx() {
@@ -540,33 +546,6 @@ ctx="$(printf '%s' "$out" | extract_ctx)"
     || fail "unreadable: rc=3 (wedged graph) ate the offer as a phantom: ${ctx:-<empty>}"
 pass "resolve-guard: unreadable graph (rc 3) degrades to surfacing, not suppression"
 
-# ── Cursor is not burned when the emitter is unavailable ─────────────
-# jq is used unconditionally after the one-way cursor advance, so a
-# missing one must leave the slice unconsumed rather than silently eat it.
-# The missing-emitter branch itself is retired: since the fleet-wide PATH
-# bootstrap, `command -v jq` succeeds on any host with /usr/bin even from a
-# stripped caller PATH, so the hook's early exit is unreachable here exactly
-# as the parser-rescue re-pin in test_worktree_write_protect.sh documented.
-# The cursor advances before the emit by design (see the cursor line and the
-# emit_older_only comment in the hook), so the surviving proof this case
-# keeps is the positive control: a stripped caller PATH still surfaces offers.
-MINBIN="$WORK/minbin"; mkdir -p "$MINBIN"
-for t in bash cat date dirname git head hostname jq kill mkdir mktemp mv readlink rm rmdir sleep stat tail tr wc; do
-    p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
-done
-# POSITIVE CONTROL. A stripped PATH missing some unrelated tool would make
-# the hook die early and look like a silent degrade for the wrong reason
-# (it did: `dirname` was absent, so the hook exited at its `source` line and
-# never reached the guard under test). Prove this PATH can produce an offer.
-offered_line "2026-06-30T15:30:00Z" "x-ctrl00001" >> "$EVENTS"
-out="$(cd "$WORK" && PATH="$MINBIN" bash "$HOOK" 2>/dev/null)" || fail "minbin-control: hook nonzero"
-[[ "$(printf '%s' "$out" | extract_ctx)" == *"x-ctrl00001"* ]] \
-    || fail "minbin-control: stripped caller PATH cannot surface an offer at all"
-pass "minbin-control: stripped caller PATH surfaces an offer via the system-dirs fallback"
-
-# Consume the pending offer so later cases start from a clean cursor.
-run_hook >/dev/null 2>&1
-
 # ── Invalid UTF-8 in the slice must not kill the parse ──────────────
 # Decoding happens at the parser's `for`, outside the per-line try, so one bad
 # byte would raise before any line is read and the cursor would eat everything.
@@ -590,39 +569,6 @@ ctx="$(printf '%s' "$out" | extract_ctx)"
     || fail "offer-escape: offer_line closed the wrapper early: ${ctx:-<empty>}"
 [[ "$ctx" == *"[/system-reminder]"* ]] || fail "offer-escape: offer_line was not defanged"
 pass "offer-escape: offer_line cannot close the reminder wrapper"
-
-# ── A present-but-broken jq must not burn the slice ─────────────────
-# `command -v` proves presence, not success. Without the completion sentinel a
-# dead parser emits nothing and the cursor advances over a live offer.
-offered_line "2026-06-30T16:20:00Z" "x-brokenjq1" >> "$EVENTS"
-cursor_before="$(tr -d ' \n' < "$CURSOR")"
-BROKENBIN="$WORK/brokenbin"; mkdir -p "$BROKENBIN"
-for t in bash dirname git head kill mktemp rm sleep tail tr wc; do
-    p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$BROKENBIN/$t"
-done
-printf '#!/usr/bin/env bash\nexit 1\n' > "$BROKENBIN/jq"; chmod +x "$BROKENBIN/jq"
-out="$(cd "$WORK" && PATH="$BROKENBIN" bash "$HOOK" 2>/dev/null)" || fail "broken-jq: hook nonzero"
-[[ -z "$out" ]] || fail "broken-jq: emitted output from a dead parse: $out"
-[[ "$(tr -d ' \n' < "$CURSOR")" == "$cursor_before" ]] \
-    || fail "broken-jq: cursor advanced on a failed parse (slice destroyed)"
-pass "broken-jq: a failing parser leaves the slice unconsumed"
-
-# ── A failing `tail` must not burn the slice either ─────────────────
-# The completion sentinel proves the parser RAN, not that it was fed. A broken
-# tail hands it empty stdin, it honestly finds no offers, and the caller would
-# advance over a live one. Only the byte-count check catches this.
-BADTAIL="$WORK/badtail"; mkdir -p "$BADTAIL"
-for t in bash dirname git head jq kill mktemp rm sleep tail tr wc; do
-    p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$BADTAIL/$t"
-done
-rm -f "$BADTAIL/tail"; printf '#!/usr/bin/env bash\nexit 1\n' > "$BADTAIL/tail"
-chmod +x "$BADTAIL/tail"
-cursor_before="$(tr -d ' \n' < "$CURSOR")"
-out="$(cd "$WORK" && PATH="$BADTAIL" bash "$HOOK" 2>/dev/null)" || fail "bad-tail: hook nonzero"
-[[ -z "$out" ]] || fail "bad-tail: emitted output from an unfed parse: $out"
-[[ "$(tr -d ' \n' < "$CURSOR")" == "$cursor_before" ]] \
-    || fail "bad-tail: cursor advanced on a short read (slice destroyed)"
-pass "bad-tail: a short read leaves the slice unconsumed"
 
 run_hook >/dev/null 2>&1   # drain for the cases below
 
@@ -660,8 +606,8 @@ out="$( export FNO_HOOK_BUDGET_SKIP_PER_CORE=0
 pass "skip: overloaded run exits before the cursor; the offer re-surfaces"
 run_hook >/dev/null 2>&1   # drain the skipped offer for the wiring check
 
-# ── Wiring: hooks.json registers the hook under UserPromptSubmit ──────
-python3 -c "import json; json.load(open('$HOOKS_JSON'))" || fail "hooks.json failed JSON parse"
+# ── Wiring: codex-hooks.json registers the hook under UserPromptSubmit ─
+python3 -c "import json; json.load(open('$HOOKS_JSON'))" || fail "codex-hooks.json failed JSON parse"
 python3 - "$HOOKS_JSON" <<'PYEOF' || fail "hook not registered under UserPromptSubmit"
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -672,7 +618,7 @@ hit = any(
 )
 sys.exit(0 if hit else 1)
 PYEOF
-pass "hooks.json registers the hook under UserPromptSubmit"
+pass "codex-hooks.json registers the hook under UserPromptSubmit"
 
 log "all scenarios passed"
 exit 0

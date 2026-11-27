@@ -48,6 +48,9 @@ pub struct Squad {
     /// A user-given workspace name (explicit `NewSquad`), or `None` when the
     /// display label derives from `origins`.
     pub name: Option<String>,
+    /// The config project id this workspace was made for (explicit
+    /// `NewSquad`), kept so the project link never rests on folder equality.
+    pub project: Option<String>,
     /// A DURABLE persistence identity, minted lazily the first time an unnamed
     /// squad is persisted (empty until then). Because the model permits two
     /// squads to share an origin, `origins` is NOT a stable key: an unnamed
@@ -270,6 +273,7 @@ impl Session {
             id,
             origins,
             name,
+            project: None,
             // Minted lazily at first persist (unnamed squads only); restore
             // adopts the persisted key so a rebuilt squad keeps its identity.
             key: String::new(),

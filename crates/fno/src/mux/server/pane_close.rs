@@ -235,6 +235,10 @@ impl Core {
             }
             if let Ok(screen_pid) = self.spawn_parked_screen(&channel, rows, cols, &cwd) {
                 let label = self.portal_channel_label(&channel);
+                let line = format!(
+                    "portal {idx}: no signal - {label} ended ({})",
+                    self.parked_cause_line(&channel)
+                );
                 if self.swap_dead_seat(
                     pid,
                     sid,
@@ -242,7 +246,7 @@ impl Core {
                     Some(idx),
                     screen_pid,
                     &label,
-                    &format!("portal {idx}: no signal - {label} ended"),
+                    &line,
                     "seat parked",
                     reason,
                 ) {
@@ -427,7 +431,7 @@ impl Core {
     /// screen: repoint the tab leaf and the portal seat, name the new
     /// pane, emit the pane_closed row, reap the dead viewer, announce.
     /// True when the swap took (the tab held the new leaf).
-    fn swap_dead_seat(
+    pub(super) fn swap_dead_seat(
         &mut self,
         pid: u64,
         sid: u64,

@@ -21,7 +21,7 @@ Before the lane existed, this doc carried a load-bearing correction. The widespr
 
 One of these lanes is obligatory on a code payload. The stop gate (`crates/fno-agent/src/gate/loopcheck.rs`) and `fno do pr merge` enforce that obligation, not just this prose. A code PR that reaches the gate with no head-pinned `review_attestation` is held. The held reason names this harness's command. This doc is the lane menu, and the gate is the authority. Opt out with `config.review.self_review_required = false` only while the global claim-backed opt-out lease is live.
 
-Beside the lanes sits the person gate: `config.review.human` (never | ui | always, default ui). The lanes decide what the machines owe, and this key decides whether a person owes an approval. On `always`, the review-coverage gate (`covered_conjuncts` in `crates/fno-agent/src/gate/loopcheck/coverage_gate.rs`) demands a fresh APPROVED GitHub review by a login that is not the PR author. `fno do pr status` reads `ready: false` with that sentence on the receipt until one lands. The review-round cap does not discharge it. The satisfier reads the same human-approval verdicts the coverage row already classifies (fail-closed on authorship, a stale approval never satisfies). `never` and `ui` keep today's behavior, and `ui` is declared for a future in-UI approval surface.
+Beside the lanes sits the person gate: `config.review.human` (never | ui | always). The lanes decide what the machines owe, and this key decides whether a person owes an approval. On `ui` and `always`, the review-coverage gate (`covered_conjuncts` in `crates/fno-agent/src/gate/loopcheck/coverage_gate.rs`) demands a fresh APPROVED GitHub review by a login that is not the PR author. `fno do pr status` reads `ready: false` with that sentence on the receipt until one lands. The review-round cap does not discharge it. The satisfier reads the same human-approval verdicts the coverage row already classifies (fail-closed on authorship, a stale approval a different rule still satisfies) . `ui` demands the same approval, satisfied through the in-UI lane: a person runs `fno mux app approve <pr>` from the terminal (or approves on the PR's GitHub page). An absent key keeps today's stock-install behavior: no person gate.
 
 ## Merge-gating opt-out leases
 
@@ -431,6 +431,18 @@ The emitter's copy of the rule is gone.
 
 The harness pins one body where it once held two in parity.
 
+## Review receipt at emit
+
+`fno do review read` serves the whole diff a review round must read and records a receipt. `fno doctor event emit -t review_attestation` refuses a clean `code-review` pass without one.
+
+The scope comes from git and the attestation journals, never from flags or the emit's data. A first round covers everything the branch changed against its merge base. When the newest attested head also has a receipt and is an ancestor, a later round starts there. Otherwise it starts at the merge base.
+
+The receipt names the session, the head, the base, the changed files and the sha256 of the scoped diff. The emit needs a receipt from the same session at the same head, and the sha256 must match a fresh computation. The emit's own `head_sha` and `branch` must also name the receipt's head and branch. A different session, an older head, a changed diff, a mismatched or missing claim, or a git failure refuses the pass. The round, flags, counts and execution context in the emit's data relax nothing.
+
+The check is harness-neutral. It reads no transcript, so Claude, Codex and opencode sessions meet the same rule.
+
+The limit is plain: a receipt proves the diff was served to the session. It does not prove the session read or understood it. A session that writes the receipt file by hand can also pass the check.
+
 ## Attestation origin: whose process rendered the verdict
 
 A local attestation records `attester_session_id`, the harness session of the
@@ -456,7 +468,7 @@ A match is strong evidence of self-attestation. A mismatch is weak evidence of a
 
 ## Reviewer context
 
-Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. This field measures execution-context evidence, not who invoked the command. It does not affect coverage or merge policy.
+Each local `review_attestation` can carry `reviewer_context`. When the harness records a forked code-review context, the value is `fresh`. A positive same-context review tool result records `shared`. If no positive context marker exists, including Codex native review, the value is `unknown`. A cross-model peer review records `fresh`: the peer runs in its own session and never shares the builder's context. This field measures execution-context evidence, not who invoked the command. It does not affect the coverage count. At the merge gate it is not inert. A posture rung demanding an independent reviewer refuses a covered row with no reviewed fresh-context attestation at the head. One attestation lands, or the round budget is spent and the posture waives at the cap. A typed stamp is a claim the caller makes about the review's context. The hook-derived stamps are the stronger evidence.
 
 The origin is recorded, not gating.
 
@@ -493,7 +505,7 @@ Two rules are hard. Width is 1: `fno config assert-subagent-budget --width 1` ga
 
 The fresh row's provenance feeds the posture `independent` component, which rewards only a positive `reviewer_context=fresh` marker at the reviewed head. Coverage counting is unchanged: every `reviewed` verdict counts regardless of origin. Two readings are pinned. A fresh round runs FIRST-ROUND SCOPE. The reviewer never reads prior rounds' findings and never narrows to the incremental delta. The fresh marker therefore never rides a round that reviewed only part of the diff. And `execution_context=fork` names not-the-builder's-context. It never means an Agent-tool fork, which inherits the builder's whole conversation. The fresh dispatch is a subagent that starts empty.
 
-The per-harness picker is designed and pending: a `fresh_review` capability field on each harness row. Its designed readers are setup, for the install offer, and the lane, for the fresh-vs-self pick. None ships here. Until it lands, `--fresh` is explicit, and the fallback above is the whole wiring.
+Each harness row now carries a `fresh_review` field (`native`, `package`, or `none`) in `harness_capabilities.toml`. Its readers are still pending: setup, for the install offer, and the lane, for the fresh-vs-self pick. Until they land, `--fresh` is explicit, and the fallback above is the whole wiring.
 
 ## The pass condition and the four verdict states
 

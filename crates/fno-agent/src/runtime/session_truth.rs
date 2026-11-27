@@ -515,6 +515,122 @@ fn parse_codex_record(v: &Value) -> Option<TruthRecord> {
     })
 }
 
+/// One footnote record, typed once at the parse boundary. Every payload
+/// field is optional: each record type fills its own subset.
+#[derive(serde::Deserialize)]
+struct FootnoteRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    ts: Option<String>,
+    #[serde(default)]
+    data: FootnoteData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct FootnoteData {
+    text: Option<String>,
+    content: Option<Vec<FootnoteBlock>>,
+    name: Option<String>,
+    input: Option<Value>,
+    effect_class: Option<String>,
+    verdict: Option<String>,
+    source: Option<String>,
+    disposition: Option<String>,
+    is_error: Option<bool>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cost_usd: Option<f64>,
+    state: Option<String>,
+    reason: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FootnoteBlock {
+    text: Option<String>,
+}
+
+/// A footnote session record the view shows: operator input, assistant
+/// text, each tool call with its effect decision and result, usage, and the
+/// terminal state. Heartbeats, attempts and the other ignorable types carry
+/// nothing a reader needs, so they parse to `None`.
+fn parse_footnote_record(v: &Value) -> Option<TruthRecord> {
+    let rec: FootnoteRecord = serde_json::from_value(v.clone()).ok()?;
+    let d = rec.data;
+    let word = |s: &Option<String>| s.clone().unwrap_or_else(|| "?".to_string());
+    let (role, text) = match rec.kind.as_str() {
+        "user_input" => ("user", d.text?.trim().to_string()),
+        "model_response" => {
+            let blocks = d.content?;
+            let parts: Vec<&str> = blocks
+                .iter()
+                .filter_map(|b| b.text.as_deref())
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            ("assistant", parts.join(" "))
+        }
+        "tool_call" => {
+            let input: String = d
+                .input
+                .as_ref()
+                .map(Value::to_string)
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect();
+            ("tool", format!("{} {input}", word(&d.name)))
+        }
+        "effect_decision" => (
+            "tool",
+            format!(
+                "  effect {}: {} ({})",
+                word(&d.effect_class),
+                word(&d.verdict),
+                word(&d.source)
+            ),
+        ),
+        "tool_result" => (
+            "tool",
+            format!(
+                "  result {}{}",
+                word(&d.disposition),
+                if d.is_error == Some(true) {
+                    " (error)"
+                } else {
+                    ""
+                }
+            ),
+        ),
+        "usage" => {
+            let cost = d
+                .cost_usd
+                .map_or_else(|| "unpriced".to_string(), |c| format!("${c:.4}"));
+            (
+                "tool",
+                format!(
+                    "  usage in={} out={} cost={cost}",
+                    d.input_tokens.unwrap_or(0),
+                    d.output_tokens.unwrap_or(0)
+                ),
+            )
+        }
+        "terminal" => (
+            "status",
+            format!("terminal: {} {}", word(&d.state), word(&d.reason)),
+        ),
+        _ => return None,
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(TruthRecord {
+        role: role.to_string(),
+        text,
+        timestamp: rec.ts,
+    })
+}
+
 /// The 2.x SSE envelope and payload, typed once at the parse boundary.
 #[derive(serde::Deserialize)]
 struct OpendeSseEnvelope {
@@ -1040,7 +1156,7 @@ fn claude_path_for(
 
 /// A session id or an id prefix: 8+ hex digits and dashes. The claude
 /// store matches a prefix only when it names one session.
-fn is_session_id_prefix(handle: &str) -> bool {
+pub(crate) fn is_session_id_prefix(handle: &str) -> bool {
     handle.len() >= 8
         && handle.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
         && handle.chars().filter(char::is_ascii_hexdigit).count() >= 8
@@ -1557,6 +1673,9 @@ pub(crate) fn session_transcript(session: &TruthSession, stores: &Stores) -> Opt
 
 /// The record parser for a file-backed harness.
 pub(crate) fn record_parser(agent: &str) -> Option<fn(&Value) -> Option<TruthRecord>> {
+    if agent == "footnote" {
+        return Some(parse_footnote_record);
+    }
     match agent.as_harness() {
         Harness::Claude => Some(parse_claude_record),
         Harness::Codex => Some(parse_codex_record),
@@ -1845,6 +1964,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn footnote_records_render_the_view_and_skip_ignorable_types() {
+        let dir = tmp("footnote-view");
+        let path = dir.join("rec.jsonl");
+        let lines = [
+            r#"{"v":1,"seq":0,"type":"user_input","ts":"2026-11-26T03:00:00.000Z","data":{"text":"ls","origin":"operator"}}"#,
+            r#"{"v":1,"seq":1,"type":"tool_call","data":{"name":"Bash","input":{"command":"ls"}}}"#,
+            r#"{"v":1,"seq":2,"type":"effect_decision","data":{"effect_class":"read","verdict":"allow","source":"mode"}}"#,
+            r#"{"v":1,"seq":3,"type":"tool_result","data":{"disposition":"none","is_error":false}}"#,
+            r#"{"v":1,"seq":4,"type":"heartbeat","ignorable":true,"data":{"state":"working"}}"#,
+            r#"{"v":1,"seq":5,"type":"model_response","data":{"content":[{"type":"text","text":"two files"},{"type":"tool_use","name":"Bash"}]}}"#,
+            r#"{"v":1,"seq":6,"type":"usage","data":{"input_tokens":10,"output_tokens":4,"cost_usd":null}}"#,
+            r#"{"v":1,"seq":7,"type":"terminal","data":{"state":"done","reason":"end_turn"}}"#,
+        ];
+        std::fs::write(&path, lines.join("\n")).unwrap();
+        let parse = record_parser("footnote").expect("footnote has a reader");
+        let got = tail_records(&path, 20, parse).unwrap();
+        let shown: Vec<(&str, &str)> = got
+            .iter()
+            .map(|r| (r.role.as_str(), r.text.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("user", "ls"),
+                ("tool", "Bash {\"command\":\"ls\"}"),
+                ("tool", "  effect read: allow (mode)"),
+                ("tool", "  result none"),
+                ("assistant", "two files"),
+                ("tool", "  usage in=10 out=4 cost=unpriced"),
+                ("status", "terminal: done end_turn"),
+            ]
+        );
     }
 
     const NOW: f64 = 1_791_460_800.0; // 2026-10-08T12:00:00Z

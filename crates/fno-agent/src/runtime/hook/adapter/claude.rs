@@ -1,6 +1,6 @@
 //! The claude Code hook payload: the shape hooks.json producers send.
 
-use super::{effort_field, str_field, HookEvent};
+use super::{effort_field, permission_message, str_field, HookEvent};
 use serde_json::Value;
 
 pub(crate) fn normalize(event: &str, payload: &Value) -> HookEvent {
@@ -12,6 +12,7 @@ pub(crate) fn normalize(event: &str, payload: &Value) -> HookEvent {
         Some(m) if !m.is_empty() => m.to_string(),
         _ => question_text(payload, &tool),
     };
+    let message = permission_message(event, &tool, message);
     HookEvent {
         harness: "claude".into(),
         event: event.into(),

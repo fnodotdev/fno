@@ -743,6 +743,29 @@ got="$(stored '.output_contract')"
 [[ "$got" == "json_block" ]] && pass "row carries output_contract=json_block" \
   || fail "output_contract: want json_block, got '$got'"
 
+echo "== peer stamp (AC1-HP) =="
+# The peer lane's one caller stamps fresh (consume-peer-verdict.sh emit()):
+# the cross-model peer never shares the builder's context, which is the
+# property reviewer_context measures, so a Reviewed peer row satisfies the
+# independent rung. This pins the row the predicate's independent arm reads.
+# The findings array is empty, so the measured verdict is pass.
+F15_CLEAN="$TMP/findings-clean.json"
+printf '[]' > "$F15_CLEAN"
+rm -f "$TMP/last-emit.txt"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-full" bash "$EMITTER" peer pass fresh --findings-file "$F15_CLEAN") >/dev/null 2>&1
+[[ -f "$TMP/last-emit.txt" ]] && pass "peer fresh emit writes an event" \
+  || fail "peer fresh emit wrote nothing"
+got="$(stored '.reviewer_context')"
+[[ "$got" == "fresh" ]] && pass "peer row carries reviewer_context=fresh" \
+  || fail "peer reviewer_context: want fresh, got '$got'"
+got="$(stored '.reviewer')"
+[[ "$got" == "peer" ]] && pass "peer row carries the peer reviewer name" \
+  || fail "peer reviewer name: want peer, got '$got'"
+got="$(stored '.verdict')"
+[[ "$got" == "pass" ]] && pass "peer row measures verdict pass on a clean payload" \
+  || fail "peer verdict: want pass, got '$got'"
+
 echo "== --findings-file refusals (AC2-ERR) =="
 for case in missing invalid notarray; do
   case "$case" in

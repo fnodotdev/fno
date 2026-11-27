@@ -839,6 +839,11 @@ pub struct HarnessFlags<'a> {
     /// An unrouted spawn's own `--settings` file (a sandbox write policy
     /// alone owes one). A route's file wins when both are set.
     pub settings: Option<&'a str>,
+    /// The spawn's `--role`, so the plain lane's command rules consult the
+    /// per-role `[allow_rules]` override. A routed or role-resolved spawn
+    /// resolves its rules at the seam with the role; this is the plain
+    /// unrouted path's carrier.
+    pub role: Option<&'a str>,
 }
 
 /// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
@@ -1738,13 +1743,24 @@ pub fn bg_create(
             }
         }
     }
-    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+    let rules = crate::spawn::auto_approve::command_rules(flags.role);
+    if let Some(slot) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
         // the same argv position Python's bg_create puts it. A sandbox file
-        // already folds the scrub floor.
-        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
-    } else if !floor.is_empty() {
-        match crate::model_env_scrub::write_scrub_settings(&floor) {
+        // already folds the scrub floor, and both file writers fold fno's
+        // command rules (D3653).
+        argv.splice(4..4, ["--settings".to_string(), slot.to_string()]);
+    } else if !overlay_routes && (!floor.is_empty() || !rules.is_empty()) {
+        // The plain unrouted lane owns no settings file yet, so this floor
+        // file is where fno's command rules ride (D3653) beside the model
+        // floor. A rules-only file (an empty floor) writes when the config
+        // override leaves the rules on. An overlay whose extra_env carries
+        // route provenance keeps today's argv (the routed-overlay pin): its
+        // settings slot stays empty, and its rules come from its own config
+        // dir - the fleet's bg lane passes only the TARGET_NO_MERGE
+        // bookkeeping carrier there, so no production worker takes this
+        // branch.
+        match crate::model_env_scrub::write_scrub_settings(&floor, &rules) {
             Ok(path) => {
                 let p = path.display().to_string();
                 argv.splice(4..4, ["--settings".to_string(), p]);
@@ -2428,9 +2444,11 @@ pub fn validate_spawn_inputs(name: &str, from_name: &str) -> Result<(), String> 
 use crate::agent_lock::{holder_note, AgentLock};
 use crate::spawn_gate_admission::AnswerCaller;
 
-/// Stable fno-side log path for `fno agent logs <name>` (`_derive_log_path`).
-fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
-    home.root().join("logs").join(format!("{}.log", name))
+/// Stable fno-side log path for `fno agent logs <name>`, keyed on the
+/// session id so a reused name never inherits an earlier agent's log. The
+/// row's `log_path` field is what readers follow.
+fn derive_log_path(home: &AgentsHome, session_id: &str) -> PathBuf {
+    home.root().join("logs").join(format!("{session_id}.log"))
 }
 
 /// The transport short id: the row's own key, else the one derived from the
@@ -2973,6 +2991,60 @@ fn push_output_format(argv: &mut Vec<String>, output_format: Option<&str>) {
 /// Set to `1` by the front door's `fno agent spawn --mux`: the headless run
 /// keeps a registry row, so it shows in the mux while it runs.
 pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
+
+/// Whether a reporting child's row is one a person asked to watch
+/// (`fno agent spawn --mux`), so it keeps its sideline place. The opt-in
+/// reaches a child by env on every lane but claude, which takes that env off
+/// its child. There the lane's own word decides: it names every child whose
+/// row it drops, so a claude child it did not name keeps a watched row, even
+/// when the lane's own stamp of that row failed.
+pub(crate) fn watch_row_run(
+    agent_self: Option<&str>,
+    harness: Option<&str>,
+    show_row: bool,
+    told_to_drop: bool,
+) -> bool {
+    agent_self.is_some()
+        && (show_row || (harness.map(Harness::parse) == Some(Harness::Claude) && !told_to_drop))
+}
+
+/// The print word on a claude launch argv: `claude -p` or `claude --print`.
+/// A word glued to its neighbours (`the-p-flag`) is not the flag.
+pub(crate) fn print_word_in_argv(argv: &[String]) -> bool {
+    argv.iter().any(|a| matches!(a.as_str(), "-p" | "--print"))
+}
+
+/// A claude print run typed by hand: one nobody spawned through fno. The
+/// entrypoint does not mark this form, so the word is read off the CLI's own
+/// argv, at the pid the CLI hands every hook. A spawn keeps the row it was
+/// given, and a CLI that hands no pid reads as interactive. macOS only:
+/// elsewhere the argv is `ps` output split on whitespace, so a prompt word
+/// can read as the flag, and a wrong stamp stays on the row.
+pub(crate) fn typed_print_run(
+    agent_self: Option<&str>,
+    harness: Option<&str>,
+    pid: Option<u32>,
+) -> bool {
+    cfg!(target_os = "macos")
+        && agent_self.is_none()
+        && harness.map(Harness::parse) == Some(Harness::Claude)
+        && pid
+            .and_then(crate::census::process_argv)
+            .is_some_and(|argv| print_word_in_argv(&argv))
+}
+
+/// [`typed_print_run`] read from this process's own env: a session with no
+/// fno identity, the named harness, and the pid the CLI hands every hook.
+/// Every door that mints a row for the session it runs in asks this one question.
+pub(crate) fn hand_typed_print_run(harness: Option<&str>) -> bool {
+    typed_print_run(
+        None,
+        harness,
+        std::env::var("CLAUDE_PID")
+            .ok()
+            .and_then(|pid| pid.parse().ok()),
+    )
+}
 
 /// Dispatch a `claude -p` truly-headless one-shot (`headless` substrate).
 ///
@@ -3672,7 +3744,7 @@ fn create(
     // permission error) -- otherwise leave the leg unset so
     // validate_resolvable_handle can still refuse the row when no other leg
     // resolves, instead of writing a log_path that is a claim, not evidence.
-    let log_path = derive_log_path(home, name);
+    let log_path = derive_log_path(home, &short_id);
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -3898,6 +3970,80 @@ fn create(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_hand_typed_print_run_reads_as_headless() {
+        let claude = Some("claude");
+        let words = |argv: &[&str]| argv.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert!(print_word_in_argv(&words(&[
+            "claude",
+            "-p",
+            "summarize this thread"
+        ])));
+        assert!(print_word_in_argv(&words(&["claude", "--print", "x"])));
+        assert!(
+            !print_word_in_argv(&words(&[
+                "claude",
+                "--model",
+                "sonnet",
+                "fix",
+                "the-p-flag"
+            ])),
+            "only the whole word is the flag"
+        );
+        // A CLI that hands no pid reads as interactive, and a spawn keeps
+        // the row it was given.
+        assert!(!typed_print_run(None, claude, None));
+        assert!(!typed_print_run(
+            Some("w1"),
+            claude,
+            Some(std::process::id())
+        ));
+        // A live pid answers from its own argv. `sh` reads its first
+        // argument after the command string as $0, so the word stays whole.
+        let spawn = |arg: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", "sleep 10; :", arg])
+                .spawn()
+                .unwrap()
+        };
+        let mut print = spawn("-p");
+        let mut plain = spawn("x");
+        let (read_print, read_plain) = (
+            typed_print_run(None, claude, Some(print.id())),
+            typed_print_run(None, claude, Some(plain.id())),
+        );
+        print.kill().unwrap();
+        plain.kill().unwrap();
+        // The word is read only where the argv is exact, so the stamp is
+        // macOS's alone. Elsewhere the same pid reads as interactive.
+        assert_eq!(read_print, cfg!(target_os = "macos"));
+        assert!(!read_plain);
+    }
+
+    /// A `--mux` row keeps its sideline place on every lane, the claude lane
+    /// included when its own stamp of the row failed: a child it did not
+    /// tell to drop its row reports the watch mark itself.
+    #[test]
+    fn a_kept_claude_child_reports_the_watch_mark() {
+        let claude = Some("claude");
+        let codex = Some("codex");
+        assert!(
+            watch_row_run(Some("w1"), claude, false, false),
+            "the claude lane's own word stands in for the opt-in"
+        );
+        assert!(watch_row_run(Some("w1"), codex, true, false));
+        assert!(
+            !watch_row_run(Some("w1"), codex, false, false),
+            "a row nobody asked to watch leaves the sideline"
+        );
+        assert!(
+            !watch_row_run(Some("w1"), claude, false, true),
+            "a child told to drop its row watches nothing"
+        );
+        assert!(!watch_row_run(None, claude, true, false));
+    }
 
     #[cfg(unix)]
     #[test]
@@ -4260,6 +4406,7 @@ mod tests {
             passthrough: &[],
             route: None,
             settings: None,
+            role: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),

@@ -1310,6 +1310,13 @@ fn build_intake_node(spec: &IntakeSpec, entries: &[Value]) -> Result<Value, Stri
                 .filter(|s| !s.is_empty())
                 .collect()
         })
+        // The body form keeps `sources` in the `## Gate records` fence.
+        .or_else(|| {
+            let text = std::fs::read_to_string(&spec.plan_path).ok()?;
+            crate::plan_doc::records::body_list(&text, "sources")
+                .ok()
+                .flatten()
+        })
         .unwrap_or_default();
     let evidence = if plan_sources.is_empty() {
         format!("plan:{}", spec.plan_path)

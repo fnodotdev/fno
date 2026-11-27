@@ -291,6 +291,9 @@ fn main_ci_token_from_pages<'a>(
         if let Some(sha) = run.get("sha") {
             fields.insert("sha".into(), sha.clone());
         }
+        // The promoted sha is the previous head. Name the head still in
+        // flight beside it, or the line reads as main idle on an old commit.
+        fields.insert("in_flight".into(), json!(head_sha));
     }
     // A pending verdict with nothing promoted names the newest settled run:
     // once a red is resolved by a newer pass the line would read bare
@@ -377,6 +380,13 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
                     )
                 }
                 None => match o.get("workflow") {
+                    Some(_) if o.contains_key("in_flight") => format!(
+                        "{} ({} at {}; head {} in flight)",
+                        field("verdict"),
+                        field("workflow"),
+                        field("sha"),
+                        field("in_flight").chars().take(7).collect::<String>()
+                    ),
                     Some(_) => format!(
                         "{} ({} at {})",
                         field("verdict"),
@@ -971,6 +981,22 @@ mod tests {
         );
     }
 
+    /// A promoted previous-head red names the head still in flight, so the
+    /// lead sees main moved to a new commit. The red line keeps its shape.
+    #[test]
+    fn a_promoted_pending_line_names_the_head_in_flight() {
+        let promoted = serde_json::json!({
+            "verdict": "pending", "workflow": "cli-ci", "sha": "a3a0f06c2c",
+            "in_flight": "6782f71106",
+        });
+        assert_eq!(
+            main_ci_render(Some(&promoted)),
+            "pending (cli-ci at a3a0f06c2c; head 6782f71 in flight)".to_string()
+        );
+        let red = serde_json::json!({"verdict": "red", "workflow": "cli-ci", "sha": "a1"});
+        assert_eq!(main_ci_render(Some(&red)), "red (cli-ci at a1)".to_string());
+    }
+
     /// The render carries the evidence set on the green line.
     #[test]
     fn the_green_line_renders_its_workflow_evidence() {
@@ -1182,6 +1208,7 @@ mod tests {
             token,
             serde_json::json!({
                 "verdict": "pending", "workflow": "cli-ci", "sha": "40bde08",
+                "in_flight": "6889efa",
             })
         );
         assert_eq!(main_ci_red_run(&token), None);
@@ -1224,6 +1251,7 @@ mod tests {
             token_at("head", &at_sha, &on_main),
             serde_json::json!({
                 "verdict": "pending", "workflow": "cli-ci", "sha": "prev",
+                "in_flight": "head",
                 "stale": [{
                     "workflow": "release", "sha": "old1",
                     "created_at": "2026-09-28T08:00:00Z",

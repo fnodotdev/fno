@@ -388,7 +388,7 @@ fn leg_ensure(payload: &serde_json::Value) -> (i32, String, String) {
     )
 }
 
-fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
+pub(crate) fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     if external_backend_selected() {
         let name = crate::tracker::backend_name(None);
         return match crate::tracker::backend(&name) {

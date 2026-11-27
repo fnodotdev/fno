@@ -21,7 +21,8 @@ use crate::agents_config::config_table_merged;
 pub const ROUTE_PROVIDER_ENV: &str = "FNO_ROUTE_PROVIDER";
 
 const DEFAULT_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const DEFAULT_WIRE_API: &str = "chat";
+/// codex-cli 0.166 refuses `chat` at config load ("no longer supported").
+const DEFAULT_WIRE_API: &str = "responses";
 
 /// A resolved codex route: the argv tokens select the endpoint, the env pairs
 /// carry the key under the name the provider declares plus the provider stamp.
@@ -147,40 +148,60 @@ pub fn resolve_codex_route(
             "provider name {provider:?} is not a safe codex provider id"
         )));
     }
-    let table =
-        config_table_merged(cwd, &["model_routing", "providers", provider]).ok_or_else(|| {
-            CodexRouteError::Refused(format!("provider {provider:?} is not configured"))
-        })?;
-    let field = |name: &str| {
-        table
-            .get(name)
+    let record = config_table_merged(cwd, &["model_routing", "providers", provider]);
+    let reach = crate::provider_route::reach_endpoint(provider, "openai");
+    // A record of any protocol is the consent to bill the vendor; a builtin
+    // reach vendor needs none.
+    if record.is_none() && !reach.is_some_and(|(_, builtin)| builtin) {
+        return Err(CodexRouteError::Refused(format!(
+            "provider {provider:?} is not configured"
+        )));
+    }
+    let text = |t: Option<&toml::Table>, name: &str| {
+        t.and_then(|t| t.get(name))
             .and_then(toml::Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
             .map(str::to_string)
     };
     // A provider without a protocol belongs to the claude lane (the claude
-    // default), never the codex one - the same default Python applies.
-    let protocol = field("protocol")
+    // default) - unless the reach table states its openai endpoint, which
+    // also serves a record written for the claude lane.
+    let protocol = text(record.as_ref(), "protocol")
         .unwrap_or_else(|| "anthropic".to_string())
         .to_lowercase();
-    if protocol != "openai" {
+    let endpoint = reach.map(|(ep, _)| ep);
+    // The key belongs to the vendor, not the protocol: any record's key
+    // fields win.
+    let key_record = record.as_ref();
+    let record = record.as_ref().filter(|_| protocol == "openai");
+    if record.is_none() && endpoint.is_none() {
         return Err(CodexRouteError::Unrouted(format!(
             "provider {provider:?} declares protocol {protocol:?}, which belongs to the claude lane"
         )));
     }
-    let base_url = field("base_url").unwrap_or_default();
+    // The openai record wins per field; the reach endpoint fills the gaps.
+    let field = |rec_name: &str, reach_name: &str| {
+        text(record, rec_name).or_else(|| text(endpoint, reach_name))
+    };
+    let base_url = field("base_url", "base_url").unwrap_or_default();
     if base_url.is_empty() {
         return Err(CodexRouteError::Refused(format!(
             "provider {provider:?} has no base_url"
         )));
     }
-    let key_env = field("api_key_env").unwrap_or_else(|| DEFAULT_API_KEY_ENV.to_string());
-    let key = crate::provider_key::resolve_key(&key_env, field("api_key_file").as_deref())
-        .ok_or_else(|| {
-            CodexRouteError::Refused(format!(
-                "provider {provider:?} has no API key under {key_env:?} (env or api_key_file)"
-            ))
-        })?;
-    let wire_api = field("wire_api").unwrap_or_else(|| DEFAULT_WIRE_API.to_string());
+    let key_field = |rec_name: &str, reach_name: &str| {
+        text(key_record, rec_name).or_else(|| text(endpoint, reach_name))
+    };
+    let key_env =
+        key_field("api_key_env", "key_env").unwrap_or_else(|| DEFAULT_API_KEY_ENV.to_string());
+    let key_file = key_field("api_key_file", "key_file");
+    let key = crate::provider_key::resolve_key(&key_env, key_file.as_deref()).ok_or_else(|| {
+        CodexRouteError::Refused(format!(
+            "provider {provider:?} has no API key under {key_env:?} (env or api_key_file)"
+        ))
+    })?;
+    let wire_api = field("wire_api", "wire_api").unwrap_or_else(|| DEFAULT_WIRE_API.to_string());
     // Every embedded value becomes a TOML literal string (single-quoted, no
     // escapes); a single quote or a control char would break the literal or
     // survive into the argv. Controlled config values we won't try to escape.
@@ -201,7 +222,7 @@ pub fn resolve_codex_route(
     let config_args = vec![
         "-c".to_string(),
         format!(
-            "model_providers.{provider}={{ base_url = '{base_url}', env_key = '{key_env}', wire_api = '{wire_api}' }}"
+            "model_providers.{provider}={{ name = '{provider}', base_url = '{base_url}', env_key = '{key_env}', wire_api = '{wire_api}' }}"
         ),
         "-c".to_string(),
         format!("model_provider='{provider}'"),
@@ -427,6 +448,29 @@ api_key_env = "FNO_TEST_ZAI_KEY"
         assert!(argv[route.config_args.len() + 1] == "-c");
         assert!(argv[route.config_args.len() + 2].starts_with("sandbox_workspace_write"));
         assert_eq!(argv.last().unwrap(), "sid");
+        // codex-cli 0.166 refuses a nameless provider and `wire_api = chat`.
+        assert_eq!(
+            route.config_args.get(1).map(String::as_str),
+            Some("model_providers.zai-openai={ name = 'zai-openai', base_url = 'https://api.z.ai/api/coding/paas/v4', env_key = 'FNO_TEST_ZAI_KEY', wire_api = 'responses' }")
+        );
+        // The picker's one-field consent record (no protocol, so the claude
+        // lane reads it too) opens codex through the reach openai endpoint.
+        fx.write("[model_routing.providers.openrouter]\napi_key_env = \"OPENROUTER_API_KEY\"\n");
+        std::env::set_var("OPENROUTER_API_KEY", "or-key");
+        let route = resolve_codex_route(fx.cwd(), "openrouter", "openai/gpt-5.5").unwrap();
+        assert!(
+            route.config_args.get(1).is_some_and(|t| t.contains(
+                "base_url = 'https://openrouter.ai/api/v1', env_key = 'OPENROUTER_API_KEY'"
+            )),
+            "{:?}",
+            route.config_args
+        );
+        assert_eq!(
+            route.config_args.get(3).map(String::as_str),
+            Some("model_provider='openrouter'")
+        );
+        assert_eq!(route.key_env, "OPENROUTER_API_KEY");
+        std::env::remove_var("OPENROUTER_API_KEY");
         std::env::remove_var("FNO_TEST_ZAI_KEY");
         let _ = std::fs::remove_dir_all(&fx.dir);
     }

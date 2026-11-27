@@ -14,7 +14,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +25,8 @@ use super::wire::{GuestFrame, HostFrame, ReportState, CHUNK};
 use super::{CONTAINER_SETTINGS, CONTAINER_SOCK, LAUNCH_METHOD, PROXY_ADDR};
 
 const REPLY_BOUND: Duration = Duration::from_secs(15);
+/// A loop op may push, open a PR or run the Stop decision on the host.
+const OP_BOUND: Duration = Duration::from_secs(900);
 const TAIL_EVERY: Duration = Duration::from_secs(2);
 const MAX_REQUEST: u32 = 1024 * 1024;
 
@@ -41,6 +43,7 @@ struct Shared {
     streams: Mutex<HashMap<u32, Sender<Option<Vec<u8>>>>>,
     connects: Mutex<HashMap<u32, Sender<(bool, String)>>>,
     next: AtomicU32,
+    seq: AtomicU64,
     launch: Mutex<Launch>,
 }
 
@@ -51,6 +54,10 @@ impl Shared {
 
     /// Send a request frame and wait for its reply.
     fn ask(&self, make: impl FnOnce(u32) -> GuestFrame) -> (bool, String) {
+        self.ask_within(REPLY_BOUND, make)
+    }
+
+    fn ask_within(&self, bound: Duration, make: impl FnOnce(u32) -> GuestFrame) -> (bool, String) {
         let req = self.id();
         let (tx, rx) = mpsc::channel();
         self.replies
@@ -60,9 +67,10 @@ impl Shared {
         if self.out.send(make(req)).is_err() {
             return (false, "the relay stream is closed".into());
         }
-        let answer = rx
-            .recv_timeout(REPLY_BOUND)
-            .unwrap_or((false, "the host did not answer in 15s".into()));
+        let answer = rx.recv_timeout(bound).unwrap_or((
+            false,
+            format!("the host did not answer in {}s", bound.as_secs()),
+        ));
         self.replies
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -112,6 +120,7 @@ fn serve() -> i32 {
         streams: Mutex::default(),
         connects: Mutex::default(),
         next: AtomicU32::new(1),
+        seq: AtomicU64::new(1),
         launch: Mutex::new(Launch {
             env,
             ..Launch::default()
@@ -327,10 +336,24 @@ fn serve_client(shared: &Shared, mut conn: UnixStream) {
             relay(shared.ask(|req| GuestFrame::SessionReport { req, source }))
         }
         LAUNCH_METHOD => launch(shared, &params),
+        super::ops::OP_METHOD => match serde_json::from_value::<super::ops::Op>(params) {
+            Ok(op) => match op.check() {
+                Ok(()) => {
+                    let seq = shared.seq.fetch_add(1, Ordering::Relaxed);
+                    relay(shared.ask_within(OP_BOUND, |req| GuestFrame::Op { req, seq, op }))
+                }
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(super::ops::refused(&format!(
+                "{} ({e})",
+                super::ops::OP_METHOD
+            ))),
+        },
         other => Err(Refusal(format!(
             "the sandbox refuses `{}`: a sandboxed worker may call agent.status, \
-             agent.report and agent.session-report only",
-            other.escape_debug()
+             agent.report, agent.session-report and {} only",
+            other.escape_debug(),
+            super::ops::OP_METHOD
         ))),
     };
     write_response(&mut conn, id, answer);
@@ -667,6 +690,7 @@ mod tests {
             streams: Mutex::default(),
             connects: Mutex::default(),
             next: AtomicU32::new(1),
+            seq: AtomicU64::new(1),
             launch: Mutex::new(Launch {
                 env: vec![("ROUTE_KEY".into(), Some("k".into()))],
                 ..Launch::default()
@@ -700,6 +724,32 @@ mod tests {
                 .and_then(Value::as_str)
                 .unwrap();
             assert!(msg.contains(method), "{method}: {msg}");
+        }
+        for op in [
+            json!({"op": "merge"}),
+            json!({"op": "attest"}),
+            json!({"op": "spawn", "argv": ["sh"]}),
+        ] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let body = serde_json::to_vec(
+                &json!({"id": 4, "method": super::super::ops::OP_METHOD, "params": op}),
+            )
+            .unwrap();
+            client
+                .write_all(&(body.len() as u32).to_le_bytes())
+                .unwrap();
+            client.write_all(&body).unwrap();
+            serve_client(&shared, server);
+            let mut len = [0u8; 4];
+            client.read_exact(&mut len).unwrap();
+            let mut reply = vec![0u8; u32::from_le_bytes(len) as usize];
+            client.read_exact(&mut reply).unwrap();
+            let reply: Value = serde_json::from_slice(&reply).unwrap();
+            let msg = reply.pointer("/error/message").and_then(Value::as_str);
+            assert!(
+                msg.is_some_and(|m| m.contains("lead does")),
+                "{op}: {reply}"
+            );
         }
         assert!(rx.try_recv().is_err(), "no refused op crosses the stream");
         assert!(launch(&shared, &json!({})).is_err());

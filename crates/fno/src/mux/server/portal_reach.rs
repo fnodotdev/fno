@@ -892,7 +892,7 @@ impl Core {
             (None, Reach::Locate, serve_attach::ServeSeat::Honest(truth)) => {
                 locate_argv_with(&row, Some(truth.why.as_str()), &truth.facts)
             }
-            (None, Reach::Follow, _) => peek_argv(&row.name),
+            (None, Reach::Follow, _) => portal_follow_argv(&row),
             (None, Reach::Locate, serve_attach::ServeSeat::Outside) => locate_argv(&row),
         };
         let mechanism = match serve_env.is_empty() {
@@ -1909,6 +1909,167 @@ impl Core {
         match (hits.next(), hits.next()) {
             (Some(row), None) if !row.name.is_empty() => row.name.clone(),
             _ => key.to_string(),
+        }
+    }
+
+    /// The one registry row a parked channel key names, exited rows
+    /// included: the fill refuses an ended row, the parked screen has to
+    /// read it. `None` for zero rows or several that are not one session.
+    fn parked_row(&self, key: &str) -> Option<&RegistryAgent> {
+        let mut hits = self
+            .agents
+            .iter()
+            .filter(|a| a.mux.is_none() && a.keyed_by(key));
+        match (hits.next(), hits.next()) {
+            (Some(row), None) => Some(row),
+            (Some(a), Some(b)) if same_session_twins(a, b) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Whether the revive key can run for this row: a claude row whose
+    /// registry reading is dead. A live row attaches on focus and a
+    /// non-claude row has no re-entry plan to ask for.
+    fn parked_row_revivable(row: &RegistryAgent) -> bool {
+        row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
+            && Self::row_resumable(row)
+    }
+
+    /// What the no-signal screen says after `ended`: the reading the
+    /// registry holds about the row, then the key or the reason there is
+    /// none. It names only what the row carries: the registry keeps no stop
+    /// cause for a clean exit.
+    pub(super) fn parked_cause_line(&self, key: &str) -> String {
+        let Some(row) = self.parked_row(key) else {
+            return "no registry row answers it".to_string();
+        };
+        let reading = match (row.exited, &row.liveness) {
+            (true, agents_view::Liveness::Dead) => {
+                "the registry reads it exited and its process gone"
+            }
+            (true, _) => "the registry reads it exited",
+            (false, agents_view::Liveness::Dead) => "its process is gone",
+            (false, agents_view::Liveness::Alive) => "its session is still live",
+            (false, agents_view::Liveness::Unmeasured) => "its liveness was never measured",
+        };
+        if Self::parked_row_revivable(row) {
+            return format!("{reading}, no stop cause recorded - press r to revive");
+        }
+        match Self::row_no_pane_reason(row) {
+            Some(reason) => format!(
+                "{reading} - no revive: {}",
+                Self::no_pane_reason_text(reason)
+            ),
+            None => reading.to_string(),
+        }
+    }
+
+    /// The revive key on a parked portal seat. `true` means the key was
+    /// consumed: the focused pane is a parked seat, so no byte reaches it
+    /// (its `tail` reads nothing). The canonical revive plan resolves off
+    /// the core loop and `ReviveSeat` lands in [`Self::finish_seat_revive`].
+    pub(super) fn request_seat_revive(&mut self, client_id: u64, pid: u64) -> bool {
+        let parked = self
+            .panes
+            .get(&pid)
+            .is_some_and(|e| e.portal_hold.is_some());
+        let Some(idx) = self.portal_of(Some(pid)).filter(|_| parked) else {
+            return false;
+        };
+        let key = self
+            .portals
+            .get(&idx)
+            .map(|p| p.row_key.clone())
+            .unwrap_or_default();
+        let Some(row) = self.parked_row(&key) else {
+            self.notice(
+                client_id,
+                format!("portal {idx}: no registry row answers {key}"),
+            );
+            return true;
+        };
+        if !Self::parked_row_revivable(row) {
+            let why = Self::row_no_pane_reason(row)
+                .map(Self::no_pane_reason_text)
+                .unwrap_or("this row is not a dead claude session");
+            let text = format!("portal {idx}: no revive - {why}");
+            self.notice(client_id, text);
+            return true;
+        }
+        let name = row.name.clone();
+        self.notice(client_id, format!("portal {idx}: reviving {name}"));
+        self.resolve_reentry(
+            client_id,
+            &name,
+            "revive",
+            ReentrySpawnRequest::ReviveSeat { pid },
+        );
+        true
+    }
+
+    /// The revive plan landed, staged in `reentry_verdict`: spawn its argv
+    /// and swap it into the parked seat, the same swap the resume re-attach
+    /// makes for a viewer whose job restarted. The seat must still be
+    /// parked; a seat the operator closed or filled while the plan resolved
+    /// is left alone.
+    pub(super) fn finish_seat_revive(&mut self, client_id: u64, pid: u64) {
+        let Some(verdict) = self.reentry_verdict.take() else {
+            return;
+        };
+        let parked = self
+            .panes
+            .get(&pid)
+            .is_some_and(|e| e.portal_hold.is_some());
+        let (Some(idx), Some((sid, ti))) = (
+            self.portal_of(Some(pid)).filter(|_| parked),
+            self.session.find_pane(pid),
+        ) else {
+            self.notice(client_id, "revive: the portal seat is no longer parked");
+            return;
+        };
+        let (rows, cols) = self
+            .panes
+            .get(&pid)
+            .map(|e| e.vt.size())
+            .unwrap_or((24, 80));
+        let cwd = self
+            .session
+            .squad(sid)
+            .map(|s| s.canonical_cwd().to_string())
+            .unwrap_or_default();
+        let key = self
+            .portals
+            .get(&idx)
+            .map(|p| p.row_key.clone())
+            .unwrap_or_default();
+        let (name, attach_id) = self
+            .parked_row(&key)
+            .map(|row| (row.name.clone(), row.attach_id.clone()))
+            .unwrap_or_else(|| (key.clone(), None));
+        let new_pid = match self.spawn_pane_cmd(&verdict.prefixed_argv(), rows, cols, &cwd) {
+            Ok(new_pid) => new_pid,
+            Err(error) => {
+                self.notice(client_id, format!("portal {idx}: revive failed: {error}"));
+                return;
+            }
+        };
+        let line = format!("portal {idx}: {name} revived - re-attached");
+        if self.swap_dead_seat(
+            pid,
+            sid,
+            ti,
+            Some(idx),
+            new_pid,
+            &name,
+            &line,
+            "seat revived",
+            "revived from its portal",
+        ) {
+            if let Some(id) = attach_id {
+                self.attached.insert(id, new_pid);
+            }
+        } else {
+            self.reap_pane(new_pid);
         }
     }
 

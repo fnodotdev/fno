@@ -23,6 +23,8 @@ const MATCH_KEYS: [&str; 14] = [
 ];
 
 pub(super) fn register(reg: &mut Registry) {
+    reg.before("UserBlock", &["working_hours"], check_working_hours);
+    reg.before("UserBlock", &["timezone"], check_timezone);
     reg.model_before("AttentionBlock", ignore_retired_rows);
 
     reg.before("DispatchBlock", &["auto_merge"], coerce_auto_merge);
@@ -281,6 +283,102 @@ fn coerce_write_roots(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     Ok(Value::Array(roots))
 }
 
+/// `[user.working_hours]`: weekday keys with `HH:MM-HH:MM` lists, the same
+/// grammar `fno-agent` reads (agents_config.rs `parse_hours_range`). `config
+/// set` refuses a bad range here instead of letting the runtime read it as
+/// never away.
+fn check_working_hours(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    const DAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    let Value::Object(days) = &v else {
+        return Ok(v);
+    };
+    let minute_of = |part: &str| -> Option<u32> {
+        let (h, m) = part.trim().split_once(':')?;
+        let two = |t: &str| t.len() == 2 && t.bytes().all(|b| b.is_ascii_digit());
+        if !two(h) || !two(m) {
+            return None;
+        }
+        let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+        (m < 60 && (h < 24 || (h == 24 && m == 0))).then_some(h * 60 + m)
+    };
+    let valid = |spec: &str| {
+        spec.split_once('-')
+            .and_then(|(a, b)| Some((minute_of(a)?, minute_of(b)?)))
+            .is_some_and(|(start, end)| start < end)
+    };
+    for (day, list) in days {
+        if !DAYS.contains(&day.as_str()) {
+            return Err(Fail::Value(format!(
+                "working_hours.{day} is not a weekday; use {}",
+                DAYS.join(", ")
+            )));
+        }
+        let Some(items) = list.as_array() else {
+            return Err(Fail::Value(format!(
+                "working_hours.{day} must be a list of \"HH:MM-HH:MM\" strings"
+            )));
+        };
+        for item in items {
+            let spec = item.as_str().unwrap_or("");
+            if !valid(spec) {
+                return Err(Fail::Value(format!(
+                    "working_hours.{day}: {spec:?} is not HH:MM-HH:MM with the start before the end (24:00 ends a day)"
+                )));
+            }
+        }
+    }
+    Ok(v)
+}
+
+/// `[user] timezone`: an IANA name or empty, read as the runtime reads it:
+/// the exact-case zone name, with no spaces and none of the database's
+/// helper entries. Where the system zone database exists, an unknown name is
+/// refused here instead of at the next load.
+fn check_timezone(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    let Value::String(name) = &v else {
+        return Ok(v);
+    };
+    if zone_name_ok(name, std::path::Path::new("/usr/share/zoneinfo")) {
+        return Ok(v);
+    }
+    Err(Fail::Value(format!(
+        "timezone {name:?} is not an IANA zone name such as America/Los_Angeles"
+    )))
+}
+
+fn zone_name_ok(name: &str, db: &std::path::Path) -> bool {
+    const HELPERS: [&str; 5] = ["posixrules", "localtime", "posix", "right", "Factory"];
+    if name.is_empty() || name == "UTC" {
+        return true;
+    }
+    let parts: Vec<&str> = name.split('/').collect();
+    let shaped = parts.iter().all(|p| {
+        !p.is_empty()
+            && p.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+'))
+    });
+    let helper = |part: Option<&&str>| part.is_some_and(|p| HELPERS.contains(p));
+    if !shaped || helper(parts.first()) || helper(parts.last()) {
+        return false;
+    }
+    if !db.is_dir() {
+        return true;
+    }
+    // A case-blind file system answers `is_file` for a wrong-case name, so
+    // each part must match a directory entry byte for byte.
+    let mut dir = db.to_path_buf();
+    for (i, part) in parts.iter().enumerate() {
+        let listed = std::fs::read_dir(&dir)
+            .map(|rows| rows.flatten().any(|e| e.file_name() == *part))
+            .unwrap_or(false);
+        dir.push(part);
+        if !listed || (i + 1 == parts.len() && !dir.is_file()) {
+            return false;
+        }
+    }
+    true
+}
+
 fn coerce_term_text(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     let kept = matches!(&v, Value::String(s) if !py_strip(s).is_empty());
     Ok(if kept {
@@ -536,5 +634,29 @@ fn keep_dict_values(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
             map.into_iter().filter(|(_, val)| val.is_object()).collect(),
         )),
         _ => Ok(Value::Object(Map::new())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zone_name_ok;
+
+    #[test]
+    fn a_zone_name_reads_as_the_runtime_reads_it() {
+        let db = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(db.path().join("America")).unwrap();
+        std::fs::write(db.path().join("America/Los_Angeles"), "").unwrap();
+        std::fs::write(db.path().join("posixrules"), "").unwrap();
+        let ok = |name| zone_name_ok(name, db.path());
+        assert!(ok("") && ok("UTC") && ok("America/Los_Angeles"));
+        for bad in [
+            "utc",
+            " UTC",
+            "america/los_angeles",
+            "posixrules",
+            "Mars/Base",
+        ] {
+            assert!(!ok(bad), "{bad:?}");
+        }
     }
 }

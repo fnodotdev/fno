@@ -14,7 +14,7 @@
 //! does not send.
 
 use super::*;
-use crate::feed_overlay::FeedItem;
+use crate::feed_overlay::{owned, FeedItem};
 use crate::popup::{Anchor, Popup, PopupRow};
 use crate::proto::AgentRow;
 
@@ -260,10 +260,10 @@ pub(crate) fn build(
     )));
     p.rows.push(PopupRow::Rule);
 
-    p.field("harness", item.harness.clone());
+    p.field("harness", owned(&item.harness));
     p.field("timestamp", Some(local_ts(&item.ts)));
-    p.field("model", item.model.clone());
-    p.field("effort", item.effort.clone());
+    p.field("model", owned(&item.model));
+    p.field("effort", owned(&item.effort));
 
     // node: a jump, not a label.
     if let Some(node) = item.node.as_deref() {
@@ -343,7 +343,7 @@ pub(crate) fn build(
     // live or not.
     let parent_sid = exact_row(&dest)
         .and_then(|a| a.spawned_by_session.clone())
-        .or_else(|| item.parent.clone())
+        .or_else(|| owned(&item.parent))
         .filter(|p| !p.is_empty());
     let parent = exact_row(&dest).and_then(|a| {
         a.spawned_by_session
@@ -361,7 +361,7 @@ pub(crate) fn build(
             .and_then(|a| a.lineage_reason.clone())
             .filter(|r| !r.is_empty())
     });
-    let parent = parent.or_else(|| item.parent.clone());
+    let parent = parent.or_else(|| owned(&item.parent));
     let parent_row = parent_sid
         .as_deref()
         .map(|sid| open_row(crate::backlog_model::open_session(agents, sid), sid));
@@ -388,7 +388,7 @@ pub(crate) fn build(
         ),
         None => a.role_title.clone(),
     });
-    match (lead.or_else(|| item.role.clone()), exact_row(&dest)) {
+    match (lead.or_else(|| owned(&item.team)), exact_row(&dest)) {
         (Some(text), Some(a)) => {
             p.entry(
                 "lead",
@@ -401,7 +401,7 @@ pub(crate) fn build(
         (None, _) => {}
     }
     p.field("reason", item.reason.clone());
-    p.field("role", item.role.clone());
+    p.field("team", owned(&item.team));
     // owner: the lead AT EVENT TIME, focusable to its holder when the roster
     // still holds that person and the name answers for exactly one live row
     // (the fleet's fail-closed name rule: an ambiguous name is no target).
@@ -471,8 +471,8 @@ pub(crate) fn build(
             );
         }
     }
-    p.field("actor", item.actor.clone());
-    p.field("phase", item.phase.clone());
+    p.field("actor", owned(&item.actor));
+    p.field("phase", owned(&item.phase));
 
     // A removal's answer: resume the row through fno when the roster still
     // holds it, else the retirement receipt's revival line verbatim. The

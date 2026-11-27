@@ -7,6 +7,10 @@ Usage: fno doctor event emit [OPTIONS]
   ``crates/fno-agent/src/runtime/event_store/schema.yaml``). Validation runs before the file lock is
   acquired so a malformed call cannot block writers.
 
+  A review_attestation from reviewer code-review with verdict pass is refused
+  unless this session recorded a receipt at this head with
+  `fno do review read`, and the receipt's diff sha256 still matches git.
+
   Source defaults to ``target`` when a target state file is present. Otherwise
   ``--source`` is required; the emit refuses rather than guessing a producer.
 

@@ -332,7 +332,7 @@ pub fn run(args: &[String]) -> i32 {
         Ok(parsed) => parsed,
         Err(code) => return code,
     };
-    let Some(to_msg) = parsed.to.clone() else {
+    let Some(to_msg) = parsed.to.as_deref().map(crate::numbers::mail_hash) else {
         return usage_error(&format!("Missing option '--to'. {REPLY_FORMS}."));
     };
     let body_text = match resolve_body(&parsed) {

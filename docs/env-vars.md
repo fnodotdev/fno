@@ -29,7 +29,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agent/src/runtime/claude_roster.rs `config_dir` and crates/fno-agent/src/runtime/harness_reader.rs. |
 | `CLAUDE_EFFORT` | rs | The effort level an encounter vote records, on claude only. |
 | `CLAUDE_JOB_DIR` | rs | Set by Claude Code in a `claude --bg` job. Its `state.json` names the job, and the SessionStart launch claim reads that name to match the launcher's record. The write gate also falls back to its tmp dir in a refusal when the payload carries no session id; the payload's session wins when present. |
+| `CLAUDE_PID` | rs | The pid of the Claude Code CLI that runs the hooks. On macOS the session report, both register doors and the first-turn bind read it to tell a hand-typed `claude -p` from an interactive session. |
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
+| `CLAUDE_PROJECT_DIR` | rs | Claude's project root for the hook. The claim-heartbeat leg of the hook front reads it as the cwd when the payload carries none. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Claude session id, exported by the openai-codex Claude plugin's SessionStart hook. Last fallback for the lazy mux server's owner stamp (crates/fno/src/ui/client/server_spawn.rs `resolve_owner_session`), after FNO_OWNER_SESSION and the client's own ambient harness session. |
@@ -113,6 +115,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agent/src/runtime/context_run.rs |
 | `FNO_CONTROL_PLANE_SCHEDULER` | rs | unclear: crates/fno-agent/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agent/src/spawn/cursor_agent.rs:304 |
+| `FNO_CUSTOMERS_DIR` | rs | Overrides the persona store folder root that `customer:<persona>` scopes read; the per-project subfolder and `<slug>.md` naming stay fixed (crates/fno-agent/src/paths.rs::persona_customers_dir). Tests set it; the store stays machine-private (docs/state-root-inventory.md names no top-level row by the closed-folder-set rule). |
 | `FNO_DATA_HOME` | rs | The data class home pin: the install recorder's binary-homes record and the fno-agent ladders resolve env first, else config `paths.data_dir`, else `~/.local/share/fno`. |
 | `FNO_DEMO_EPOCH` | rs | Freezes the render clock to these epoch seconds for a demo shoot, so a seeded board's ages read the same on every shoot; a value that does not parse falls through to the real clock. Set only by the demo scripts. |
 | `FNO_DEMO_HOST` | rs | The host name painted text shows instead of the real machine's, so a demo shot never carries the live host; liveness checks keep the real host. Set only by the demo scripts. |
@@ -150,9 +153,12 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agent/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
-| `FNO_CUSTOMERS_DIR` | rs | Overrides the persona store folder root that `customer:<persona>` scopes read; the per-project subfolder and `<slug>.md` naming stay fixed (crates/fno-agent/src/paths.rs::persona_customers_dir). Tests set it; the store stays machine-private (docs/state-root-inventory.md names no top-level row by the closed-folder-set rule). |
+| `FNO_HOOK_ASYNC` | rs | Set to 1 when a hook runs async. The hook front then gives each bounded child 10 s, the budget scripts/lib/hook-budget.sh gave. |
+| `FNO_HOOK_BUDGET_SECS` | rs | Pins the hook front's per-child budget in seconds over the load-aware default (3 s, 1 s on a busy machine). 0 skips the optional children. |
+| `FNO_HOOK_BUDGET_SKIP_PER_CORE` | rs | Load per core (default 8) at which the hook front skips its optional legs outright, as scripts/lib/hook-budget.sh did. |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_HOOK_HARNESS` | rs | The wire the agy and pi guard host runs a claude PreToolUse hook for. When it names another harness, `hook gate` runs only the block guards, and a refusal never asks. |
+| `FNO_HOOK_PLUGIN_ROOT` | rs | The plugin tree that hooks/hook-front.sh exports for the hook front's legs. It is not FNO_REPO_ROOT, which paths.rs reads as the project root. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/mux/server.rs:14324 |
 | `FNO_INIT_PROGRESS_FILE` | rs | Step-marker file `fno do target start` hands its init door; the door appends begin/done markers and the parent prints the last marker in the 540s timeout receipt. Unset (a bare `fno do target init`), the markers are skipped. See target_init.rs `init_progress`. |
 | `FNO_INSTALL_BUILD` | rs | unclear: crates/fno/src/install/doctor_update.rs:2308 |
@@ -264,9 +270,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SESSION_HARNESS` | rs | The launcher-stamped harness half of the session-proof pair; a known name beside a live `FNO_SESSION_PID` answers the harness before the census walk (spawn_context.rs stamp_pair_harness). |
 | `FNO_SESSION_ID` | rs | Current session id. `fleet-incident` uses it for caller attribution; `loops pause-all` records a full UUID or `ses_` id as the mail-hold owner, falling back to `fno whoami --json` otherwise. |
 | `FNO_SESSION_PID` | rs | The launcher-stamped pid half of the session-proof pair; must be a positive, live pid or the pair is ignored (spawn_context.rs stamp_pid_is_live). |
+| `FNO_SESSION_ROLE` | rs | Set to worker in a worker session. The Stop front's operator-capture leg then reports no queue. |
 | `FNO_SIDECAR_EVERY_MS` | rs | Test seam: milliseconds the fleet sidecar's rewrite throttle and the mux server's refresh timer both run at (default 30000); a zero or unparseable value reads the default. It shortens the cadence for the e2e that proves an unattended machine keeps publishing. |
 | `FNO_SIDECAR_SOCKET` | rs | Overrides the MCP sidecar's socket path (default `$XDG_RUNTIME_DIR/fno/sidecar.sock`, else the state dir's `sidecar.sock`). The client's lazy-start forwards it to the spawned sidecar, so a caller asking for a non-default path never races the default. Set by callers and tests; read at `crates/fno-agent/src/runtime/mcp/sidecar.rs` (`socket_path`). |
-| `FNO_SKIP_MIGRATION` | rs | crates/fno/src/setup/path_migration.rs run_if_needed |
 | `FNO_SNAPSHOT_GATE` | rs | The spawn-gate answer a `--view org-block` snapshot paints, as inline JSON. Unset, the snapshot runs the live probe. |
 | `FNO_SNAPSHOT_LANES` | rs | Path to a saved `fno doctor lanes` reading that a `--view org-block` snapshot paints. Unset, the snapshot runs the live fold. |
 | `FNO_SNAPSHOT_METER` | rs | The capacity state a snapshot paints in the meter row, glance and modal, as inline JSON. Unset, the snapshot reads the machine's capacity file. |
@@ -276,11 +282,10 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SPAWN_GATE` | rs | unclear: crates/fno-agent/src/backlog/dispatch_resolve.rs:911 |
 | `FNO_SPAWN_ORIGIN` | rs | Explicit dispatch-origin JSON the spawn door validates onto the request; malformed refuses. |
 | `FNO_SPAWN_OWNER` | rs | Explicit dispatch-owner JSON the spawn door validates onto the request; must be exported together with FNO_SPAWN_ORIGIN. |
-| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. Never passed on to the child. |
+| `FNO_SPAWN_SHOW_ROW` | rs | Set to `1` by the front door's `fno agent spawn --mux`. The headless claude lane then keeps the run's registry row, so the one-shot shows in the mux while it runs. The row carries the watch mark, and the sideline shows no headless row without it. The claude lane takes the variable off the child. The other lanes leave it, and a child that reports its own row reads it as the watch mark. |
 | `FNO_SPAWN_TAKE_OVER` | rs | Refusal marker only: nothing sets it, so a read means a forgery or a stale leak, and the compose door refuses the spawn. The take-over reason rides the compose answer, never the environment. |
 | `FNO_SPAWN_TRIGGER` | rs | unclear: crates/fno-agent/src/spawn/pane_spawn/mod.rs:1440 |
 | `FNO_STATE_DIR` | rs | Pins fno's config state root: `state_dir` and `locks_dir` read it ahead of their config/`$HOME` defaults, and the Rust default graph path and the backlog porcelain reads serve from it ahead of config. `accounts::credentials::seal` sets it around a forwarded HOME so a spawned worker's graph, ledger, and locks stay on the parent's root. |
-| `FNO_STATE_ROOT_INVENTORY_DOC` | rs | Overrides the inventory doc the state-root drift reading parses (tests and custom installs); empty falls through to `<state-root>/install/plugin-stage/fno/docs/state-root-inventory.md`, then the legacy `<state-root>/plugin-stage` copy during migration (crates/fno-agent/src/runtime/state_root_drift.rs). |
 | `FNO_STORE_EXEC_LOG` | rs | Opt-in request log for sizing a shared store: set to a file path and each request appends one JSON line. Unset, the lane pays nothing. |
 | `FNO_STORE_KEEPER_DRIFT_CHECK_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:654 |
 | `FNO_STORE_KEEPER_IDLE_SECS` | rs | unclear: crates/fno-agent/src/backlog/graph_keeper.rs:115 |
@@ -299,13 +304,13 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_TEST_FOOTPRINT_PAYLOAD` | rs | Test seam: when set, the spawn gate's footprint probe returns this payload verbatim, so gate tests pin the CPU axis instead of reading the live machine. |
 | `FNO_TEST_FOOTPRINT_PAYLOAD_SEQ` | rs | Test seam: newline-separated footprint probe results consumed once per read; `ERR <message>` simulates probe failure, and the last line sticks so gate tests can verify retries and sample counts. |
 | `FNO_TEST_FULL` | rs | The whole-suite lane mark: the guard reads it typed on the command, and the test-run door stamps it into a whole run's cargo env, so its slot asks queue instead of try-locking. |
+| `FNO_TEST_HERMETIC` | rs | unclear: crates/fno/src/events/event_hermetic.rs:62 |
+| `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
+| `FNO_TEST_LAUNCHD_SUFFIX` | rs | Test seam: pins the HOME-derived launchd label suffix the derivation returns (`launchd_labels.rs` and its `setup_services.rs` twin), so the parity goldens and receipts stay machine-independent. Production code never sets it. |
 | `FNO_TEST_LEG_DETACHED` | rs | Test seam: the kill-window test's worker child reads it to pick the detached (1) or attached (0) close leg; the detach arm must survive the worker's group kill, the withhold arm must not. |
 | `FNO_TEST_LEG_MARKERS` | rs | Test seam: directory the kill-window test's leg stub writes its started, release, leg-pid and done markers into. |
 | `FNO_TEST_LEG_STUB` | rs | Test seam: path of the stub script the kill-window test's worker child spawns as the close leg through `FNO_BIN`. |
 | `FNO_TEST_LEG_WORKER` | rs | Test seam: presence re-invokes the kill-window test binary as the worker child that spawns the leg, then dies to its own group kill one second in. |
-| `FNO_TEST_HERMETIC` | rs | unclear: crates/fno/src/events/event_hermetic.rs:62 |
-| `FNO_TEST_JOURNAL` | rs | Test seam: the global events journal the worktree overlap record and report ops read and write, so the parity goldens never touch the real state root. |
-| `FNO_TEST_LAUNCHD_SUFFIX` | rs | Test seam: pins the HOME-derived launchd label suffix the derivation returns (`launchd_labels.rs` and its `setup_services.rs` twin), so the parity goldens and receipts stay machine-independent. Production code never sets it. |
 | `FNO_TEST_LIVE_CARGO_CWDS` | rs | Test seam: colon-separated cwd paths that stand in for a live `lsof` scan of running cargo processes, so cargo_build_dirs tests can drive the tree-to-shard mapping without a real cargo process. |
 | `FNO_TEST_MARKER_HOLD_MS` | rs | unclear: crates/fno/src/mux/proto/startup_guard.rs:97 |
 | `FNO_TEST_MODE` | rs | `1` makes `fno config doctor` skip the claim-store write probe and the temp-dir path patterns (crates/fno/src/config/config_doctor/checks.rs). |
@@ -399,6 +404,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `USERPROFILE` | rs | unclear: crates/fno-agent/src/gate/publish_review.rs:195 |
 | `UV_CACHE_DIR` | rs | Authoritative uv cache directory: the cache root a bounded codex worker is granted as a writable root; set but missing grants nothing (no fallback, uv reads exactly this variable). |
 | `UV_PROJECT_ENVIRONMENT` | rs | The venv path an `uv sync` would write; the spawn-door venv guard holds a worktree whose value resolves into the canonical checkout, so a worktree install cannot rewrite the canonical cli venv's scripts. |
+| `UV_TOOL_BIN_DIR` | rs | The uv tool bin folder. The hook front looks for the fno binary there after PATH, as hooks/lib/fno-bin.sh did. |
 | `UV_TOOL_DIR` | rs | Overrides the dir uv installs tools into; the update census reads it to locate a uv-managed install without exec'ing uv. |
 | `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |

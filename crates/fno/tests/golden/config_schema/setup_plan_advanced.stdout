@@ -214,7 +214,7 @@
       "tier": "always",
       "question": "Backlog node-ID prefix?",
       "default_source": "repo-slug",
-      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-)."
+      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable."
     },
     {
       "path": "backlog.id_hex_width",
@@ -682,7 +682,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "The person gate (never | ui | always; default ui). never and ui keep today's behavior: nothing requires a person. always requires a person's GitHub approval of the PR head (an APPROVED review by a login that is not the PR author, fresh at the head): fno do pr status reads not ready and the merge refuses until one lands, and the review-round cap does not discharge it (the lever back off is this key). Validated at write: never, ui or always."
+      "doc": "The person gate (never | ui | always). never = no person is owed. ui = a non-author person's GitHub approval of the PR head is owed; a person can give it from the terminal (`fno mux app approve <pr>`, or `--repo <owner/name>` outside the checkout) or on the PR's GitHub page. always = the same approval owed on GitHub. In both owed values fno do pr status reads not ready and the merge refuses until one lands (an APPROVED review by a login that is not the PR author, fresh at the head), and the review-round cap does not discharge it (the lever back off is this key). With no key set, no person is owed (today's stock-install behavior). GitHub refuses an author's approval of their own PR, so the approving identity must differ from the author identity. Validated at write: never, ui or always."
     },
     {
       "path": "review.max_rounds",

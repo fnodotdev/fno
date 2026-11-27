@@ -10,6 +10,8 @@
 
 #[cfg(feature = "app")]
 pub mod app_control;
+#[cfg(feature = "app")]
+pub mod bus_read;
 pub mod chokepoint;
 #[cfg(feature = "app")]
 pub mod cli_args;
@@ -21,6 +23,8 @@ pub mod footnote_transcript;
 pub mod git_paths;
 pub mod glob;
 pub mod harness;
+#[cfg(feature = "app")]
+pub mod identity_markers;
 pub mod keeper_wire;
 pub mod legacy_env;
 #[cfg(feature = "app")]
@@ -28,8 +32,20 @@ mod lenient_de;
 #[cfg(feature = "app")]
 pub mod live_store_fence;
 #[cfg(feature = "app")]
+pub mod mail_hold_status;
+#[cfg(feature = "app")]
+pub mod mail_ids;
+#[cfg(feature = "app")]
+pub mod mail_sent;
+#[cfg(feature = "app")]
+pub mod mail_sent_core;
+#[cfg(feature = "app")]
+pub mod mail_unread;
+#[cfg(feature = "app")]
 pub mod notify_dispatch;
 pub mod pid;
+#[cfg(feature = "app")]
+pub mod proc_table;
 pub mod product_boundary;
 pub mod provider_key;
 #[cfg(feature = "app")]
@@ -37,6 +53,9 @@ pub mod registry_read;
 #[cfg(feature = "app")]
 pub mod role_migration;
 pub mod rules;
+pub mod sandbox_door;
+#[cfg(feature = "app")]
+pub mod self_identity;
 #[cfg(feature = "app")]
 pub mod store_conn;
 #[cfg(all(test, feature = "app"))]
@@ -75,7 +94,7 @@ use backlog::refusal_surface_core;
 #[cfg(feature = "app")]
 pub use backlog::{
     backlog_list, backlog_model, backlog_write, blocked_rung, board_reader, inbox_user,
-    join_marker, law_cli, lawbook, pr_diff, review_prior_head, search_query,
+    join_marker, law_cli, lawbook, pr_diff, review_prior_head, review_read, search_query,
 };
 pub use backlog::{node_row, store_client};
 #[cfg(feature = "app")]
@@ -102,8 +121,9 @@ pub(crate) use install::{release_install, update_prebuilt};
 use mux::pane_send_audit;
 #[cfg(feature = "app")]
 pub use mux::{
-    mux_cli, mux_log, notify_command, pane_argv, pane_cwd, proto, pty, redact, review_invocation,
-    server, server_stats, shell_init, squad, squad_cascade, squad_store, vt, workspace_sidecar,
+    mux_cli, mux_log, notify_command, paint_stats, pane_argv, pane_cwd, proto, pty, redact,
+    review_invocation, server, server_stats, shell_init, squad, squad_cascade, squad_store, vt,
+    workspace_sidecar,
 };
 #[cfg(feature = "web")]
 pub(crate) use serve::web_answer;
@@ -124,9 +144,9 @@ pub use sessions::{
 pub use sessions::{session_move, transcript_transfer};
 #[cfg(feature = "app")]
 pub use setup::{
-    cli_hooks, gh_proxy, must_enable, path_migration, setup_attention_remote, setup_autowire,
-    setup_cmds, setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run,
-    setup_services, state_layout, wizard, wizard_term,
+    cli_hooks, gh_proxy, must_enable, setup_attention_remote, setup_autowire, setup_cmds,
+    setup_daemon_agent, setup_detect, setup_messaging, setup_profile, setup_run, setup_services,
+    state_layout, wizard, wizard_term,
 };
 #[cfg(feature = "app")]
 pub use ui::{

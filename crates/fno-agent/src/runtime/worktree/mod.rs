@@ -43,12 +43,6 @@ pub fn client_dispatch(args: &[String]) -> Option<i32> {
 
 use std::path::{Path, PathBuf};
 
-/// The live-status vocabulary a registry row must carry for a session to own
-/// its tree. Shared with `OWNERSHIP_LIVE_STATUSES`
-/// (crates/fno-agent/src/runtime/identity.rs); the parity corpus pins the split.
-pub const OWNERSHIP_LIVE_STATUSES: [&str; 6] =
-    ["spawning", "ready", "idle", "busy", "live", "restarting"];
-
 /// Python's non-strict `Path.resolve()`: canonicalize the longest existing
 /// ancestor, then append the remainder. `fs::canonicalize` refuses a missing
 /// tail, which every default base path here has.

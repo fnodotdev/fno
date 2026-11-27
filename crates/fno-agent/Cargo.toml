@@ -55,7 +55,7 @@ fno-mail = { path = "../fno-mail", version = "0.1" }
 # digest input and the published pack-UI schema regenerates from them, so
 # both spellings must stay one crate. No features: the schema derivation
 # stays behind the published crate's own `schema` feature.
-fno-proto = { path = "../fno-proto", version = "0.2", features = ["vt"] }
+fno-proto = { path = "../fno-proto", version = "0.2.4", features = ["vt", "feed"] }
 thiserror = "2"
 # Cross-process region-text fingerprint for the answer queue: the
 # daemon extractor hashes the blocked prompt's region text and the mux server
@@ -114,9 +114,9 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # comparison matching Python's `datetime.fromisoformat`. Parsing only -- no
 # system clock needed, so the `clock` default feature is dropped.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
-# IANA zone resolution for [provider_cap] sleep_timezone: a wrong-by-
-# eight-hours reset is the measured cost, so sleep hours must resolve the
-# operator's zone, not guess an offset.
+# IANA zone resolution for [user] timezone: a wrong-by-eight-hours window
+# is the measured cost, so working hours must resolve the user's zone, not
+# guess an offset.
 chrono-tz = "0.10"
 # Grid: client-side TUI compositor that tiles N watcher panes and
 # promotes one to driver on Enter. Crossterm gives raw-mode, key events, cursor

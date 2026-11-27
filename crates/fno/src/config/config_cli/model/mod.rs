@@ -1036,7 +1036,12 @@ fn path_held(node: &Value, loc: &[Loc]) -> bool {
 /// the key removed, an emptied table with it, and each removal returns one
 /// receipt line. The writer only rewrites TOML, so a YAML file keeps the
 /// key and prints nothing.
-pub const RETIRED_DISPATCH_KEYS: [&str; 2] = ["dispatch.allowed_verbs", "dispatch.verb_registry"]; // verb-wording: allow
+pub const RETIRED_DISPATCH_KEYS: [&str; 4] = [
+    "dispatch.allowed_verbs", // verb-wording: allow
+    "dispatch.verb_registry", // verb-wording: allow
+    "provider_cap.sleep_hours",
+    "provider_cap.sleep_timezone",
+];
 
 pub fn drop_retired_dispatch_keys(paths: &[PathBuf]) -> Vec<String> {
     let mut gone = Vec::new();
@@ -1066,7 +1071,15 @@ pub fn drop_retired_dispatch_keys(paths: &[PathBuf]) -> Vec<String> {
             continue;
         }
         for key in locked_drop(&real) {
-            gone.push(format!("removed retired key {key} from {}", real.display()));
+            let hint = if key.starts_with("provider_cap.sleep_") {
+                "; the away window is now [user] timezone and [user.working_hours]"
+            } else {
+                ""
+            };
+            gone.push(format!(
+                "removed retired key {key} from {}{hint}",
+                real.display()
+            ));
         }
     }
     gone

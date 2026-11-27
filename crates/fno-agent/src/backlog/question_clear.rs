@@ -937,6 +937,27 @@ mod tests {
     }
 
     #[test]
+    fn a_scope_lead_rules_a_live_workers_question_unless_the_class_is_user_only() {
+        for (qid, class, code) in [("q-live", "public-surface", 0), ("q-taste", "taste", 3)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut req = request(&tmp, qid, Some("ruled: ship it"));
+            req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+            lead_caller(&mut req, "x-1");
+            let mut ask = ask_scoped(
+                qid,
+                "49a80492",
+                "which lane?",
+                "x-1",
+                "2026-11-26T20:00:00Z",
+            );
+            ask["data"]["class"] = json!(class);
+            seed_question(&req, &ask);
+            let result = run_clear(&req);
+            assert_eq!(result.exit_code, code, "{class}: {:?}", result.lines);
+        }
+    }
+
+    #[test]
     fn a_lead_withdraws_a_question_superseded_by_a_newer_ask_in_its_scope() {
         let tmp = tempfile::tempdir().unwrap();
         let mut req = request(
@@ -1663,8 +1684,19 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     None => false,
                 };
             let denied = denied_class(question_event);
-            if holds_rung && req.answer.is_some() && !user_lane {
-                if let Some(class) = denied {
+            // A titled lead rules a reversible question inside its scope,
+            // the asker's liveness aside. The deny classes stay the user's,
+            // and so does a head-pinned approval, which only its asker moots.
+            let scope_lead = !own_ask
+                && !lead_withdraw
+                && req.answer.is_some()
+                && authority == Some("role")
+                && caller.teamed
+                && crate::question_intake::str_field(question_event, "subject")
+                    .is_none_or(|subject| crate::question_sweep::head_scoped(subject).is_none())
+                && node.is_some_and(|node| scope_holds(req, &caller, node));
+            if (holds_rung || scope_lead) && req.answer.is_some() && !user_lane {
+                if let Some(class) = &denied {
                     refused += 1;
                     answer.lines.push(format!(
                         "outstanding: refused: {shown} is class {class}, and the asking project's questions.rules.deny keeps it from agents. Nothing was closed. Climb it: fno inbox outstanding climb {shown} --evidence \"<what you checked>\""
@@ -1675,6 +1707,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let allowed = (if req.answer.is_some() {
                 (authority == Some("chat_attested") && quoted)
                     || (own_ask && authority == Some("role") && caller.teamed)
+                    || scope_lead
                     || (holds_rung && matches!(authority, Some("role") | Some("agent")))
             } else {
                 own_ask
@@ -1691,7 +1724,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 refused += 1;
                 answer.lines.push(if req.answer.is_some() {
                     format!(
-                        "outstanding: refused: {shown} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers only its own question, with --authority role. {LEAD_WITHDRAW_LINE}",
+                        "outstanding: refused: {shown} asks the user, and this session is agent {agent}. Nothing was closed; the question stays open. {} A teamed asker answers its own question, and a lead whose live scope holds the question's node rules it, with --authority role unless the class is user-only. {LEAD_WITHDRAW_LINE}",
                         chat_answer_line(qid)
                     )
                 } else {

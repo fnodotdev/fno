@@ -86,7 +86,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `target-stopfailure.sh` | Claude StopFailure | Records/retries the target stop failure path. |
 | `format-on-edit.sh` | Claude and Codex PostToolUse (`Edit|Write`) | Formats the edited file; reports a parse break as additionalContext. |
 | `edit-integrity.sh` | Claude and Codex PostToolUse (`Edit|Write`) | Checks the edit against the saved pre-edit contents. |
-| `spend-drift-monitor.js` | Claude and Codex PostToolUse | Reports spend drift. |
+| `spend-drift-monitor.sh` (front leg) | Claude and Codex PostToolUse | Reports spend drift. |
 | `claim-heartbeat.sh` | Claude and Codex PostToolUse | Renews the active node claim. |
 | `code-review-attest.sh` | Claude PostToolUse (`ReportFindings`), Claude and Codex SubagentStop, Codex Stop | Records the review attestation or a subagent's review result. |
 | `capture-plan-mode.sh` | Claude PostToolUse (`ExitPlanMode`) | Saves the approved native plan-mode artifact. |
@@ -162,6 +162,6 @@ The capability table's `hooks.<job>` rows, one cell per declared state (`support
 | agy | supported | impossible (no compaction event; role lands at session start) | supported |
 | footnote | supported | impossible (in-process compaction fires no hook event) | supported (native: the harness writes fno's own records) |
 | gemini | missing | missing | missing |
-| cursor-agent | missing | missing | missing |
-| grok | missing | missing | missing |
-| zcode | missing | missing | missing |
+| cursor-agent | missing | missing | missing (adapter ships as hooks/cursor-session-report.sh, registered by the cli-hooks cursor arm; unproven until a live fire) |
+| grok | missing | missing | missing (adapter ships as hooks/grok-session-report.sh, registered by the cli-hooks grok arm; unproven until a live fire) |
+| zcode | missing | missing | missing (adapter ships via the shared plugin Stop shim hooks/session-state.sh; unproven until a live fire) |

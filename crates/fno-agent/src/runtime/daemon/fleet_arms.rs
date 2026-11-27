@@ -585,14 +585,7 @@ impl FleetArms {
             tokio::task::spawn_blocking(move || {
                 let _gate = SweepGate(flag);
                 sweeps::trust_answer_sweep(&home, &emitter, now_epoch_secs(), &|pane, key| {
-                    std::process::Command::new(crate::scrape::fno_bin())
-                        .args(crate::door_argv::PANE_SEND)
-                        .arg(&pane.to_string())
-                        .arg("--raw")
-                        .arg(key)
-                        .output()
-                        .map(|o| o.status.success())
-                        .unwrap_or(false)
+                    crate::runtime::mux_client::pane_send(None, pane, key.as_bytes())
                 });
             });
         }

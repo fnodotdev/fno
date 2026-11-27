@@ -311,6 +311,17 @@ pub(super) fn peek_argv(name: &str) -> Vec<String> {
     ]
 }
 
+/// The portal seat's Follow argv for a row. A footnote thread gets the input
+/// line (`--ask`): its transcript view takes typed lines and resumes the
+/// session by name. Every other harness's seat stays read-only.
+pub(super) fn portal_follow_argv(row: &RegistryAgent) -> Vec<String> {
+    let mut argv = peek_argv(&row.name);
+    if row.harness.as_deref() == Some("footnote") {
+        argv.push("--ask".to_string());
+    }
+    argv
+}
+
 #[cfg(test)]
 pub(super) fn set_peek_program(argv: &[&str]) {
     PEEK_PROGRAM.with(|p| *p.borrow_mut() = Some(argv.iter().map(|s| s.to_string()).collect()));

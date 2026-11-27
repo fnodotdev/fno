@@ -283,6 +283,12 @@ fn run_transport_doors(args: &[String]) {
             &args[1..],
         ));
     }
+    // `user-hours`: refusal-or-ok JSON read of `[user.working_hours]`.
+    if args.first().map(String::as_str) == Some("user-hours") {
+        fno_agent::usage_events::exit_cli(fno_agent::agents_config::run_user_hours(
+            args.get(1..).unwrap_or_default(),
+        ));
+    }
     // `terminals`: the delivered-terminal vocabulary JSON read; Python's
     // ledger promotion gate and scoreboard fold read it like the roster.
     if args.first().map(String::as_str) == Some("terminals") {
@@ -1644,6 +1650,7 @@ fn client_spawn(
             &harness_args,
             route.as_ref(),
             sandbox_settings.as_deref(),
+            params.pointer("/role").and_then(Value::as_str),
         ),
         output_format: output_format.as_deref(),
     };
@@ -2059,6 +2066,7 @@ fn spawn_claude_flags<'a>(
     harness_args: &'a [String],
     route: Option<&'a fno_agent::spawn_route::Route>,
     settings: Option<&'a str>,
+    role: Option<&'a str>,
 ) -> fno_agent::claude_ask::HarnessFlags<'a> {
     fno_agent::claude_ask::HarnessFlags {
         add_dir: None,
@@ -2073,6 +2081,7 @@ fn spawn_claude_flags<'a>(
             settings: &r.settings,
         }),
         settings,
+        role,
     }
 }
 
@@ -2466,9 +2475,10 @@ fn launch_codex_headless(call: &SpawnCall<'_>) -> Option<i32> {
         false,
         call.timeout,
         None,
-        None,
+        call.route.and_then(|r| r.effort.as_deref()),
         None,
         call.harness_args,
+        call.route.and_then(|r| r.codex.as_ref()),
     );
     if let Some(receipt) = daemon_receipt.as_ref() {
         fno_agent::codex_ask::append_daemon_receipt(&mut outcome, receipt);

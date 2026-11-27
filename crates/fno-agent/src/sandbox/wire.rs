@@ -82,6 +82,13 @@ pub enum GuestFrame {
     },
     /// The transcript is flushed to EOF after a [`HostFrame::Shutdown`].
     Flushed,
+    /// One loop op. `seq` is unique per request, so the host never runs a
+    /// replayed write twice. The op is typed; its text crosses by value.
+    Op {
+        req: u32,
+        seq: u64,
+        op: super::ops::Op,
+    },
 }
 
 /// What the host may send.
@@ -126,6 +133,7 @@ mod kind {
     pub const DATA: u8 = 6;
     pub const CLOSE: u8 = 7;
     pub const FLUSHED: u8 = 8;
+    pub const OP: u8 = 9;
     pub const HELLO: u8 = 64;
     pub const REPLY: u8 = 65;
     pub const CONNECTED: u8 = 66;
@@ -304,6 +312,13 @@ impl GuestFrame {
             Self::Data { stream, bytes } => (kind::DATA, Out::default().u32(*stream).raw(bytes)),
             Self::Close { stream } => (kind::CLOSE, Out::default().u32(*stream)),
             Self::Flushed => (kind::FLUSHED, Out::default()),
+            Self::Op { req, seq, op } => (
+                kind::OP,
+                Out::default()
+                    .u32(*req)
+                    .u64(*seq)
+                    .raw(&serde_json::to_vec(op).map_err(io::Error::other)?),
+            ),
         };
         write_raw(w, k, &body.0)
     }
@@ -340,6 +355,11 @@ impl GuestFrame {
             },
             kind::CLOSE => Self::Close { stream: b.u32()? },
             kind::FLUSHED => Self::Flushed,
+            kind::OP => Self::Op {
+                req: b.u32()?,
+                seq: b.u64()?,
+                op: serde_json::from_slice(&b.rest()).map_err(|_| WireError::Malformed(k))?,
+            },
             other => return Err(WireError::Refused(other)),
         };
         b.end()?;
@@ -472,6 +492,14 @@ mod tests {
             },
             GuestFrame::Close { stream: 4 },
             GuestFrame::Flushed,
+            GuestFrame::Op {
+                req: 5,
+                seq: 6,
+                op: crate::sandbox::ops::Op::PlanSettle {
+                    item: "U1".into(),
+                    text: "measured".into(),
+                },
+            },
         ];
         let host = [
             HostFrame::Hello {
@@ -527,6 +555,31 @@ mod tests {
         assert!(matches!(
             GuestFrame::read(&mut short.as_slice()),
             Err(WireError::Malformed(kind::CONNECT))
+        ));
+        let untyped = [
+            kind::OP,
+            0,
+            0,
+            0,
+            14,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            b'{',
+            b'}',
+        ];
+        assert!(matches!(
+            GuestFrame::read(&mut untyped.as_slice()),
+            Err(WireError::Malformed(kind::OP))
         ));
         let empty: &[u8] = &[];
         assert!(GuestFrame::read(&mut &empty[..]).unwrap().is_none());

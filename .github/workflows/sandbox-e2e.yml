@@ -8,6 +8,8 @@ name: sandbox-e2e
 # `forbidden reached: 0` and `required failed: 0`.
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - crates/fno-agent/**
@@ -26,13 +28,19 @@ concurrency:
 
 jobs:
   journey:
-    name: sandbox journey (${{ matrix.engine }})
+    name: sandbox journey (${{ matrix.engine }}${{ matrix.ssh && ' over ssh' || '' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         engine: [docker, podman]
+        ssh: [false]
+        include:
+          # The user's own VM: the same journey against a docker daemon the
+          # engine CLI reaches over ssh, here the runner's own sshd.
+          - engine: docker
+            ssh: true
     steps:
       - uses: actions/checkout@v5
 
@@ -65,8 +73,25 @@ jobs:
             cp "crates/fno-agent/target/x86_64-unknown-linux-musl/debug/$b" "$bin/"
           done
           cp crates/fno/target/x86_64-unknown-linux-musl/debug/fno "$bin/"
-          cp "$bin/fno-agent" "$bin/linux/"
+          cp "$bin/fno-agent" "$bin/fno" "$bin/linux/"
           echo "BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Start sshd and trust its key
+        if: matrix.ssh
+        run: |
+          sudo apt-get install -y openssh-server
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          sudo systemctl start ssh
+          ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts 2>/dev/null
+          docker -H "ssh://$USER@localhost" version --format '{{.Server.Version}}'
+          {
+            echo "E2E_ENGINE_HOST=ssh://$USER@localhost"
+            echo "E2E_SSH_USER=$USER"
+            echo "E2E_DROP_LINK=1"
+          } >> "$GITHUB_ENV"
 
       - name: Run the journey
         run: |
@@ -74,7 +99,7 @@ jobs:
           bash tests/sandbox/e2e.sh "$BIN" "${{ matrix.engine }}" | tee "$RUNNER_TEMP/journey.log"
           code=${PIPESTATUS[0]}
           {
-            echo "### sandbox journey on ${{ matrix.engine }}"
+            echo "### sandbox journey on ${{ matrix.engine }}${{ matrix.ssh && ' over ssh' || '' }}"
             echo '```'
             grep -E '^(forbidden|FORBIDDEN|required|REQUIRED)' "$RUNNER_TEMP/journey.log"
             echo '```'

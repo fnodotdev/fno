@@ -88,7 +88,7 @@ enabled = false   # set true to use the {vault} template variable
 # <id_prefix><hex> (e.g. fno-a3f9). Resolution is format-agnostic, so any
 # node ID resolves regardless of the prefix/width it was minted under.
 # id_prefix = "fno-"   # e.g. fno-, xy-; lowercase, <=7 chars, not cv-/fu-/tgt-.
-                       # Set at `fno config setup`. An absent key falls back to ab-.
+                       # Set at `fno config setup`. An absent key defaults to x.
 id_hex_width = 8       # hex chars in a minted id, 4-8. `fno config setup` writes 4;
                        # an absent key resolves to 8.
 ```
@@ -112,7 +112,6 @@ The graph database also holds `fno_numbers` and `fno_number_outbox`. A question 
 | `FNO_GLOBAL_SETTINGS_PATH` | Overrides the per-user global candidate (`~/.fno/config.toml`) without affecting the project-local candidate. Set to `/dev/null` to disable the global candidate entirely. Used by `cli/src/fno/conftest.py` to keep unit tests isolated from the developer's real global config. Empty-string value is treated as unset. |
 | `HOME` | Determines `~` expansion in path values. Set by the OS; override in tests only. |
 | `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema is compiled into `fno-agent`; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it from inside another repo: pinning it to the footnote checkout silently repoints `fno config get` at the wrong project. |
-| `FNO_SKIP_MIGRATION` | Set to `1` to skip the automatic startup migration check. Useful in CI. |
 
 ## Cache and logs homes
 

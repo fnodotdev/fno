@@ -173,7 +173,7 @@ Adversarial sub-mode: an `adversarial` token anywhere in peer's args swaps the b
 
 The peer review is advisory by default.
 With `--attest`, it validates an explicit structured verdict and satisfies the identity-free `config.review.peers` gate at the current HEAD.
-With legacy `--post`, it posts under a configured peer identity and satisfies that GitHub-login gate.
+With legacy `--post`, it posts under a configured peer identity and satisfies that GitHub-login gate. The attested verdict also stamps `reviewer_context=fresh` (the peer runs in its own cross-model session), so a Reviewed peer attestation satisfies the `independent` posture rung, not only the `peer` component.
 
 ## Step 4: research mode (advisory research-verify panel)
 
@@ -204,6 +204,7 @@ The event is pinned to the current HEAD; if a new commit lands afterward, the de
   - `/code-review` on Claude and `/review` on Codex remain the user's choice.
   - `hooks/code-review-attest.sh` classifies native review findings and emits on either outcome. Claude triggers include `PostToolUse(ReportFindings)` and Skill-tool `SubagentStop`.
   - Codex triggers on a `Stop` payload with a readable structured completion. Both hooks require an object-valued findings array equal to `[]`.
+  - Either hook's clean pass is refused at emit unless this session ran `fno do review read` at that head. Run it before the native review, or a clean pass will not attest.
   - The Codex attester runs before `target-stop-hook.sh`. No second step is needed.
   - If the lane is unavailable or a clean review's hook failed, recover with `skills/review/scripts/emit-attestation.sh code-review`. Confirm the attestation before promising.
   - Never use recovery to attest over findings.

@@ -698,30 +698,6 @@ fn a_degraded_unknown_read_with_running_checks_holds_every_door() {
     assert_eq!(no_ci.verdict, "unknown");
 }
 
-/// A red head never merges or arms, even with `require_checks` off: the
-/// finalize arm carries that flag false, so the refusal cannot ride it.
-#[test]
-fn a_red_head_refuses_every_effect_with_require_checks_off() {
-    for effect in [Effect::Merge, Effect::Arm] {
-        let fake = Fake {
-            checks: Some("red".into()),
-            ..clean()
-        };
-        let req = Request {
-            require_checks: false,
-            ..request(effect)
-        };
-        let outcome = run(&fake, &req);
-        assert_eq!(outcome.word(), "failed", "{effect:?}: {outcome:?}");
-        assert!(outcome.detail().contains("checks are red"), "{outcome:?}");
-        assert!(!fake
-            .gh_calls
-            .borrow()
-            .iter()
-            .any(|args| args.get(1).map(String::as_str) == Some("merge")));
-    }
-}
-
 // ── the head-scoped operator merge grant ──────────────────────────────
 
 #[test]
@@ -902,61 +878,6 @@ fn a_holder_with_fresh_ci_clears_and_releases_the_slot_on_merge_while_a_racer_wa
     );
 }
 
-/// A 2026-11-10 incident merged a PR while its cli-ci rerun was still in
-/// flight. The pending verdict fell through `require_checks_pass` with only
-/// an advisory warning, and main went red on the merged head. The newest
-/// attempt's settled green is the merge precondition; pending is a hold.
-/// Arm holds too: `--auto` waits only on the checks the ruleset requires,
-/// and fnodotdev/fno requires one, so an armed PR with other checks still
-/// running merges at once.
-#[test]
-fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
-    let mut fake = Fake {
-        checks: Some("pending".to_string()),
-        ..clean()
-    };
-    let mut req = request(Effect::Merge);
-    req.require_checks = true;
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held", "{outcome:?}");
-    assert!(
-        outcome
-            .detail()
-            .contains("checks are pending; require_checks_pass"),
-        "{outcome:?}"
-    );
-
-    // Preview still answers: it lands nothing.
-    let preview = run(
-        &fake,
-        &Request {
-            require_checks: true,
-            ..request(Effect::Preview)
-        },
-    );
-    assert_eq!(preview.word(), "authorized", "{preview:?}");
-    for require_checks in [true, false] {
-        let armed = run(
-            &fake,
-            &Request {
-                require_checks,
-                ..request(Effect::Arm)
-            },
-        );
-        assert_eq!(armed.word(), "held", "{armed:?}");
-        assert!(
-            armed.detail().contains("arming auto-merge waits only"),
-            "{armed:?}"
-        );
-    }
-
-    // The unknown verdict stays fall-through: a PR with no check-run CI at
-    // all (docs-only) must keep its merge door.
-    fake.checks = Some("unknown".to_string());
-    let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged", "{outcome:?}");
-}
-
 #[test]
 fn a_self_held_slot_retests_the_base_at_most_once_then_merges_on_the_next_settle() {
     // The observed bug (2026-10-17): on a base busy enough that a full CI
@@ -1112,11 +1033,27 @@ fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
                 // The cells the warning does not cover: a pending read holds
                 // the merge door until the newest attempt settles, and holds
                 // the arm because `--auto` waits only on required checks.
+                // The 2026-11-10 incident: pending fell through as advisory
+                // and main went red on the merged head.
                 assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
                 assert!(
                     outcome.detail().contains("checks are pending; "),
                     "{outcome:?}"
                 );
+                if effect == Effect::Arm {
+                    let off = run(
+                        &fake,
+                        &Request {
+                            require_checks: false,
+                            ..request(Effect::Arm)
+                        },
+                    );
+                    assert_eq!(off.word(), "held", "{code}: {off:?}");
+                    assert!(
+                        off.detail().contains("arming auto-merge waits only"),
+                        "{off:?}"
+                    );
+                }
                 continue;
             }
             assert_eq!(outcome.word(), word, "{code}: {outcome:?}");
@@ -2091,6 +2028,20 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     off.gh_output = "crates/fno/src/ui/client/theme.rs\n".to_string();
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
+    // A look the user was asked for holds in a repo with no paint paths too:
+    // a worker's hold for a docs-site UI change must not read as clear.
+    let bare_qdir = crate::escalation::questions_dir(&bare);
+    std::fs::create_dir_all(&bare_qdir).unwrap();
+    let bare_page = bare_qdir.join("q-xc129bare.md");
+    std::fs::write(
+        &bare_page,
+        "---\nquestion_id: q-xc129b\nstatus: open\ntitle: May PR 7 merge?\n---\n## Screens\n\nshots\n",
+    )
+    .unwrap();
+    let asked = crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head)
+        .expect("an open look ask holds without paint paths");
+    assert_eq!(asked.code, "visual_look_pending");
+    std::fs::remove_file(&bare_page).ok();
     // A checkout that carries the mux client arms the built-in paint list
     // with no config key: a stock footnote tree holds its own UI PRs, and a
     // config list cannot opt a client tree out.

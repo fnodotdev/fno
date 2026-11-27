@@ -323,17 +323,10 @@ const KNOWN_UNROUTED_PROVIDER: &str = "__uncapped__";
 
 /// Registry statuses that can hold a live process (idle counts: an
 /// idle-but-unreaped process still holds RAM; a reaped pid drops out via the
-/// liveness check). Mirrors `spawn_gate.py::LIVE_STATUSES`.
+/// liveness check). Reads `AgentStatus::LIVE_STATUSES`, the one vocabulary
+/// every fleet arm shares.
 pub(crate) fn status_is_liveish(s: &AgentStatus) -> bool {
-    matches!(
-        s,
-        AgentStatus::Spawning
-            | AgentStatus::Ready
-            | AgentStatus::Idle
-            | AgentStatus::Busy
-            | AgentStatus::Live
-            | AgentStatus::Restarting
-    )
+    AgentStatus::LIVE_STATUSES.contains(&s.as_str())
 }
 
 // ---------------------------------------------------------------------------
@@ -3170,6 +3163,52 @@ pub fn qos_demote_bg_worker(config_cwd: &Path, job_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_vocabulary_const_predicate_and_serde_names_agree_per_variant() {
+        // (variant, serde name, holds a live process)
+        let all = [
+            (AgentStatus::Spawning, "spawning", true),
+            (AgentStatus::Ready, "ready", true),
+            (AgentStatus::Idle, "idle", true),
+            (AgentStatus::Busy, "busy", true),
+            (AgentStatus::Live, "live", true),
+            (AgentStatus::Restarting, "restarting", true),
+            (AgentStatus::Orphaned, "orphaned", false),
+            (AgentStatus::Failed, "failed", false),
+            (AgentStatus::Exited, "exited", false),
+            (AgentStatus::PermanentDead, "permanent_dead", false),
+        ];
+        for (status, word, liveish) in all {
+            assert_eq!(
+                status.as_str(),
+                word,
+                "{word}: as_str is not the variant's serde name"
+            );
+            let wire = serde_json::to_value(&status).expect("AgentStatus serializes");
+            assert_eq!(wire.as_str(), Some(word), "{word}: serde rename drifted");
+            assert_eq!(
+                status_is_liveish(&status),
+                liveish,
+                "{word}: predicate liveness drifted"
+            );
+            assert_eq!(
+                AgentStatus::LIVE_STATUSES.contains(&word),
+                liveish,
+                "{word}: const membership drifted"
+            );
+        }
+        // Every const word parses back to a live variant, so a serde rename
+        // must land in the const in the same commit.
+        for word in AgentStatus::LIVE_STATUSES {
+            let parsed: AgentStatus = serde_json::from_value(serde_json::json!(word))
+                .unwrap_or_else(|e| panic!("const word {word:?} is not a serde name: {e}"));
+            assert!(
+                status_is_liveish(&parsed),
+                "const word {word:?} is not liveish"
+            );
+        }
+    }
 
     #[test]
     fn gate_node_from_params_reads_a_set_node_and_drops_a_blank_one() {

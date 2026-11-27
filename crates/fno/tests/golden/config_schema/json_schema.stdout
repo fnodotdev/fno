@@ -332,6 +332,26 @@
       "title": "AgentsBlock",
       "type": "object"
     },
+    "AllowRulesBlock": {
+      "description": "fno's allow rules ride each Claude Code spawn (user ruling D3653).",
+      "properties": {
+        "default": {
+          "default": true,
+          "title": "Default",
+          "type": "boolean"
+        },
+        "roles": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {},
+          "title": "Roles",
+          "type": "object"
+        }
+      },
+      "title": "AllowRulesBlock",
+      "type": "object"
+    },
     "AppBlock": {
       "description": "fno-app (the desktop app) settings (nested under 'config.app').\n\nThe app reads the GLOBAL settings file (~/.fno/settings.yaml): a Finder-launched app has no project cwd. The three switches gate the attention signals the app itself fires when an agent turns blocked or done outside the window: the notification (a macOS notification whose tap focuses the agent's chat), the sound and the Dock badge. The app derives the transitions from the layout it already renders, so these switches are independent of the daemon's mux.notify_on_blocked / mux.notify_on_done knobs, which govern the TUI and the osascript fallback. The font and font_size keys hold the terminal pane's face and point size; the app's Settings page writes them and re-measures the panes live.",
       "properties": {
@@ -534,7 +554,7 @@
       "type": "object"
     },
     "BacklogBlock": {
-      "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). Schema defaults are the LEGACY values - an absent\n``id_prefix`` (``None``) falls back to ``ab-`` at the accessor, and the width\ndefaults to 8 - so an existing ``config.backlog`` block with no id keys is\nbyte-identical. The setup wizard OFFERS width 4 for new installs; that is the\nwizard's default, not the schema default (AC3-FR).",
+      "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). The width defaults to 8 at the accessor. An absent\n``id_prefix`` resolves to the documented fresh-install default ``x`` (one\nresolver, never the legacy ``ab-``; old ``ab-`` ids stay resolvable). The\nsetup wizard OFFERS width 4 for new installs; that is the wizard's default,\nnot the schema default (AC3-FR).",
       "properties": {
         "epic_max_open_children": {
           "anyOf": [
@@ -2536,7 +2556,7 @@
       "type": "object"
     },
     "ProviderCapBlock": {
-      "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
+      "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
       "properties": {
         "canary_survive_minutes": {
           "default": 15,
@@ -2579,16 +2599,6 @@
           "minimum": 1,
           "title": "Quorum",
           "type": "integer"
-        },
-        "sleep_hours": {
-          "default": "",
-          "title": "Sleep Hours",
-          "type": "string"
-        },
-        "sleep_timezone": {
-          "default": "",
-          "title": "Sleep Timezone",
-          "type": "string"
         }
       },
       "title": "ProviderCapBlock",
@@ -3203,6 +3213,18 @@
     "SandboxBlock": {
       "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
       "properties": {
+        "host": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host"
+        },
         "image": {
           "anyOf": [
             {
@@ -3897,6 +3919,11 @@
     "UserBlock": {
       "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state; the native birth read (backlog/birth.rs\n``display_name``) falls back to ``git config user.name`` so a fresh\ninstall already says something better than a role noun.",
       "properties": {
+        "auto_approve_routine": {
+          "default": false,
+          "title": "Auto Approve Routine",
+          "type": "boolean"
+        },
         "favorite_skills": {
           "items": {
             "type": "string"
@@ -3908,6 +3935,29 @@
           "default": "",
           "title": "Name",
           "type": "string"
+        },
+        "timezone": {
+          "default": "",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "working_hours": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Working Hours"
         }
       },
       "title": "UserBlock",
@@ -4129,6 +4179,9 @@
     },
     "agents": {
       "$ref": "#/$defs/AgentsBlock"
+    },
+    "allow_rules": {
+      "$ref": "#/$defs/AllowRulesBlock"
     },
     "app": {
       "$ref": "#/$defs/AppBlock"

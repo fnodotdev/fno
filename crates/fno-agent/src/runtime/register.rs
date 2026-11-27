@@ -146,6 +146,8 @@ session '{session_id}'; use the full session id directly"
     let codex_rollout_source = (harness.as_harness() == Harness::Codex)
         .then(|| crate::codex_store::codex_rollout_source(None, &session_id))
         .flatten();
+    // Read before the lock, like the census walk above.
+    let print_run = crate::claude_ask::hand_typed_print_run(Some(harness.as_str()));
     let outcome = update_registry(
         &crate::paths::AgentsHome::shared_registry_json(),
         |registry| {
@@ -197,6 +199,9 @@ session '{session_id}'; use the full session id directly"
             );
             fresh.name = name.clone();
             fresh.harness = Some(harness.clone());
+            // A print run typed by hand files as headless, as on every door
+            // that mints a hand session's row.
+            fresh.substrate = print_run.then(|| "headless".to_string());
             fresh.cwd = cwd.clone();
             fresh.status = crate::AgentStatus::Idle;
             fresh.origin = origin_request.clone();
@@ -231,6 +236,14 @@ session '{session_id}'; use the full session id directly"
             return 1;
         }
     };
+    // The /fno:fno-me act stamps its own law trigger: the D2402 read names
+    // fno-me, and the front door's stamp for this very command is the
+    // non-adopting `command`. Escalation-aware, so a marker a bare command
+    // wrote first upgrades here.
+    if let Err(err) = crate::join_marker::write_marker(home.root(), &harness, &session_id, "fno-me")
+    {
+        eprintln!("fno: fno-me join marker write failed: {err}");
+    }
     if manifest_role.is_none() {
         crate::boot_revival::reseat_registered_row(home, &name);
     }

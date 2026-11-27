@@ -84,6 +84,13 @@
      }
     },
     {
+     "name": "allow_rules",
+     "default": {
+      "default": true,
+      "roles": {}
+     }
+    },
+    {
      "name": "sandbox",
      "default": {
       "on_unavailable": "refuse"
@@ -328,8 +335,6 @@
       "mode": "park",
       "destinations": [],
       "min_wait_minutes": 30,
-      "sleep_hours": "",
-      "sleep_timezone": "",
       "canary_survive_minutes": 15,
       "quorum": 2
      }
@@ -984,6 +989,19 @@
     }
    ]
   },
+  "AllowRulesBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "default",
+     "default": true
+    },
+    {
+     "name": "roles",
+     "default": {}
+    }
+   ]
+  },
   "UserBlock": {
    "extra": "ignore",
    "fields": [
@@ -994,6 +1012,18 @@
     {
      "name": "favorite_skills",
      "default": []
+    },
+    {
+     "name": "timezone",
+     "default": ""
+    },
+    {
+     "name": "working_hours",
+     "default": null
+    },
+    {
+     "name": "auto_approve_routine",
+     "default": false
     }
    ]
   },
@@ -1010,6 +1040,10 @@
     },
     {
      "name": "image",
+     "default": null
+    },
+    {
+     "name": "host",
      "default": null
     }
    ]
@@ -1456,14 +1490,6 @@
     {
      "name": "min_wait_minutes",
      "default": 30
-    },
-    {
-     "name": "sleep_hours",
-     "default": ""
-    },
-    {
-     "name": "sleep_timezone",
-     "default": ""
     },
     {
      "name": "canary_survive_minutes",
@@ -3572,10 +3598,16 @@
   "inbox.tool_boundary_ordinary",
   "user.name",
   "user.favorite_skills",
+  "user.timezone",
+  "user.working_hours",
+  "user.auto_approve_routine",
+  "allow_rules.default",
+  "allow_rules.roles",
   "join.sandbox",
   "sandbox.on_unavailable",
   "sandbox.provider",
   "sandbox.image",
+  "sandbox.host",
   "obsidian.enabled",
   "obsidian.vault",
   "project.id",
@@ -3934,8 +3966,6 @@
   "provider_cap.mode",
   "provider_cap.destinations",
   "provider_cap.min_wait_minutes",
-  "provider_cap.sleep_hours",
-  "provider_cap.sleep_timezone",
   "provider_cap.canary_survive_minutes",
   "provider_cap.quorum",
   "main_repair.auto_revert",

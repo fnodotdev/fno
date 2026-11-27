@@ -182,7 +182,13 @@ struct StoreFile {
     /// until their first drag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     feed_width: Option<serde_json::Value>,
+    /// The feed's two-state row order from before the table view. Read
+    /// once as the view's group when no `feed_view` is saved; never written.
     feed_order: Option<serde_json::Value>,
+    /// The feed's table view: sort, group, column filters and folded groups.
+    /// Absent or unreadable means the shipped default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feed_view: Option<serde_json::Value>,
     /// The open-session chooser's last pick, as its lowercase name. Absent
     /// means "no pick yet" and the chooser pre-selects Split right.
     open_target: Option<serde_json::Value>,
@@ -522,10 +528,36 @@ pub fn load_feed_order() -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_string))
 }
 
-/// Persist the feed's row order. Best-effort like every other write here.
-pub fn save_feed_order(order: &str) {
+/// The activity feed's table view as persisted. Columns and groupings
+/// travel by name, never by index, so a column added later reads as absent
+/// instead of shifting every saved choice.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FeedViewPref {
+    pub sort: String,
+    pub sort_desc: bool,
+    pub group: String,
+    pub group_desc: bool,
+    #[serde(default)]
+    pub filters: std::collections::BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub collapsed: Vec<String>,
+}
+
+/// Read the feed's saved table view; absent or unreadable is `None`.
+pub fn load_feed_view() -> Option<FeedViewPref> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .feed_view
+        .and_then(|v| serde_json::from_value(v).ok())
+}
+
+/// Persist the feed's table view. Best-effort like every other write here.
+pub fn save_feed_view(pref: &FeedViewPref) {
     mutate(|file| {
-        file.feed_order = serde_json::to_value(order).ok();
+        file.feed_view = serde_json::to_value(pref).ok();
     });
 }
 

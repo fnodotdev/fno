@@ -26,6 +26,7 @@ pub enum Kind {
     Lock,
     Park,
     Dir,
+    Keep,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,6 +96,7 @@ impl Kind {
             "lock" => Self::Lock,
             "park" => Self::Park,
             "dir" => Self::Dir,
+            "keep" => Self::Keep,
             _ => return None,
         })
     }
@@ -115,7 +117,9 @@ impl Owner {
 pub fn rows() -> &'static [Row] {
     static ROWS: OnceLock<&'static [Row]> = OnceLock::new();
     *ROWS.get_or_init(|| {
-        let parsed = parse_table(LAYOUT_TSV).unwrap_or_else(|e| panic!("{e}"));
+        let mut parsed = parse_table(LAYOUT_TSV).unwrap_or_else(|e| panic!("{e}"));
+        // A keep row names an entry that stays put; no resolver reads one.
+        parsed.retain(|r| r.kind != Kind::Keep);
         Box::leak(parsed.into_boxed_slice())
     })
 }

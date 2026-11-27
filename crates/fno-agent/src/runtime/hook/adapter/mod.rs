@@ -99,6 +99,15 @@ fn effort_field(payload: &serde_json::Value) -> String {
     }
 }
 
+/// A PermissionRequest payload carries no message, so the blocked report
+/// names the tool the session waits on. A payload message still wins.
+fn permission_message(event: &str, tool: &str, message: String) -> String {
+    if message.is_empty() && event == "PermissionRequest" && !tool.is_empty() {
+        return format!("waiting on approval to run {tool}");
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,22 +140,25 @@ mod tests {
         }
     }
 
-    /// A codex PermissionRequest carries no message, so the adapter names
-    /// the tool the session waits on; a payload message still wins.
+    /// A claude or codex PermissionRequest carries no message, so the
+    /// adapter names the tool the session waits on; a payload message still
+    /// wins.
     #[test]
-    fn codex_permission_request_names_the_waiting_tool() {
-        let bare = normalize(
-            "codex",
-            "PermissionRequest",
-            &json!({"session_id": "s-1", "tool_name": "Bash"}),
-        );
-        assert_eq!(bare.message, "waiting on approval to run Bash");
-        let said = normalize(
-            "codex",
-            "PermissionRequest",
-            &json!({"session_id": "s-1", "tool_name": "Bash", "message": "rm -rf x"}),
-        );
-        assert_eq!(said.message, "rm -rf x");
+    fn permission_request_names_the_waiting_tool() {
+        for harness in ["claude", "codex"] {
+            let bare = normalize(
+                harness,
+                "PermissionRequest",
+                &json!({"session_id": "s-1", "tool_name": "Bash"}),
+            );
+            assert_eq!(bare.message, "waiting on approval to run Bash", "{harness}");
+            let said = normalize(
+                harness,
+                "PermissionRequest",
+                &json!({"session_id": "s-1", "tool_name": "Bash", "message": "rm -rf x"}),
+            );
+            assert_eq!(said.message, "rm -rf x", "{harness}");
+        }
     }
 
     /// The plugin-hosted harnesses carry the served `provider/model`, the

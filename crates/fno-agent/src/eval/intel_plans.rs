@@ -475,9 +475,7 @@ fn hosted_score(command: &str, scratch: &Path, pair: &Pair) -> Result<Answer, St
 }
 
 fn labels_dir() -> PathBuf {
-    crate::evals_candidates::state_root()
-        .join("evals")
-        .join("plan-labels")
+    crate::evals::state_evals_dir(&crate::evals_candidates::state_root()).join("plan-labels")
 }
 
 fn read_set(path: &Path) -> Result<Vec<Pair>, String> {

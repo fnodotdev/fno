@@ -120,3 +120,33 @@ fn fno_tsv_rows_answer_help() {
         );
     }
 }
+
+/// The transcript door's own command table, walked against the real binary:
+/// the advertised leaf and both sub-leaves answer help with exit 0 and usage
+/// on stdout. The leaf walk above stops at menu rows; `send` and `receive`
+/// live one level beneath them, and that is where `--help` was consumed as
+/// data (x-02e6: the leaf exited 2, `send --help` searched for a session
+/// literally named "--help").
+#[test]
+fn fno_transcript_door_answers_help_at_leaf_and_subleaves() {
+    let bin = env!("CARGO_BIN_EXE_fno");
+    for args in [
+        vec!["agent", "registry", "transcript", "--help"],
+        vec!["agent", "registry", "transcript", "send", "--help"],
+        vec!["agent", "registry", "transcript", "receive", "--help"],
+    ] {
+        let out = run(bin, &args);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "fno {} must exit 0; stderr: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !out.stdout.is_empty(),
+            "fno {}: help must print usage to stdout",
+            args.join(" ")
+        );
+    }
+}

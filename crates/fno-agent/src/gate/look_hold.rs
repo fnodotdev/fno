@@ -162,7 +162,8 @@ fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
             continue;
         }
         let runs = crate::ci_tier::runs_of(root, &format!("head_sha={sha}"))?;
-        let head = crate::ci_tier::head_of(&runs);
+        let gate = crate::merge_queue::gate_workflow(root);
+        let head = crate::ci_tier::head_of(&runs, &gate);
         let ours = ours(&rows, slug, sha);
         let rerun = reruns(&head, &ours);
         if rerun.is_empty() {
@@ -227,7 +228,7 @@ mod tests {
             run(3, "guards", "queued", ""),
             run(4, "merge-queue-gate", "queued", ""),
         ];
-        let head = crate::ci_tier::head_of(&runs);
+        let head = crate::ci_tier::head_of(&runs, "merge-queue-gate.yml");
         assert!(reruns(&head, &HashSet::from([1, 2, 3, 4])).is_empty());
     }
 
@@ -262,8 +263,10 @@ mod tests {
         let ours = ours(&rows, "o/r", "aaa");
         assert_eq!(ours, HashSet::from([1]));
         let done = |id, workflow| run(id, workflow, "completed", "cancelled");
-        let head =
-            crate::ci_tier::head_of(&[done(1, "cli-ci"), done(2, "guards"), done(5, "release")]);
+        let head = crate::ci_tier::head_of(
+            &[done(1, "cli-ci"), done(2, "guards"), done(5, "release")],
+            "merge-queue-gate.yml",
+        );
         // 2 was cancelled by hand, and 5 was already rerun once.
         assert_eq!(reruns(&head, &ours), vec![1]);
     }

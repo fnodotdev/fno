@@ -584,12 +584,21 @@ pub(crate) fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
     }
 }
 
-/// The eval sandbox's Claude config root: `<state dir>/evals/claude-config`.
+/// The eval sandbox's Claude config root: `<state dir>/db/evals/claude-config`,
+/// or the legacy `<state dir>/evals/claude-config` while it exists. The
+/// sealed login is a Keychain item keyed by this path, so the mover leaves
+/// the legacy folder in place and this read keeps naming it.
 /// A sealed claude eval worker pins this root, so the harness's own state
 /// writes (transcripts, history, config) land under the fno eval dir instead
 /// of the user's `~/.claude`. `None` when no state dir resolves.
 pub fn evals_claude_config_dir() -> Option<PathBuf> {
-    crate::backlog::settings::state_dir().map(|state| state.join("evals").join("claude-config"))
+    let state = crate::backlog::settings::state_dir()?;
+    let legacy = state.join("evals").join("claude-config");
+    if legacy.is_dir() {
+        return Some(legacy);
+    }
+    let evals = crate::state_layout::place_dir(&state, "evals")?;
+    Some(evals.join("claude-config"))
 }
 
 /// Stage the sandbox so a pinned worker keeps its ambient context while its
@@ -1062,7 +1071,7 @@ mod tests {
         unsafe { std::env::set_var("FNO_STATE_DIR", state.path()) };
         assert_eq!(
             evals_claude_config_dir(),
-            Some(state.path().join("evals").join("claude-config"))
+            Some(state.path().join("db/evals/claude-config"))
         );
         match previous {
             Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
@@ -1092,7 +1101,7 @@ mod tests {
             std::env::set_var("CLAUDE_CONFIG_DIR", ambient.path());
         }
         let staged = stage_evals_claude_config().expect("staged sandbox");
-        assert_eq!(staged, state.path().join("evals").join("claude-config"));
+        assert_eq!(staged, state.path().join("db/evals/claude-config"));
         // An abandoned temp from a dead runner sweeps on a later stage; a
         // fresh temp (a live stage) survives.
         let orphan = staged.join(".claude.json.stage-dead");

@@ -90,7 +90,7 @@ A plan built on node text can send a worker after work that already shipped. The
 
 The plan must carry:
 
-- a `code_index:` frontmatter block with `main_sha:` (the 7-to-40-hex sha the plan read) and `providers:` (a list, or `[]`)
+- a `code_index:` block in the `## Gate records` fence. It holds `main_sha:` (the 7-to-40-hex sha the plan read) and `providers:` (a list, or `[]`). Legacy frontmatter still reads.
 - one `- name: <name>` entry per provider detection prints for the plan's repo, whatever its status
 - `status:` (`answered` | `unavailable` | `error`) and `fresh:` (`yes` | `no` | `unknown`) on every entry. A finalized `true` or `false` reads as `yes` or `no`, since finalize re-serializes YAML
 - `## Existence audit` as the plan's first `##` heading, with at least one table row
@@ -100,7 +100,7 @@ The plan must carry:
 The refusals, verbatim:
 
 ```
-frontmatter carries no code_index: block - run the planner's step 2-index, then record main_sha (the origin/main sha you read) and providers (one entry per index, or [])
+the plan carries no code_index: block in ## Gate records - run the planner's step 2-index, then record main_sha (the origin/main sha you read) and providers (one entry per index, or [])
 code_index.main_sha is missing or not a 7-to-40-hex sha - write the origin/main sha the plan read, e.g. main_sha: 9817805bf5e8
 code_index.providers is missing - list one entry per index asked (with status and fresh), or providers: [] when no index is present
 code index <name> is present (<manifest path>) and the plan does not record asking it. Ask it by role and record it under code_index.providers, with status unavailable or error if the ask failed
@@ -409,9 +409,7 @@ block is absent, and only the engine-wide defaults (if any) apply.
 
 ## done_probes: operational evidence (MANDATORY for recurring deliverables)
 
-A plan whose deliverable is **recurring or operational** - a scheduler, a
-watcher, a daemon, a cadence, a LaunchAgent, anything whose value is that it
-keeps running - MUST declare 1-2 `done_probes` in its frontmatter.
+Some deliverables are **recurring or operational**: a scheduler, a watcher, a daemon, a cadence, a LaunchAgent. Their value is that they keep running. Such a plan MUST declare 1-2 `done_probes` in its `## Gate records` fence.
 Everything else omits the field entirely.
 
 `fno-agent loop-check` runs each probe as the final `DonePRGreen` conjunct and

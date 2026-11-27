@@ -9,6 +9,16 @@ use serde_json::{json, Map, Value};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+/// The record-only status payload (`--no-roster`): the stored claim's
+/// verdict, `free`, or `corrupted`. The claim heartbeat reads it in process.
+pub(crate) fn record_payload(key: &str, root: Option<&Path>) -> Value {
+    match crate::claim_store::read(key, root) {
+        Ok(Some(rec)) => crate::claim_commands::claim_status_value(&rec),
+        Ok(None) => json!({"key": key, "state": "free"}),
+        Err(_) => json!({"key": key, "state": "corrupted"}),
+    }
+}
+
 pub fn run(args: &[String]) -> i32 {
     let mut json_output = false;
     let mut roster = true;
@@ -85,11 +95,7 @@ pub fn run(args: &[String]) -> i32 {
         Some(explicit) => Some(explicit),
         None => super::node_aware_root(&key),
     };
-    let payload = match crate::claim_store::read(&key, store_root.as_deref()) {
-        Ok(Some(rec)) => crate::claim_commands::claim_status_value(&rec),
-        Ok(None) => json!({"key": key.clone(), "state": "free"}),
-        Err(_) => json!({"key": key.clone(), "state": "corrupted"}),
-    };
+    let payload = record_payload(&key, store_root.as_deref());
     let state_str = payload
         .get("state")
         .and_then(Value::as_str)

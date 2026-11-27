@@ -14,7 +14,7 @@ mod digest;
 mod fold;
 mod isolation;
 
-pub(crate) use fold::SKILL_USE_MARKER;
+pub(crate) use fold::{default_read_transcript, extract_skill_runs};
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -1097,8 +1097,7 @@ fn read_scratch_cost(scratch: &Path) -> f64 {
 
 /// `_write_workdir_settings` (cli.py:911): preventive isolation - redirect
 /// all mutable fno config paths into the scratch worktree's own throwaway
-/// `.fno/` and stamp the migration sentinel so the first `fno` call in the
-/// spawned session does not rewrite this fragment.
+/// `.fno/`.
 fn write_workdir_settings(workdir: &Path) {
     let fno_dir = workdir.join(".fno");
     let _ = std::fs::create_dir_all(&fno_dir);
@@ -1115,7 +1114,6 @@ fn write_workdir_settings(workdir: &Path) {
     });
     let body = serde_yaml_ng::to_string(&settings).unwrap_or_default();
     let _ = std::fs::write(fno_dir.join("settings.yaml"), body);
-    let _ = std::fs::File::create(fno_dir.join(".path-migration-done"));
 }
 
 /// `_already_scored` (cli.py:955): idempotent resume - has this

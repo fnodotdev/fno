@@ -77,6 +77,19 @@ struct Episode {
     quota_reset_at: Option<i64>,
 }
 
+/// A tool call the transcript shows open: a `tool_use` with no `tool_result`
+/// yet. A foreground wait (a REST poll loop inside one Bash call) leaves
+/// exactly this at the tail while it runs, so the worker is busy, not quiet.
+/// Fields: call id, start in unix seconds, timeout in milliseconds.
+struct OpenCall {
+    id: String,
+    started_s: i64,
+    timeout_ms: i64,
+}
+
+/// The harness default for a tool call that names no timeout (Claude Bash).
+const DEFAULT_CALL_TIMEOUT_MS: i64 = 120_000;
+
 #[derive(Default)]
 pub(super) struct Tail {
     pub(super) activity: i64,
@@ -84,6 +97,129 @@ pub(super) struct Tail {
     failed: bool,
     read: bool,
     pub(super) touched: i64,
+    open_calls: Vec<OpenCall>,
+}
+
+impl Tail {
+    /// True while an open tool call has not yet passed its own timeout. The
+    /// call's timeout is its bound: past it, the call is stale, and the
+    /// ladder reads the worker quiet again.
+    pub(super) fn call_open(&self, now: i64) -> bool {
+        self.open_calls
+            .iter()
+            .any(|call| now * 1000 < call.started_s * 1000 + call.timeout_ms)
+    }
+}
+
+/// The timeout a tool call declares, in milliseconds. Claude `input.timeout`
+/// and Codex `timeout_ms` both carry it; a call that names none gets the
+/// harness default.
+fn declared_timeout_ms(declared: Option<DeclaredTimeout>) -> i64 {
+    declared
+        .and_then(|d| d.timeout.or(d.timeout_ms))
+        .filter(|ms| *ms > 0)
+        .unwrap_or(DEFAULT_CALL_TIMEOUT_MS)
+}
+
+/// The timeout fields a tool call's arguments may carry. Claude puts them in
+/// `input`, Codex in its JSON-string `arguments`.
+#[derive(Deserialize)]
+struct DeclaredTimeout {
+    timeout: Option<i64>,
+    timeout_ms: Option<i64>,
+}
+
+/// One `message.content` item of a Claude row. Only the fields a tool call
+/// opens or closes with are read.
+#[derive(Deserialize)]
+struct ToolItem {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    id: Option<String>,
+    tool_use_id: Option<String>,
+    input: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct ToolMessage {
+    content: Option<Vec<ToolItem>>,
+}
+
+#[derive(Deserialize)]
+struct ToolRow {
+    message: Option<ToolMessage>,
+}
+
+/// A Codex `response_item` payload that opens or closes a call.
+#[derive(Deserialize)]
+struct CodexCall {
+    call_id: Option<String>,
+    arguments: Option<String>,
+}
+
+/// Fold one transcript row into the set of open tool calls. Claude carries
+/// calls as `message.content` items (`tool_use` opens, `tool_result` closes).
+/// Codex carries them as payload items (`function_call` opens,
+/// `function_call_output` closes), with arguments as a JSON string.
+fn fold_tool_calls(
+    row: &Value,
+    payload: &Value,
+    event: &str,
+    at: Option<i64>,
+    open: &mut Vec<OpenCall>,
+) {
+    let items = ToolRow::deserialize(row)
+        .ok()
+        .and_then(|r| r.message)
+        .and_then(|m| m.content)
+        .unwrap_or_default();
+    for item in items {
+        match item.kind.as_deref() {
+            Some("tool_use") => {
+                if let (Some(id), Some(started_s)) = (item.id, at) {
+                    let declared = item
+                        .input
+                        .as_ref()
+                        .and_then(|input| DeclaredTimeout::deserialize(input).ok());
+                    open.push(OpenCall {
+                        id,
+                        started_s,
+                        timeout_ms: declared_timeout_ms(declared),
+                    });
+                }
+            }
+            Some("tool_result") => {
+                if let Some(id) = item.tool_use_id {
+                    open.retain(|call| call.id != id);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Ok(call) = CodexCall::deserialize(payload) else {
+        return;
+    };
+    match event {
+        "function_call" => {
+            if let (Some(id), Some(started_s)) = (call.call_id, at) {
+                let declared = call
+                    .arguments
+                    .as_deref()
+                    .and_then(|text| serde_json::from_str::<DeclaredTimeout>(text).ok());
+                open.push(OpenCall {
+                    id,
+                    started_s,
+                    timeout_ms: declared_timeout_ms(declared),
+                });
+            }
+        }
+        "function_call_output" => {
+            if let Some(id) = call.call_id {
+                open.retain(|open_call| open_call.id != id);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
@@ -120,6 +256,7 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
             .and_then(Value::as_str)
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.timestamp());
+        fold_tool_calls(&row, payload, event, timestamp, &mut out.open_calls);
         if event == "task_started" {
             out.failed = false;
             out.started_at = timestamp.or(out.started_at);
@@ -851,6 +988,12 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let Some(tail) = transcript_tail else {
                 return Ok(());
             };
+            // A tool call still open inside its own timeout is a worker in
+            // a foreground wait (a REST loop, a long test run). Not quiet.
+            // A dead pid cannot be waiting on its own call, so it skips the hold.
+            if !dead && tail.call_open(now) {
+                return Ok(());
+            }
             // A worker whose newest help route still parks it waits on the
             // route's own owner, the sweep's timer or a human answer, so the
             // ladder holds. Activity newer than the row lifts the park back
@@ -1274,6 +1417,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(tail(&path, None).unwrap().activity, 1767226500);
+        // An open tool call inside its own timeout holds the ladder: the
+        // worker is inside a foreground wait. Past the timeout it reads quiet.
+        let opened = chrono::DateTime::parse_from_rfc3339("2026-11-25T10:00:00Z")
+            .unwrap()
+            .timestamp();
+        let open_dir = tempfile::tempdir().unwrap();
+        let open_path = open_dir.path().join("session.jsonl");
+        std::fs::write(&open_path, r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_open","name":"Bash","input":{"command":"rest-loop","timeout":600000}}]}}"#).unwrap();
+        let open = tail(&open_path, None).unwrap();
+        assert!(
+            open.call_open(opened + 60),
+            "an open call inside its timeout is not quiet"
+        );
+        assert!(
+            open.call_open(opened + 599),
+            "the call still holds before its bound"
+        );
+        assert!(
+            !open.call_open(opened + 601),
+            "the same call past its timeout reads quiet"
+        );
+        // A closed call (a tool_result row) never holds the ladder.
+        std::fs::write(&open_path, concat!(
+            r#"{"type":"assistant","timestamp":"2026-11-25T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_done","name":"Bash","input":{"command":"ls","timeout":600000}}]}}"#, "
+",
+            r#"{"type":"user","timestamp":"2026-11-25T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_done","content":"ok"}]}}"#
+        )).unwrap();
+        assert!(
+            !tail(&open_path, None).unwrap().call_open(opened + 60),
+            "a call with a result is not open"
+        );
+        // Codex: a function_call with no output is open until its timeout_ms.
+        std::fs::write(&open_path, r#"{"type":"response_item","timestamp":"2026-11-25T10:00:00Z","payload":{"type":"function_call","name":"shell","call_id":"call_open","arguments":"{\"command\":[\"sleep\",\"900\"],\"timeout_ms\":1200000}"}}"#).unwrap();
+        let codex = tail(&open_path, None).unwrap();
+        assert!(
+            codex.call_open(opened + 900),
+            "a codex call inside its timeout is not quiet"
+        );
+        assert!(
+            !codex.call_open(opened + 1201),
+            "past its timeout it reads quiet"
+        );
     }
 
     #[test]
@@ -1656,6 +1841,40 @@ mod tests {
             &[],
             watch.expires_at_ms + WATCH_LINGER_MS
         ));
+
+        // The shield keys on the declared `<watching>` row, never on the
+        // runner: a `fno do pr wait` watch and a background REST loop that
+        // the worker declares write the same row, so both must shield.
+        let now = 1_000_000;
+        for runner_task in [None, Some("bash-rest-loop")] {
+            let mut data = serde_json::json!({
+                "harness": "claude",
+                "pr": 149,
+                "blocker": "ci",
+                "reason": "ci",
+                "node": "x-aaaa",
+                "expires_at_ms": now + 15 * 60_000,
+            });
+            if let (Some(task), Some(obj)) = (runner_task, data.as_object_mut()) {
+                obj.insert("task_id".into(), serde_json::json!(task));
+            }
+            let evidence = vec![crate::watch_expiry::Evidence {
+                event_id: "e1".into(),
+                seq: 1,
+                ts_ms: now - 60_000,
+                kind: crate::watch_expiry::WATCH_IDLE.into(),
+                session_id: Some("sess-a".into()),
+                data,
+            }];
+            let watches = crate::codex_watch::settle_watches(&evidence);
+            let [registered] = watches.as_slice() else {
+                panic!("a declared watch registers for {runner_task:?}");
+            };
+            assert!(
+                watch_shielded(&registered.watch, &evidence, now + 60_000),
+                "a live declared watch must shield the seat for {runner_task:?}"
+            );
+        }
     }
 
     #[test]

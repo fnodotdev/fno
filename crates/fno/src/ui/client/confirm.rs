@@ -4,7 +4,7 @@
 //! The gesture sites, the commit mapping and the row stamp all read
 //! these types through the re-export in the parent.
 
-use super::{agent_lattice_state, LatticeState, SectionKey, TabId};
+use super::*;
 use crate::proto::Command;
 
 /// The command that clears ONE dead row, by what kind of row it is. Three
@@ -150,4 +150,94 @@ impl ConfirmKind {
             ConfirmKind::ClearDead { .. } | ConfirmKind::CloseTab { .. } => None,
         }
     }
+}
+
+/// Card-dispatch confirm keys: Enter (CR/LF) as the first byte sends
+/// the targeted `DispatchNode`; any other key cancels. The whole chunk is
+/// swallowed (like the overlay dismiss) so an arrow's escape tail can't leak
+/// into a pane. `take()` clears the confirm either way, so a stale prompt can
+/// never resurrect a second dispatch.
+pub(super) async fn confirm_keys(
+    view: &mut View,
+    bytes: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    let Some(action) = view.confirm.take() else {
+        return Ok(StdinFlow::Continue);
+    };
+    if matches!(bytes.first(), Some(b'\r') | Some(b'\n')) {
+        // (5.1) Close tab is the one confirm whose commit is TWO
+        // commands (select the captured tab, then close it, because CloseTab
+        // closes the sender's VIEWED tab) and the one that must re-resolve its
+        // target at Enter: a tab that vanished while the prompt sat open must
+        // not fall through to a bare CloseTab, which would close whatever is
+        // viewed now instead. Handled before the one-command table below.
+        if let ConfirmKind::CloseTab { tab } = action.action {
+            if view.find_tab(tab).is_none() {
+                view.set_notice("tab is no longer here".into());
+                return Ok(StdinFlow::Continue);
+            }
+            for cmd in [Command::SelectTab(tab), Command::CloseTab] {
+                write_msg(sock_w, &ClientMsg::Command(cmd))
+                    .await
+                    .map_err(|e| format!("confirm-action send failed: {e}"))?;
+            }
+            return Ok(StdinFlow::Continue);
+        }
+        // Most confirms are one command; clear-dead fans out to one
+        // Remove per exited row, so the commit path speaks in a list.
+        // A row-scoped commit arms the row stamp: its outcome
+        // notice will render at the row, not only the tab bar.
+        view.arm_row_stamp(&action.action);
+        let row_name = match &action.action {
+            ConfirmKind::StopAgent { name, .. }
+            | ConfirmKind::RemoveAgent { name, .. }
+            | ConfirmKind::StopExternal { name, .. }
+            | ConfirmKind::RemoveExternal { name, .. } => Some(name.clone()),
+            _ => None,
+        };
+        let cmds: Vec<Command> = match action.action {
+            ConfirmKind::ClearDead { key, squad, .. } => {
+                // Re-fold on Enter, not at open: the prompt may have sat for a
+                // while and the honest set is whatever is dead NOW.
+                let dead = view.section_dead_rows(&key, squad);
+                let total = dead.len();
+                let picked: Vec<Command> = dead
+                    .into_iter()
+                    .take(CLEAR_DEAD_MAX)
+                    .map(remove_dead)
+                    .collect();
+                // Say what the cap left behind - a silent truncation would read
+                // as "cleared everything" while rows stayed on screen.
+                if total > CLEAR_DEAD_MAX {
+                    let rest = total - CLEAR_DEAD_MAX;
+                    view.set_notice(format!(
+                        "clearing {CLEAR_DEAD_MAX}, {rest} left - repeat to continue"
+                    ));
+                }
+                picked
+            }
+            // Handled (and returned) before this table is reached.
+            kind @ ConfirmKind::CloseTab { .. } => {
+                let _ = kind;
+                unreachable!("CloseTab commits above")
+            }
+            kind => match kind.command() {
+                Some(cmd) => vec![cmd],
+                None => Vec::new(),
+            },
+        };
+        if cmds.is_empty() {
+            view.set_notice("nothing left to clear".into());
+        }
+        for cmd in cmds {
+            write_msg(sock_w, &ClientMsg::Command(cmd))
+                .await
+                .map_err(|e| format!("confirm-action send failed: {e}"))?;
+        }
+        // (scope a+c) The sideline comes back after a row-scoped
+        // commit: selection resolved onto the acted row, or its neighbour.
+        view.reanchor_after_row_commit(row_name.as_deref());
+    }
+    Ok(StdinFlow::Continue)
 }

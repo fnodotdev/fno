@@ -22,6 +22,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::org_board::s_str;
+
 // ---------------------------------------------------------------------------
 // The chokepoint: the dispatch, in-process
 // ---------------------------------------------------------------------------
@@ -352,7 +354,8 @@ pub fn run_notify_watch(
                     notes.push(format!("{key}:clear"));
                     continue;
                 }
-                let token = rows_token(queue.get("rows").and_then(Value::as_array));
+                let rows = queue.get("rows").and_then(Value::as_array);
+                let token = rows_token(rows);
                 let body = format!("{count} {label}. {pointer}");
                 let verdict = verdict_label(notify_signal_via(
                     &path,
@@ -373,6 +376,18 @@ pub fn run_notify_watch(
                 ));
                 acted += u64::from(verdict == "sent");
                 notes.push(format!("{key}:{verdict}"));
+                // The due lane rides the same queue read: no extra source.
+                if *key == "operator_question" {
+                    due_pass(
+                        &path,
+                        now,
+                        min_interval_s,
+                        rows,
+                        &mut acted,
+                        &mut notes,
+                        &mut |t, m| notify_operator_confirmed(t, m, Some("fno inbox outstanding")),
+                    );
+                }
             }
         }
     }
@@ -467,6 +482,106 @@ fn rows_token(rows: Option<&Vec<Value>>) -> String {
         h.update(b"\n");
     }
     format!("{:x}", h.finalize())
+}
+
+/// The open questions past their deadline: `(id, overdue days, question)`,
+/// oldest first. A row the fold stamped `quiet` (snoozed, or before its
+/// deadline) never enters; an unstamped row reads as due, which is also the
+/// honest answer for a row filed before the stamp existed - it is old.
+fn due_rows(rows: &[Value], now: i64) -> Vec<(String, u64, String)> {
+    let mut due: Vec<(String, u64, String)> = rows
+        .iter()
+        .filter(|r| s_str(r, "quiet").is_none())
+        .filter_map(|r| {
+            let id = s_str(r, "id")?.to_string();
+            let ts = s_str(r, "ts")?.to_string();
+            let question = s_str(r, "question")?.to_string();
+            match crate::attention::quiet_from(&ts, None, None, now) {
+                crate::attention::Quiet::Due { epoch } => Some((id, epoch, question)),
+                _ => None,
+            }
+        })
+        .collect();
+    due.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    due
+}
+
+/// sha256 over the `(id, window)` pairs - the set is the state, and the
+/// window count inside it makes each 24h window a new state, which is the
+/// whole re-delivery cadence.
+fn due_token(due: &[(String, u64, String)]) -> String {
+    let mut h = Sha256::new();
+    h.update(due.len().to_le_bytes());
+    for (id, epoch, _) in due {
+        h.update(id.as_bytes());
+        h.update(epoch.to_le_bytes());
+    }
+    format!("{:x}", h.finalize())
+}
+
+/// The notice body: the count, the three oldest by id with how long each
+/// has waited, and the answer pointer. The age is days since the ask, a
+/// number true for every question, never an overdue figure the lane cannot
+/// know for a question filed with its own deadline. The durable queue holds
+/// the rest.
+fn due_body(due: &[(String, u64, String)]) -> String {
+    let mut body = format!("{} question(s) overdue", due.len());
+    for (id, epoch, question) in due.iter().take(3) {
+        let excerpt: String = question.chars().take(60).collect();
+        body.push_str(&format!("; {id} asked {}d ago \"{excerpt}\"", epoch + 1));
+    }
+    let hidden = due.len().saturating_sub(3);
+    if hidden > 0 {
+        body.push_str(&format!("; and {hidden} more"));
+    }
+    body.push_str(". Answer: fno inbox outstanding");
+    body
+}
+
+/// The signal-store key of the due lane, at module scope so the tests can
+/// assert the forget without naming the string twice.
+const DUE_KEY: &str = "operator_question_due";
+
+/// The due re-delivery leg of the board lane. A question past its deadline
+/// sits silent in the row-set lane above (its rows never change), which is
+/// how filed asks vanished for days with no ruling. One notice per
+/// 24h window past the deadline, through the same dedupe state machine as
+/// every lane - the window count in the token is the whole cadence. An
+/// empty due set (or an unreadable one) forgets the key like any cleared
+/// lane. The rows arrive read: the caller already lifted them off the
+/// queue for the row-set token.
+fn due_pass(
+    path: &Path,
+    now: u64,
+    min_interval_s: u64,
+    rows: Option<&Vec<Value>>,
+    acted: &mut u64,
+    notes: &mut Vec<String>,
+    send: &mut dyn FnMut(&str, &str) -> bool,
+) {
+    let due = rows.map(|r| due_rows(r, now as i64)).unwrap_or_default();
+    if due.is_empty() {
+        forget_at(path, DUE_KEY);
+        notes.push(format!("{DUE_KEY}:clear"));
+        return;
+    }
+    let token = due_token(&due);
+    let body = due_body(&due);
+    const TITLE: &str = "operator: overdue questions";
+    const POINTER: &str = "fno inbox outstanding";
+    let verdict = verdict_label(notify_signal_via(
+        path,
+        now,
+        min_interval_s,
+        DUE_KEY,
+        &token,
+        TITLE,
+        &body,
+        Some(POINTER),
+        || send(TITLE, &body),
+    ));
+    *acted += u64::from(verdict == "sent");
+    notes.push(format!("{DUE_KEY}:{verdict}"));
 }
 
 /// Fold the shared reader's classified main-CI conclusion into
@@ -890,5 +1005,138 @@ mod tests {
         }
         assert!(!fired);
         assert!(!confirmed);
+    }
+
+    fn ts_rfc3339(unix: i64) -> String {
+        chrono::DateTime::from_timestamp(unix, 0)
+            .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn unstamped_rows_read_due_and_quiet_stamped_rows_do_not() {
+        let now = 1_000_000;
+        let old = ts_rfc3339(now - 3 * 86_400);
+        let fresh = ts_rfc3339(now - 3_600);
+        let rows = vec![
+            json!({"id": "D2", "ts": old, "question": "snoozed", "quiet": "snoozed until you reply"}),
+            json!({"id": "D1", "ts": old, "question": "old one", "quiet": Value::Null}),
+            json!({"id": "D4", "ts": old, "question": "unstamped reads due"}),
+            json!({"id": "D3", "ts": fresh, "question": "fresh", "quiet": "quiet until tomorrow"}),
+        ];
+        let due = due_rows(&rows, now);
+        let ids: Vec<&str> = due.iter().map(|(id, _, _)| id.as_str()).collect();
+        // Oldest first, then id for determinism: D1 and D4 share the window.
+        assert_eq!(ids, vec!["D1", "D4"]);
+    }
+
+    #[test]
+    fn due_token_changes_when_a_window_increments() {
+        let due = vec![("D3634".to_string(), 2, "q".to_string())];
+        let t2 = due_token(&due);
+        let bumped: Vec<(String, u64, String)> = due
+            .iter()
+            .map(|(id, e, q)| (id.clone(), e + 1, q.clone()))
+            .collect();
+        assert_ne!(t2, due_token(&bumped));
+        assert_eq!(t2, due_token(&due));
+    }
+
+    #[test]
+    fn due_body_names_oldest_and_hides_the_rest() {
+        let due = vec![
+            ("D3634".to_string(), 2, "first question".to_string()),
+            ("D3636".to_string(), 1, "second question".to_string()),
+        ];
+        let body = due_body(&due);
+        assert!(body.starts_with("2 question(s) overdue"), "{body}");
+        assert!(
+            body.contains("D3634 asked 3d ago \"first question\""),
+            "{body}"
+        );
+        assert!(
+            body.contains("D3636 asked 2d ago \"second question\""),
+            "{body}"
+        );
+        assert!(body.ends_with("Answer: fno inbox outstanding"), "{body}");
+        let hidden = due_body(&[
+            ("A".to_string(), 1, "q".to_string()),
+            ("B".to_string(), 1, "q".to_string()),
+            ("C".to_string(), 1, "q".to_string()),
+            ("D".to_string(), 1, "q".to_string()),
+        ]);
+        assert!(hidden.contains("and 1 more"), "{hidden}");
+    }
+
+    #[test]
+    fn due_pass_sends_three_phase_contract() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let path = temp_path("due-pass");
+        let now = 1_000_000u64;
+        let row = || json!({"id": "D3634", "ts": ts_rfc3339(now as i64 - 3 * 86_400), "question": "vanished ask"});
+        let sends = std::cell::Cell::new(0u32);
+        let mut send = |_: &str, _: &str| {
+            sends.set(sends.get() + 1);
+            true
+        };
+        let mut acted = 0u64;
+        let mut notes: Vec<String> = Vec::new();
+        let rows = vec![row()];
+        let empty: Vec<Value> = Vec::new();
+
+        // Day one: the first overdue window sends.
+        due_pass(
+            &path,
+            now,
+            0,
+            Some(&rows),
+            &mut acted,
+            &mut notes,
+            &mut send,
+        );
+        assert_eq!(sends.get(), 1, "first window sends");
+        assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
+
+        // A re-read of the same state stays quiet.
+        due_pass(
+            &path,
+            now,
+            0,
+            Some(&rows),
+            &mut acted,
+            &mut notes,
+            &mut send,
+        );
+        assert_eq!(sends.get(), 1, "same state dedupes");
+        assert!(notes.contains(&format!("{DUE_KEY}:deduped")), "{notes:?}");
+
+        // The next window is new state: it re-fires. This is the ladder.
+        due_pass(
+            &path,
+            now + 86_400,
+            0,
+            Some(&rows),
+            &mut acted,
+            &mut notes,
+            &mut send,
+        );
+        assert_eq!(sends.get(), 2, "next window re-fires");
+        assert!(notes.contains(&format!("{DUE_KEY}:sent")), "{notes:?}");
+
+        // An answer empties the set: the clear note lands and the key is
+        // forgotten, so a future due set starts from a clean state.
+        due_pass(
+            &path,
+            now + 86_400,
+            0,
+            Some(&empty),
+            &mut acted,
+            &mut notes,
+            &mut send,
+        );
+        assert_eq!(sends.get(), 2);
+        assert!(notes.contains(&format!("{DUE_KEY}:clear")), "{notes:?}");
+        assert!(load_store(&path).get(DUE_KEY).is_none(), "key forgotten");
+        std::fs::remove_file(&path).ok();
     }
 }

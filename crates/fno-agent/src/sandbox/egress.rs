@@ -71,6 +71,20 @@ pub fn closed(ip: IpAddr, owned: &[IpAddr]) -> bool {
         }
 }
 
+/// The addresses a remote engine host resolves to. The proxy dials from the
+/// fno host, so without this a worker could reach its own VM's services by
+/// the VM's public address. A failed lookup answers empty.
+pub fn remote_addresses(engine_host: &str) -> Vec<IpAddr> {
+    use std::net::ToSocketAddrs as _;
+    let Ok(dest) = super::engine::SshHost::parse(engine_host) else {
+        return Vec::new();
+    };
+    (dest.host.as_str(), dest.port.unwrap_or(22))
+        .to_socket_addrs()
+        .map(|it| it.map(|a| a.ip()).collect())
+        .unwrap_or_default()
+}
+
 /// Every address on this host's interfaces. A read failure answers empty,
 /// which still leaves every private range closed.
 pub fn host_addresses() -> Vec<IpAddr> {

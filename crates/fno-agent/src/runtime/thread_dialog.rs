@@ -117,6 +117,25 @@ pub(crate) fn read_menu(screen: &str) -> Option<AnswerablePrompt> {
     .then_some(menu)
 }
 
+/// True when the claude manifest reads the screen as an idle, empty prompt
+/// box. A menu, a working turn or an unreadable screen is not idle, so a
+/// typed line never lands on one of them.
+pub(crate) fn at_idle_prompt(screen: &str) -> bool {
+    let Some(Ok(manifest)) = load_manifest("claude", None) else {
+        return false;
+    };
+    let view = ScreenView {
+        visible_text: screen,
+        cursor_row: 0,
+        cursor_col: 0,
+        osc_title: None,
+        osc_progress: None,
+    };
+    manifest
+        .evaluate_answerable(&view)
+        .is_some_and(|(verdict, _)| verdict.state == "idle" && verdict.rule_id == "live_prompt_box")
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Choice {
     Once,
@@ -364,6 +383,12 @@ mod tests {
     const TWO: &str = "Bash command\n\n  rm -rf build\n  Remove the build directory\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No";
     const THREE: &str = "Bash command\n\n  git push\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. Yes, and don't ask again for git push commands in /w\n   3. No, and tell Claude what to do differently (esc)";
     const WRAPPED: &str = " Do you want to proceed?\n   1. Yes\n   2. Yes, and don't ask again for\n      Bash(cargo test:*)\n      Bash(git status:*)\n   3. No";
+
+    #[test]
+    fn a_menu_or_an_unreadable_screen_is_never_an_idle_prompt() {
+        assert!(!at_idle_prompt(TWO));
+        assert!(!at_idle_prompt(""));
+    }
 
     #[test]
     fn a_numbered_picker_takes_a_key() {

@@ -405,10 +405,14 @@ pub fn run(args: &[String]) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state = state_root();
     let rows = mine(&Sources {
-        corpus: state.join("evals").join("decision").join("v1"),
-        seed: state.join("evals/traces/seed-s2.log"),
+        corpus: crate::evals::state_evals_dir(&state)
+            .join("decision")
+            .join("v1"),
+        seed: crate::evals::state_evals_dir(&state).join("traces/seed-s2.log"),
         events: state.join("events.jsonl"),
-        plan_labels: state.join("evals").join("plan-labels").join("rows.jsonl"),
+        plan_labels: crate::evals::state_evals_dir(&state)
+            .join("plan-labels")
+            .join("rows.jsonl"),
         repo: crate::evals::canonical_repo_root(),
         plans: crate::paths_cli::plans_dir_for(&cwd),
         superseded: crate::evals::superseded_nodes(&crate::backlog::settings::graph_path_at(Some(

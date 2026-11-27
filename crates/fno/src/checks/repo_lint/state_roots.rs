@@ -1,14 +1,25 @@
 //! The state-roots ratchet (`fno doctor lint state-roots`), ported from
-//! `cli/src/fno/lint_cli.py` (deleted). Two rules, one baseline, both
+//! `cli/src/fno/lint_cli.py` (deleted). Three rules, one baseline, both
 //! directions. Rule A matches a `.fno` join token on a line whose two-line
 //! window also names a state file; rule B matches a zero-argument cache over
-//! a root read. Recorded departure: rule B is a line-scoped scanner, not a
-//! Python-AST walk; the both-directions baseline keeps a drained site loud.
+//! a root read; rule C matches a Rust join of a name straight onto a state
+//! root that the layout table does not carry. Recorded departure: rule B is a
+//! line-scoped scanner, not a Python-AST walk; the both-directions baseline
+//! keeps a drained site loud.
 
 use super::Invocation;
 use std::path::{Path, PathBuf};
 
 const STATE_ROOTS_BASELINE: &str = "scripts/ci/state-roots-baseline.txt";
+
+/// The one table of names that may sit at the top of a state root.
+const LAYOUT_TABLE: &str = "docs/state-root-layout.tsv";
+
+/// Rule C's two shapes: a first segment joined onto a named state-root
+/// resolver or variable, and a `place` family call, which answers the bare
+/// root spelling for a name the table does not carry.
+const ROOT_JOIN: &str = r#"\b(?:state_dir|fno_root|state_root|default_state_path|fno_home)\b(?:\([^()]*\))?\??\s*\.join\(\s*"([^"]+)""#;
+const PLACE_CALL: &str = r#"\bplace(?:_new|_dir|_in)?\(\s*(?:[^,()]|\([^()]*\))+,\s*"([^"]+)""#;
 
 /// (filename, resolver, owning_modules) - the `fno.paths.STATE_FILES` table.
 const STATE_FILES: &[(&str, Option<&str>, &[&str])] = &[
@@ -317,6 +328,93 @@ fn body_calls(lines: &[&str], def_idx: usize, name: &str) -> bool {
     false
 }
 
+/// The top-level names the table carries: every legacy name (a `*` is a
+/// glob) and every destination's first segment. `None` when the table is
+/// unreadable, so the rule fails closed.
+fn carried_names(root: &Path) -> Option<Vec<String>> {
+    let text = std::fs::read_to_string(root.join(LAYOUT_TABLE)).ok()?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        let mut cells = line.split('\t');
+        let (Some(legacy), Some(new)) = (cells.next(), cells.next()) else {
+            continue;
+        };
+        out.push(legacy.to_string());
+        if let Some(first) = new.split('/').next().filter(|f| *f != "-") {
+            out.push(first.to_string());
+        }
+    }
+    Some(out)
+}
+
+/// `*` matches any run of characters; the table's globs use nothing else.
+fn glob(pattern: &str, name: &str) -> bool {
+    let Some((head, tail)) = pattern.split_once('*') else {
+        return pattern == name;
+    };
+    let Some(rest) = name.strip_prefix(head) else {
+        return false;
+    };
+    (0..=rest.len()).any(|i| rest.is_char_boundary(i) && glob(tail, &rest[i..]))
+}
+
+/// Rule C: a Rust join that lands a name the layout table does not carry at
+/// the top of a state root. Test modules and comments are skipped. The key
+/// is the joined name's first segment.
+pub(crate) fn rule_c_violations(root: &Path) -> Vec<(String, String, String)> {
+    let Some(carried) = carried_names(root) else {
+        return vec![(
+            LAYOUT_TABLE.to_string(),
+            LAYOUT_TABLE.to_string(),
+            format!("{LAYOUT_TABLE} is unreadable; rule C cannot tell a kept name from a new one."),
+        )];
+    };
+    let shapes = [
+        regex::Regex::new(ROOT_JOIN).expect("static regex"),
+        regex::Regex::new(PLACE_CALL).expect("static regex"),
+    ];
+    let mut violations = Vec::new();
+    for (rel, path, suffix) in scan_files(root) {
+        if suffix != ".rs" {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines: Vec<&str> = body.lines().collect();
+        let skip = crate::repo_lint::seam_crossings::rust_cfg_test_lines(&lines);
+        for (no, line) in lines.iter().enumerate() {
+            if skip.contains(&(no + 1)) || line.trim_start().starts_with("//") {
+                continue;
+            }
+            for shape in &shapes {
+                for cap in shape.captures_iter(line) {
+                    let lit = cap.get(1).map_or("", |m| m.as_str());
+                    let first = lit.split('/').next().unwrap_or(lit);
+                    if first.is_empty() || carried.iter().any(|p| glob(p, first)) {
+                        continue;
+                    }
+                    violations.push((
+                        first.to_string(),
+                        rel.clone(),
+                        format!(
+                            "{rel}:{}: '{first}' joins the top of a state root, and \
+                             {LAYOUT_TABLE} carries no row for it. Fix: write under a kept \
+                             folder, or add the row (a keep row is the review for a new \
+                             top-level entry).",
+                            no + 1
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
 /// Baseline keys: (rule, path, key).
 type Baseline = std::collections::BTreeSet<(String, String, String)>;
 
@@ -348,6 +446,9 @@ fn find_all(root: &Path) -> Vec<(String, String, String, String)> {
     }
     for (rel, name, msg) in rule_b_violations(root) {
         out.push(("B".into(), rel, name, msg));
+    }
+    for (name, rel, msg) in rule_c_violations(root) {
+        out.push(("C".into(), rel, name, msg));
     }
     out
 }

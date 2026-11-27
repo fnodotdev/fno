@@ -1333,7 +1333,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "shlex",
- "strsim",
  "tempfile",
  "thiserror 2.0.21",
  "throbber-widgets-tui",
@@ -1396,7 +1395,7 @@ version = "0.1.0"
 
 [[package]]
 name = "fno-mail"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1405,11 +1404,13 @@ dependencies = [
 
 [[package]]
 name = "fno-proto"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
+ "chrono",
  "rio-vt",
  "serde",
  "serde_json",
+ "strsim",
  "tokio",
 ]
 

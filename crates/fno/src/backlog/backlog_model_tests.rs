@@ -477,7 +477,7 @@ fn cards_carry_created_at_for_the_list_rows() {
         harness: Some("claude".into()),
         ..Default::default()
     }];
-    inp2.sessions = crate::search_query::SessionDirectory::from_registry(&roster);
+    inp2.sessions = crate::search_query::session_directory(&roster);
     let by_ref = board_refs(&inp2);
     let order = order_of(&inp2);
     let row_a2 = inp2
@@ -1034,7 +1034,7 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
         };
         match crate::search_query::parse(q, surface, now) {
             Err(msg) => match case.get("error").and_then(|e| e.as_str()) {
-                Some(want) if want == msg => {}
+                Some(want) if want == msg.to_string() => {}
                 other => fails.push(format!(
                     "q {q:?}: parser errored {msg:?}, case wanted {other:?}"
                 )),
@@ -1088,14 +1088,6 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
     assert_eq!(
         crate::search_query::areas_for_node("flake hunt", "the .github/workflows matrix", None),
         ["ci"]
-    );
-    assert_eq!(
-        crate::search_query::areas_for_kind("session_reaped"),
-        ["agents"]
-    );
-    assert_eq!(
-        crate::search_query::areas_for_kind("day_boundary"),
-        Vec::<&str>::new()
     );
     // Spec rule 10: the module renders its own help; each surface's keys
     // answer, the other surface's do not.

@@ -64,6 +64,8 @@ pub struct WriteAsk {
     pub sandbox: Option<Value>,
     pub alias: Option<String>,
     pub session: Option<String>,
+    /// The routine-work permission rules, empty unless the switch is on.
+    pub rules: crate::spawn::auto_approve::Rules,
 }
 
 pub struct WriteReceipt {
@@ -74,7 +76,11 @@ pub struct WriteReceipt {
 /// The payload bytes: `{"env": ...}` plus the optional sandbox block and the
 /// foreign-endpoint deny, keys inserted in sorted order so the content address
 /// is deterministic (Python wrote `json.dumps(payload, sort_keys=True)`).
-fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
+pub(crate) fn payload_bytes(
+    env: &Map<String, Value>,
+    sandbox: Option<&Value>,
+    rules: &crate::spawn::auto_approve::Rules,
+) -> Vec<u8> {
     let mut sorted_env = Map::new();
     let mut keys: Vec<&String> = env.keys().collect();
     keys.sort();
@@ -84,8 +90,18 @@ fn payload_bytes(env: &Map<String, Value>, sandbox: Option<&Value>) -> Vec<u8> {
     let mut root = Map::new();
     root.insert("env".to_string(), Value::Object(sorted_env));
     let deny = foreign_endpoint_tool_denies(env);
+    let mut permissions = Map::new();
     if !deny.is_empty() {
-        root.insert("permissions".to_string(), json!({"deny": deny}));
+        permissions.insert("deny".to_string(), json!(deny));
+    }
+    if !rules.allow.is_empty() {
+        permissions.insert("allow".to_string(), json!(rules.allow));
+    }
+    if !rules.ask.is_empty() {
+        permissions.insert("ask".to_string(), json!(rules.ask));
+    }
+    if !permissions.is_empty() {
+        root.insert("permissions".to_string(), Value::Object(permissions));
     }
     if let Some(sb) = sandbox {
         root.insert("sandbox".to_string(), sb.clone());
@@ -267,7 +283,7 @@ pub fn write(ask: &WriteAsk, cwd: &Path) -> Result<WriteReceipt, String> {
     let base = crate::state_layout::place_dir(&state, "route-settings")
         .ok_or_else(|| "route-settings is not a state-root dir".to_string())?;
     std::fs::create_dir_all(&base).map_err(|e| format!("{}: {e}", base.display()))?;
-    let payload = payload_bytes(&ask.env, ask.sandbox.as_ref());
+    let payload = payload_bytes(&ask.env, ask.sandbox.as_ref(), &ask.rules);
     let digest = digest_of(&payload);
     let digest_path = base.join(format!("{digest}.json"));
     write_atomic_0600(&digest_path, &payload, false)?;
@@ -352,7 +368,8 @@ pub fn publish_for_row(recorded: &str, session_id: &str) -> Option<String> {
 /// names neither overlay nor sandbox: a plain lane launch carries no
 /// settings file, but a write policy alone still owes the scrub floor. A
 /// non-empty `session` names the returned file `session-<id>.json` (the
-/// resume reader replays the recorded path verbatim).
+/// resume reader replays the recorded path verbatim). `node` is the child's
+/// node from the spawn payload, never the spawner's own env.
 pub fn write_composed(
     route_env: &Map<String, Value>,
     account_env: &Map<String, Value>,
@@ -360,25 +377,44 @@ pub fn write_composed(
     alias: Option<&str>,
     session: Option<&str>,
     cwd: &Path,
+    node: Option<&str>,
+    role: Option<&str>,
 ) -> Result<Option<String>, String> {
-    if route_env.is_empty() && account_env.is_empty() && sandbox.is_none() {
+    let rules = crate::spawn::auto_approve::rules_for(cwd, node, role);
+    let Some(env) = env_for_write(route_env, account_env, sandbox.is_some(), !rules.is_empty())
+    else {
         return Ok(None);
-    }
-    let spawn_env: Map<String, Value> = std::env::vars()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
-    let env = compose_env(route_env, account_env, &spawn_env);
+    };
     let receipt = write(
         &WriteAsk {
             env,
             sandbox,
             alias: alias.map(str::to_string),
             session: session.map(str::to_string),
+            rules,
         },
         cwd,
     )
     .map_err(|e| format!("lane settings: {e}"))?;
     Ok(Some(receipt.path.to_string_lossy().into_owned()))
+}
+
+/// The env a composed settings file carries, or `None` when the ask owes no
+/// file. Rules alone owe no scrub floor: a plain lane keeps its own auth env.
+fn env_for_write(
+    route_env: &Map<String, Value>,
+    account_env: &Map<String, Value>,
+    has_sandbox: bool,
+    has_rules: bool,
+) -> Option<Map<String, Value>> {
+    let plain = route_env.is_empty() && account_env.is_empty() && !has_sandbox;
+    if plain {
+        return has_rules.then(Map::new);
+    }
+    let spawn_env: Map<String, Value> = std::env::vars()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect();
+    Some(compose_env(route_env, account_env, &spawn_env))
 }
 
 /// The write kind behind the spawn-overlay action (law d-fe66560a allows no
@@ -433,6 +469,7 @@ pub fn write_settings_kind(payload: &Value) -> Result<Value, String> {
         // The transport contract carries no session id today; a fresh
         // compose that knows one goes through write_composed.
         session: None,
+        rules: Default::default(),
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let receipt = write(&ask, &cwd)?;
@@ -502,6 +539,51 @@ mod tests {
     }
 
     #[test]
+    fn rules_ride_the_settings_file_and_a_plain_lane_keeps_its_own_auth_env() {
+        let rules = crate::spawn::auto_approve::Rules {
+            allow: vec!["Read(//w/**)".into()],
+            ask: vec!["Edit(//w/**/.git)".into()],
+        };
+        let bytes = payload_bytes(&Map::new(), None, &rules);
+        let doc: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            doc.pointer("/permissions/allow"),
+            Some(&json!(["Read(//w/**)"]))
+        );
+        assert_eq!(
+            doc.pointer("/permissions/ask"),
+            Some(&json!(["Edit(//w/**/.git)"]))
+        );
+        let none = Map::new();
+        let env = env_for_write(&none, &none, false, true).expect("rules alone owe a file");
+        assert!(env.is_empty(), "no scrub floor on a plain lane");
+        assert!(
+            env_for_write(&none, &none, false, false).is_none(),
+            "nothing to write"
+        );
+        let route = env_of(&[("ANTHROPIC_MODEL", "glm-5.2")]);
+        assert!(env_for_write(&route, &none, false, false).is_some());
+        let root = tempfile::tempdir().unwrap();
+        let (guard, saved) = state_pin(root.path());
+        let ask = WriteAsk {
+            env,
+            sandbox: None,
+            alias: None,
+            session: None,
+            rules,
+        };
+        let path = write(&ask, root.path()).unwrap().path;
+        let doc: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(doc.pointer("/env"), Some(&json!({})));
+        assert_eq!(
+            doc.pointer("/permissions/ask"),
+            Some(&json!(["Edit(//w/**/.git)"]))
+        );
+        state_restore(saved);
+        drop(guard);
+    }
+
+    #[test]
     fn the_alias_lands_at_lane_name_and_refuses_a_stranger() {
         let root = tempfile::tempdir().unwrap();
         let (guard, saved) = state_pin(root.path());
@@ -510,6 +592,7 @@ mod tests {
             sandbox: None,
             alias: Some("zai-flash".to_string()),
             session: None,
+            rules: Default::default(),
         };
         let receipt = write(&ask, root.path()).unwrap();
         let alias = receipt.alias_path.unwrap();
@@ -587,6 +670,8 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -633,6 +718,8 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -643,6 +730,8 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
+            None,
         )
         .unwrap()
         .unwrap();

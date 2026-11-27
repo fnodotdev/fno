@@ -16,6 +16,8 @@
 name: install-channels
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - 'scripts/install/**'
@@ -147,15 +149,10 @@ jobs:
                 node: ''
                 live: true
                 readme: ['brew install fnodotdev/fno/fno']
-              # crates.io holds fno + fno-agent as 0.0.0 name reservations,
-              # so the install finds no binaries and exits 101. The node
-              # field below owns the real publish; that PR flips the row
-              # back to pass, and until then the placeholder's failure is
-              # the row's honest daily read of the channel.
               - id: cargo
                 runs-on: ubuntu-24.04
-                expect: fail
-                node: x-0b72
+                expect: pass
+                node: ''
                 live: true
                 readme: ['cargo install fno fno-agent']
               - id: skills-sh

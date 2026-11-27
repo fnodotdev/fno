@@ -1,6 +1,6 @@
 //! Quarantine of interrupted-write temp files: the `.tmp.`/`.part` debris
 //! a daemon crash leaves beside its targets, moved under
-//! `~/.fno/.interrupted-writes/` so a reader never half-sees a write.
+//! `~/.fno/state/interrupted-writes/` so a reader never half-sees a write.
 //! Moved out of daemon.rs (over the line budget) with its behavior intact.
 
 use crate::events::EventEmitter;
@@ -14,7 +14,7 @@ pub(crate) fn quarantine_interrupted_write_temps(
 ) -> Vec<String> {
     let mut found = Vec::new();
     let state_root = home.root().parent().unwrap_or(home.root());
-    let quarantine = state_root.join(".interrupted-writes");
+    let quarantine = crate::state_layout::place(state_root, ".interrupted-writes");
     for dir in [home.root(), state_root] {
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;

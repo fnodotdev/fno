@@ -148,6 +148,14 @@ Two problems compound here. The trigger for what gets evaluated was biased towar
 
 **Stage as a third gate outcome.** Neither guard above hard-blocks. Both refuse the LIVE write and instead write the proposed content to `{memory-dir}/.staged/{filename}.md` (exit 3), for a human to review and apply by hand. `allow` (exit 0/2) and `block` (exit 1, a real error) were the only two outcomes before. `stage` is the third, for a write attempted with no human in the loop to confirm it on the spot.
 
+## Read counting and retirement
+
+Auto-written entries now have an exit. A PreToolUse `Read` hook (`scripts/memory/read-count-hook.sh`) appends one jsonl line per read of a memory entry to `{memory-dir}/.reads.jsonl`. A SessionStart pass (`scripts/memory/retire-unread-pass.sh`) reads that sidecar. It archives an entry that nobody has ever read by moving it to `{memory-dir}/.archived/`. It never deletes. Only entries whose frontmatter carries `auto_generated: true` are eligible. Operator-curated files are never touched. The pass prunes a moved entry's line only from MEMORY.md, the writer-owned index. The operator's own CLAUDE.md and ARCHIVE-INDEX.md stay untouched.
+
+Three guards bound the retirement. An entry with a missing or unparsable `created_at` is never archived. Unknown age fails safe. An entry younger than the probation window (`--probation-days`, default 30) is left alone. A fresh entry cannot be retired before anything had a chance to read it. If `.archived/` already holds a file of that name, the move targets a timestamp-suffixed name instead. The archive's history survives. Restoring an entry is a hand move back into the memory dir plus a re-add of its MEMORY.md line. There is no undo command.
+
+Both sides record use through the same sidecar. When a pass revises an existing entry, the writer appends an `update` event. If a sidecar line's ts is at least the entry's own created_at, the line counts as use. Lines predating it are stale ghosts of a prior life of that name. A recreated name starts at zero reads, and the writer never rewrites the sidecar. The Read hook counts reads. Dedup stays a sidecar no-op. A pass re-deriving identical content is not a consumer read. Counting covers Claude Code Read calls only. Codex and agy sessions have no Read hook. Grep and Glob access leaves no line. A harness-wide read signal is future work. To try the pass without moving anything, run it with `--dry-run`. Without `--memory-dir`, the pass derives the dir from the hook payload the same way the counter does.
+
 ## Completion eval (a separate autonomous writer)
 
 `crates/fno-agent/src/gate/finalize.rs::write_postmortem` is a second, older autonomous writer, unrelated to `write-memory-entry.sh` above. It writes one structured artifact per `fno-agent finalize` call to `~/.fno/postmortems/`. `crates/fno-agent/src/eval/retro/postmortem.rs` and `classify.py` consume that artifact into a backlog node or an inbox item: the eval loop's corpus.

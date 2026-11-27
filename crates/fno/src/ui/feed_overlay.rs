@@ -1,5 +1,5 @@
 //! The activity-feed shell-out leg : a bounded, fail-open shell-out to
-//! `fno agent feed --json`, in the same shape as [`crate::org_overlay`]'s
+//! `fno agent fleet feed --json`, in the same shape as [`crate::org_overlay`]'s
 //! fold (: the 800ms cap it first copied was half the projection's
 //! measured runtime, so the feed could never render).
 //!
@@ -10,7 +10,7 @@
 //! fetches it - off the UI loop, and a typed [`FeedError`] instead of a bare
 //! `None` so the client can say WHICH failure fired.
 
-use serde::Deserialize;
+pub use fno_proto::feed::row::{event_fields, owned, EventCtx, FeedItem, IStr};
 use std::time::Duration;
 
 /// Ten seconds, org_overlay's budget for a comparable multi-store read.
@@ -20,85 +20,6 @@ use std::time::Duration;
 /// costs nothing: the fold runs off the UI loop, one at a time, and
 /// `kill_on_drop` reaps the child on the timeout.
 const SHELLOUT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// One feed row, as emitted by `fno agent feed --json`. `session_id` is what
-/// the deep link resolves through the sideline's own attach path.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct FeedItem {
-    pub ts: String,
-    pub kind: String,
-    #[serde(default)]
-    pub node: Option<String>,
-    /// The graph node's project directory for node-created launch prefill.
-    #[serde(default)]
-    pub cwd: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub harness: Option<String>,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default, rename = "ref")]
-    pub r#ref: Option<String>,
-    /// The registry row's worker name, on a removal: the handle the resume
-    /// action and the copied command address.
-    #[serde(default)]
-    pub name: Option<String>,
-    /// Who acted, when that is a mechanism rather than a session. Provenance,
-    /// never an attach target.
-    #[serde(default)]
-    pub actor: Option<String>,
-    /// The model observed for that session AT EVENT TIME.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// The effort recorded for that session at event time.
-    #[serde(default)]
-    pub effort: Option<String>,
-    /// The pipeline phase the session was in.
-    #[serde(default)]
-    pub phase: Option<String>,
-    /// A rendered recovery line the panel hands over verbatim, on a
-    /// `session_reaped` row.
-    #[serde(default)]
-    pub detail: Option<String>,
-    /// Why the row happened, when the source records one: a removal's
-    /// recorded cause, verbatim.
-    #[serde(default)]
-    pub reason: Option<String>,
-    /// `L{level} {scope}` for the team kinds and a teamed removal.
-    #[serde(default)]
-    pub role: Option<String>,
-    /// The promoted worker's name on the role kinds; the feed search
-    /// answers `l:` through it.
-    #[serde(default)]
-    pub holder: Option<String>,
-    /// The lead or epic the row rolls up to; the panel groups on it.
-    #[serde(default)]
-    pub owner: Option<String>,
-    /// The session that spawned this row's session, from the birth event.
-    #[serde(default)]
-    pub parent: Option<String>,
-    /// The PR URL, on a ship row. The provenance view's PR action opens it.
-    #[serde(default)]
-    pub url: Option<String>,
-    /// The role holder the row rolls up to; `l:` answers through it before
-    /// the owner spelling.
-    #[serde(default)]
-    pub lead: Option<String>,
-    /// True when `lead` names the LIVE team the projection resolved at
-    /// render time; false when it is the event-time holder's fallback. The
-    /// now-led-by link lights only on the live name.
-    #[serde(default)]
-    pub lead_current: bool,
-    /// Which slice of the fleet the row is (mail, backlog, ship, agents,
-    /// mux, fleet, ci), stamped by the projection.
-    #[serde(default)]
-    pub area: String,
-    /// The row's position in the projection's total order. The page requests
-    /// hand it back verbatim; the client parses nothing else to page.
-    #[serde(default)]
-    pub cursor: String,
-}
 
 /// Why a feed fold failed. Each variant is a different user action - retune a
 /// budget, free an admission slot, read the projection's stderr - which is
@@ -153,137 +74,46 @@ fn stderr_note(stderr: &[u8], status: &std::process::ExitStatus) -> String {
     }
 }
 
-/// One fold result, as it travels the client's single-flight channel.
-pub type FoldResult = Result<FeedPage, FeedError>;
-
-/// The page size: the head page and every paged page. The projection's own
-/// default when the client sends no `--limit`, spelled here so the argv
-/// never drifts from the window's arithmetic.
-pub const FEED_PAGE: usize = 200;
-
-/// The flat prefilter flags a one-group positive query pushes: every field
-/// ANDs, and the values inside one field are comma-OR. The projection owns
-/// the match semantics; this only spells the argv.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct FeedFilter {
-    pub node: Option<String>,
-    pub kind: Option<String>,
-    pub area: Option<String>,
-    pub session: Option<String>,
-    pub agent: Option<String>,
-    pub harness: Option<String>,
-    pub lead: Option<String>,
-    pub since: Option<u64>,
-    pub until: Option<u64>,
-}
-
-impl FeedFilter {
-    /// True when nothing is set, so the argv carries no filter at all.
-    pub fn is_empty(&self) -> bool {
-        self.node.is_none()
-            && self.kind.is_none()
-            && self.area.is_none()
-            && self.session.is_none()
-            && self.agent.is_none()
-            && self.harness.is_none()
-            && self.lead.is_none()
-            && self.since.is_none()
-            && self.until.is_none()
-    }
-
-    /// The argv spelling: flag then value, in a stable order the tests pin.
-    pub fn to_args(&self) -> Vec<String> {
-        let mut out = Vec::new();
-        let pair = |out: &mut Vec<String>, flag: &str, v: &Option<String>| {
-            if let Some(v) = v {
-                out.push(flag.to_string());
-                out.push(v.clone());
-            }
-        };
-        pair(&mut out, "--node", &self.node);
-        pair(&mut out, "--kind", &self.kind);
-        pair(&mut out, "--area", &self.area);
-        pair(&mut out, "--session", &self.session);
-        pair(&mut out, "--agent", &self.agent);
-        pair(&mut out, "--harness", &self.harness);
-        pair(&mut out, "--lead", &self.lead);
-        if let Some(s) = self.since {
-            out.push("--since-epoch".into());
-            out.push(s.to_string());
-        }
-        if let Some(u) = self.until {
-            out.push("--until-epoch".into());
-            out.push(u.to_string());
-        }
-        out
-    }
-}
-
-/// Which page of the keyset to read. `Head` is the newest page; `Older` and
-/// `Newer` page from a cursor; `Live` is the refresh tick's incremental read
-/// of the rows above the newest one already held.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PageReq {
-    Head,
-    /// Rows strictly below the cursor, newest [`FEED_PAGE`] of them.
-    Older(String),
-    /// Rows strictly above the cursor, oldest [`FEED_PAGE`] of them.
-    Newer(String),
-    /// The refresh read: rows above the held cursor, like `Newer`.
-    Live(String),
-}
-
-impl PageReq {
-    /// The tag the fold bookkeeping reads, so a stale page can be told from
-    /// a fresh one without comparing cursors.
-    pub fn is_live(&self) -> bool {
-        matches!(self, PageReq::Live(_))
-    }
-}
-
-/// One landed page: the request it answers and the rows, ascending.
+/// What one fold lands: the full rows of a one-shot read (a shot, a test),
+/// oldest first, or one answer from the live panel's held reader.
 #[derive(Debug)]
-pub struct FeedPage {
-    pub req: PageReq,
-    pub items: Vec<FeedItem>,
+pub enum Land {
+    Rows(Vec<FeedItem>),
+    Answer(Box<fno_proto::feed::serve::Answer>),
 }
 
-/// The argv one page request spells, `Err` carrying the bad cursor's own
-/// line when the request carries one the projection would refuse.
-pub fn page_argv(req: &PageReq, filter: Option<&FeedFilter>) -> Vec<String> {
-    let mut argv = vec![
-        "agents".to_string(),
+/// One fold result, as it travels the client's single-flight channel.
+pub type FoldResult = Result<Land, FeedError>;
+
+/// The `--limit` that reads every row: the projection keeps the newest
+/// `limit`, and no history comes near this.
+pub const FEED_HISTORY_ROWS: usize = 10_000_000;
+
+/// The argv of the panel's one read: the whole history as a JSON array.
+pub fn history_argv() -> Vec<String> {
+    vec![
+        "agent".to_string(),
+        "fleet".to_string(),
         "feed".to_string(),
         "--json".to_string(),
         "--limit".to_string(),
-        FEED_PAGE.to_string(),
-    ];
-    match req {
-        PageReq::Head => {}
-        PageReq::Older(c) | PageReq::Newer(c) | PageReq::Live(c) => {
-            let flag = if matches!(req, PageReq::Older(_)) {
-                "--before"
-            } else {
-                "--after"
-            };
-            argv.push(flag.to_string());
-            argv.push(c.clone());
-        }
-    }
-    if let Some(f) = filter {
-        argv.extend(f.to_args());
-    }
-    argv
+        FEED_HISTORY_ROWS.to_string(),
+    ]
 }
 
-/// Run one page of the feed projection, `Err` carrying the typed reason on
-/// any failure. An empty page is `Ok` with no rows - a real answer.
-pub async fn fetch_page(req: PageReq, filter: Option<&FeedFilter>) -> FoldResult {
+/// The one place the client starts the feed projection: the one-shot read
+/// and the held reader both spawn through it, reaped when dropped.
+pub fn feed_command<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> tokio::process::Command {
     let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command.args(args).kill_on_drop(true);
     command
-        .args(page_argv(&req, filter))
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true);
+}
+
+/// Read the whole feed history, `Err` carrying the typed reason on any
+/// failure. An empty history is `Ok` with no rows - a real answer.
+pub async fn fetch_history() -> Result<Vec<FeedItem>, FeedError> {
+    let mut command = feed_command(&history_argv());
+    command.stdin(std::process::Stdio::null());
     let fut = crate::process_admission::tokio_output(&mut command);
     let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
         .await
@@ -292,8 +122,7 @@ pub async fn fetch_page(req: PageReq, filter: Option<&FeedFilter>) -> FoldResult
     if !output.status.success() {
         return Err(FeedError::Exit(stderr_note(&output.stderr, &output.status)));
     }
-    let items = parse_feed(&output.stdout, &output.stderr)?;
-    Ok(FeedPage { req, items })
+    parse_feed(&output.stdout, &output.stderr)
 }
 
 fn parse_feed(stdout: &[u8], stderr: &[u8]) -> Result<Vec<FeedItem>, FeedError> {
@@ -303,166 +132,6 @@ fn parse_feed(stdout: &[u8], stderr: &[u8]) -> Result<Vec<FeedItem>, FeedError> 
             stderr_first_line(stderr, "none")
         ))
     })
-}
-
-/// The context one event row's field map reads: the graph rows' project,
-/// parent and open state per node, and the registry's session identities.
-pub struct EventCtx {
-    /// node id -> (project, parent, open)
-    pub nodes: std::collections::HashMap<String, (Option<String>, Option<String>, bool)>,
-    pub sessions: crate::search_query::SessionDirectory,
-}
-
-impl EventCtx {
-    pub fn from_rows(
-        rows: &[crate::node_row::NodeRow],
-        registry: &[crate::agents_view::RegistryAgent],
-    ) -> Self {
-        let mut nodes = std::collections::HashMap::new();
-        for r in rows {
-            let Some(id) = r.id() else {
-                continue;
-            };
-            let open = !r.is_completed();
-            nodes.insert(id.to_string(), (r.project.clone(), r.parent.clone(), open));
-        }
-        EventCtx {
-            nodes,
-            sessions: crate::search_query::SessionDirectory::from_registry(registry),
-        }
-    }
-}
-
-/// The event row's search field map, the `Surface::Event` leg. The same
-/// canonical keys the node leg answers; `s:` refuses here because kind is
-/// the event's work state.
-pub fn event_fields(item: &FeedItem, ctx: &EventCtx) -> crate::search_query::Fields {
-    use crate::search_query::Fields;
-    let mut f = Fields::new();
-    let push = |f: &mut Fields, key: &str, val: Option<String>| {
-        if let Some(v) = val.filter(|v| !v.is_empty()) {
-            // Stamps stay as stored: the page's stamp parser reads the
-            // RFC3339 markers case-sensitively.
-            let v = if key == "ts" { v } else { v.to_lowercase() };
-            let slot = f.entry(key.to_string()).or_default();
-            if !slot.contains(&v) {
-                slot.push(v);
-            }
-        }
-    };
-    push(&mut f, "id", item.node.clone());
-    push(&mut f, "kind", Some(item.kind.clone()));
-    if let Some(sid) = &item.session_id {
-        push(&mut f, "session", Some(sid.clone()));
-        if let Some(entry) = ctx.sessions.get(sid) {
-            for id in &entry.ids {
-                push(&mut f, "session", Some(id.clone()));
-            }
-            push(&mut f, "agent", Some(entry.name.clone()));
-            push(&mut f, "harness", entry.harness.clone());
-            push(&mut f, "model", entry.model.clone());
-        }
-    }
-    push(&mut f, "spawner", item.parent.clone());
-    push(&mut f, "agent", item.name.clone());
-    push(&mut f, "actor", item.actor.clone());
-    push(&mut f, "harness", item.harness.clone());
-    push(&mut f, "model", item.model.clone());
-    push(&mut f, "effort", item.effort.clone());
-    push(&mut f, "phase", item.phase.clone());
-    if let Some(url) = &item.url {
-        if let Some(rest) = url.split("/pull/").nth(1) {
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            push(&mut f, "pr", (!num.is_empty()).then_some(num));
-        }
-    }
-    let node_ctx = item.node.as_deref().and_then(|n| ctx.nodes.get(n));
-    let project = item
-        .cwd
-        .as_deref()
-        .and_then(|cwd| {
-            cwd.rsplit('/')
-                .find(|seg| !seg.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| node_ctx.and_then(|(p, _, _)| p.clone()));
-    push(&mut f, "project", project);
-    let epic = item
-        .owner
-        .as_deref()
-        .and_then(|o| o.strip_prefix("epic "))
-        .and_then(|rest| rest.split_whitespace().next().map(str::to_string));
-    push(&mut f, "epic", epic);
-    push(&mut f, "epic", node_ctx.and_then(|(_, p, _)| p.clone()));
-    // `in`: the node and its ancestors through the context.
-    let mut chain: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    if let Some(n) = &item.node {
-        chain.push(n.clone());
-        seen.insert(n.clone());
-        let mut cur = node_ctx.and_then(|(_, p, _)| p.clone());
-        while let Some(p) = cur {
-            if !seen.insert(p.clone()) {
-                break;
-            }
-            chain.push(p.clone());
-            cur = ctx.nodes.get(&p).and_then(|(_, parent, _)| parent.clone());
-        }
-    }
-    for id in chain {
-        push(&mut f, "in", Some(id));
-    }
-    let holder = item.holder.clone().or_else(|| {
-        let o = item.owner.as_deref().unwrap_or("");
-        if let Some(rest) = o.strip_prefix("lead ") {
-            rest.split_once(" L").map(|(h, _)| h.to_string())
-        } else {
-            o.rsplit_once('(')
-                .and_then(|(_, r)| r.strip_suffix(')').map(str::to_string))
-        }
-    });
-    push(&mut f, "lead", item.lead.clone().or_else(|| holder.clone()));
-    push(&mut f, "agent", holder.clone());
-    push(&mut f, "ts", Some(item.ts.clone()));
-    let area = crate::search_query::areas_for_kind(&item.kind);
-    for a in area {
-        push(&mut f, "area", Some(a.to_string()));
-    }
-    push(
-        &mut f,
-        "area",
-        (!item.area.is_empty()).then_some(item.area.clone()),
-    );
-    if node_ctx.is_some_and(|(_, _, open)| *open) {
-        push(&mut f, "is", Some("open".to_string()));
-    }
-    if item
-        .session_id
-        .as_deref()
-        .and_then(|sid| ctx.sessions.get(sid))
-        .is_some_and(|entry| !entry.exited)
-    {
-        push(&mut f, "is", Some("live".to_string()));
-    }
-    if item.node.is_some() {
-        push(&mut f, "has", Some("node".to_string()));
-    }
-    if item.session_id.is_some() {
-        push(&mut f, "has", Some("session".to_string()));
-    }
-    if item.url.as_deref().is_some_and(|u| u.contains("/pull/")) {
-        push(&mut f, "has", Some("pr".to_string()));
-    }
-    if item.reason.is_some() {
-        push(&mut f, "has", Some("reason".to_string()));
-    }
-    push(&mut f, "title", Some(item.title.clone()));
-    push(&mut f, "details", item.reason.clone());
-    push(&mut f, "details", item.detail.clone());
-    push(&mut f, "text", Some(item.title.clone()));
-    push(&mut f, "text", item.node.clone());
-    push(&mut f, "text", item.name.clone());
-    f
 }
 
 #[cfg(test)]
@@ -477,6 +146,17 @@ mod tests {
         assert_eq!(items[0].kind, "node_started");
         assert_eq!(items[0].session_id.as_deref(), Some("s-do"));
         assert_eq!(items[1].r#ref.as_deref(), Some("1395"));
+        // Both rows name node x-aaaa: one shared allocation, not two copies.
+        let node_ptr = |i: usize| {
+            items
+                .get(i)
+                .and_then(|it| it.node.as_deref())
+                .map(str::as_ptr)
+        };
+        assert!(
+            node_ptr(0).is_some() && node_ptr(0) == node_ptr(1),
+            "a repeated node interns once"
+        );
     }
     #[test]
     fn garbage_is_malformed_carrying_stderr() {
@@ -486,6 +166,17 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("malformed JSON"));
         assert!(rendered.contains("skipped 3 malformed question lines"));
+    }
+
+    // AC5 and premise 12: the panel's one read spells the current command
+    // and reads every row; no cursor rides it, so `--after ''`, which the
+    // projection refuses with exit 2, can never be sent.
+    #[test]
+    fn history_argv_reads_every_row_with_no_cursor() {
+        let argv = history_argv();
+        assert!(argv.starts_with(&["agent".into(), "fleet".into(), "feed".into()]));
+        assert!(argv.ends_with(&["--limit".into(), FEED_HISTORY_ROWS.to_string()]));
+        assert!(!argv.iter().any(|a| a == "--after" || a == "--before"));
     }
 
     // regression: the timeout names itself and its duration, so the

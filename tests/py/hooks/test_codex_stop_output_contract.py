@@ -26,7 +26,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[3]
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
-NUDGE = REPO_ROOT / "hooks" / "operator-capture-nudge.sh"
 
 CODEX_INVALID_JSON = "hook returned invalid stop hook JSON output"
 
@@ -186,26 +185,13 @@ def test_stop_group_output_is_codex_valid(stub_run) -> None:
         )
 
 
-def test_nudge_markdown_is_rejected(tmp_path) -> None:
+def test_nudge_markdown_is_rejected() -> None:
     """AC3-ERR positive control: the output that idled two workers fails the
-    validator. Without this, a validator that accepts everything reads green."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    for name in ("fno", "fno-agent"):
-        _fno_stub(bin_dir, name, exit_code=1)
-    env = _hook_env(tmp_path, bin_dir)
-    result = subprocess.run(
-        ["bash", str(NUDGE)],
-        input="",
-        env=env,
-        cwd=str(tmp_path),
-        capture_output=True,
-        text=True,
-        timeout=60,
+    validator. Without this, a validator that accepts everything reads green.
+    The text is the operator-capture leg's failed-read branch, verbatim from
+    crates/fno-agent/src/runtime/hook/front/stop.rs."""
+    markdown = (
+        "## Operator capture\n\ncould not be read "
+        "(fno inbox operator status exit 1). Run it directly.\n"
     )
-    assert result.returncode == 0
-    assert result.stdout.strip(), "expected the failed-read Markdown branch"
-    assert (
-        codex_stop_accepts(result.returncode, result.stdout, result.stderr)
-        == CODEX_INVALID_JSON
-    )
+    assert codex_stop_accepts(0, markdown, "") == CODEX_INVALID_JSON

@@ -21,6 +21,8 @@ name: deferred-census
 # continue-on-error - either the drain happens or the clock comes off.
 
 on:
+  merge_group:
+    types: [checks_requested]
   schedule:
     # Mondays 09:00 UTC - lands in the working week, not on top of a weekend.
     - cron: "0 9 * * 1"

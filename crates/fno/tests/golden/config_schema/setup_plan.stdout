@@ -43,7 +43,7 @@
       "tier": "always",
       "question": "Backlog node-ID prefix?",
       "default_source": "repo-slug",
-      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-)."
+      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable."
     },
     {
       "path": "review.posture",

@@ -10,3 +10,4 @@ A	fno_lead_walk_session_key	py=scripts/diagnostics/codex-lead-continuation-smoke
 A	githubcom[:/](.+?)(?:git)?$	py=scripts/metrics/completion-summary.py;rs=crates/fno-agent/src/runtime/ledger_register.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/anthropic	py=evals/harness-fit/run/footnote_agent.py|evals/harness-fit/run/launch.py;rs=crates/fno-agent/src/runtime/footnote_harness/tests.rs|crates/fno-agent/src/spawn/model_env_scrub.rs|crates/fno-agent/src/spawn/route_settings.rs|crates/fno-agent/src/spawn/spawn_overlay.rs|crates/fno/src/config/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
 A	https://api.z.ai/api/coding/paas/v4	py=evals/harness-fit/run/launch.py;rs=crates/fno-agent/src/spawn/codex_route.rs|crates/fno/src/config/model_catalog.rs	# CLASSIFY protocol|msg-twin|data
+A	scripts/regen-generated-copies.py	py=scripts/regen-generated-copies.py;rs=crates/fno-agent/src/runtime/hook/write_gate.rs	# CLASSIFY protocol|msg-twin|data

@@ -1,21 +1,14 @@
-//! The native `mail unread` leaf: the cursor-bounded unread listing over the
-//! bus log. Ported from the Python leaf once characterization goldens
-//! (tests/golden/mail_unread) froze its contract: the scan spans every
-//! retained segment oldest-first, keeps the first row per id, drops
-//! retracted (withdraw), superseded (a hosted-delivery twin) and
-//! non-deliverable rows, then lists rows addressed to the reader and after
-//! its cursor - and when the cursor id has rotated out of the retained log,
-//! rescans every retained row rather than silently skipping unprocessed
-//! mail. JSON output mirrors the oracle's
-//! `json.dumps(..., ensure_ascii=False)` byte for byte.
+//! The native `mail unread` leaf for the `--mine` leg: the cursor-bounded
+//! unread listing itself lives in `bus_read`, which the fno front door
+//! compiles as a copy and answers in process. `--mine` needs the transcript
+//! and You-thread stores, so it stays here, and the front door execs this
+//! leaf for it.
 
-use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use serde_json::Value;
-
-use crate::mail_control_drain::{deliverable, read_cursor_file, withdrawn_ids};
+use crate::bus_read::{json_array, str_field, unread_listing};
+use crate::mail_control_drain::read_cursor_file;
 use fno_mail::log::read_bus_segments;
 
 const HELP: &str = "\
@@ -78,57 +71,7 @@ pub fn run(args: &[String]) -> i32 {
     for warning in &warnings {
         eprintln!("{warning}");
     }
-
-    // The withdrawal and hosted-twin sets come off the RAW rows (a twin may
-    // share its id with an earlier deliverable row); dedupe keeps the first
-    // row per id in log order and drops id-less rows, which the oracle's
-    // envelope coercion also refused.
-    let retracted = withdrawn_ids(&msgs);
-    let superseded: HashSet<String> = msgs
-        .iter()
-        .filter(|m| m.get("delivery").and_then(Value::as_str) == Some("hosted"))
-        .filter_map(|m| m.get("id").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect();
-
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut deduped: Vec<&Value> = Vec::new();
-    for m in &msgs {
-        let Some(id) = m.get("id").and_then(Value::as_str) else {
-            continue;
-        };
-        if seen.insert(id) {
-            deduped.push(m);
-        }
-    }
-
-    let mine = |m: &Value| {
-        let Some(id) = m.get("id").and_then(Value::as_str) else {
-            return false;
-        };
-        m.get("to").and_then(Value::as_str) == Some(name.as_str())
-            && deliverable(m)
-            && !retracted.contains(id)
-            && !superseded.contains(id)
-    };
-
-    // The oracle appends before flipping `passed` in the same iteration, so
-    // the cursor message itself never lists.
-    let mut unread: Vec<&Value> = Vec::new();
-    let mut passed = cursor.is_none();
-    for m in &deduped {
-        if passed && mine(m) {
-            unread.push(m);
-        }
-        if m.get("id").and_then(Value::as_str) == cursor.as_deref() {
-            passed = true;
-        }
-    }
-    if !passed {
-        // The cursor id rotated out of the retained log: the oracle rescans
-        // the retained rows rather than silently skipping unprocessed mail.
-        unread = deduped.iter().copied().filter(|m| mine(m)).collect();
-    }
+    let unread = unread_listing(&msgs, &name, cursor.as_deref());
 
     if json_out || !std::io::stdout().is_terminal() {
         println!("{}", json_array(&unread));
@@ -158,10 +101,6 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
-fn str_field<'a>(m: &'a Value, key: &str) -> &'a str {
-    m.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
 /// The state root behind the Python `config.state_dir` default:
 /// `$FNO_STATE_DIR`, else `$HOME/.fno`.
 fn state_root() -> PathBuf {
@@ -172,47 +111,4 @@ fn state_root() -> PathBuf {
         .filter(|h| !h.is_empty())
         .map(|h| PathBuf::from(h).join(".fno"))
         .unwrap_or_else(|| PathBuf::from(".fno"))
-}
-
-fn quote(v: &str) -> String {
-    serde_json::to_string(v).unwrap_or_default()
-}
-
-/// One envelope re-projected in the oracle's key order with its exact
-/// `json.dumps` spacing (`", "` between pairs, `": "` after keys). Absent
-/// strings read as empty, the thread falls back to the id, and a non-string
-/// `in_reply_to` prints as null.
-fn row_json(m: &Value) -> String {
-    let id = str_field(m, "id");
-    let thread = match m.get("thread") {
-        Some(Value::String(t)) => quote(t),
-        _ => quote(id),
-    };
-    let in_reply_to = match m.get("in_reply_to") {
-        Some(Value::String(t)) => quote(t),
-        _ => "null".to_string(),
-    };
-    let pairs = [
-        ("id", quote(id)),
-        ("thread", thread),
-        ("from", quote(str_field(m, "from"))),
-        ("to", quote(str_field(m, "to"))),
-        ("kind", quote(str_field(m, "kind"))),
-        ("ts", quote(str_field(m, "ts"))),
-        ("in_reply_to", in_reply_to),
-        ("body", quote(str_field(m, "body"))),
-    ];
-    let inner: Vec<String> = pairs
-        .iter()
-        .map(|(k, v)| format!("{}: {}", quote(k), v))
-        .collect();
-    format!("{{{}}}", inner.join(", "))
-}
-
-fn json_array(rows: &[&Value]) -> String {
-    if rows.is_empty() {
-        return "[]".to_string();
-    }
-    let inner: Vec<String> = rows.iter().map(|m| row_json(m)).collect();
-    format!("[{}]", inner.join(", "))
 }

@@ -183,6 +183,15 @@ impl ReviewHuman {
             _ => None,
         }
     }
+
+    /// Whether this value owes a person's approval. Explicit `ui` and
+    /// `always` gate; an absent key (`None`) never does, so a stock install
+    /// keeps today's no-person-gate behavior. One predicate for both read
+    /// sites (review_inputs and the run_done call), so pr status and the
+    /// stop gate cannot disagree on the resolved value.
+    pub(crate) fn owed(human: Option<Self>) -> bool {
+        matches!(human, Some(Self::Ui | Self::Always))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -255,16 +264,16 @@ pub(crate) struct Settings {
     /// GitHub's refusal is per identity, not per human - a second account
     /// with its own token can still self-approve.
     pub(super) github_approval_satisfies: Option<bool>,
-    /// config.review.human (default Ui): the person-approval gate. Never = no
-    /// person is owed. Ui = the person loop runs through the UI lanes, still
-    /// not owed (same behavior; the value is declared for a future in-UI
-    /// approval surface). Always = a non-author person's GitHub approval is
-    /// OWED: pr status and the merge read not ready until one lands at the
-    /// head, and the round cap does not discharge it. Absent key = None = Ui
-    /// (today's behavior). A value the vocabulary does not carry stays None
-    /// here: the `fno config set` door rejects the same value, so a
-    /// hand-edited typo degrades to today's behavior while a written one
-    /// refuses loudly.
+    /// config.review.human: the person-approval gate. Never = no person is
+    /// owed. Ui = a non-author person's approval is OWED, satisfied through
+    /// the in-UI lane (`fno mux app approve <pr>`) or on GitHub. Always = the
+    /// same approval owed on GitHub. In both owed values, pr status and the
+    /// merge read stay not-ready until a fresh non-author approval lands at
+    /// the head, and the round cap does not discharge it. Absent key = None
+    /// = no person gate (today's stock-install behavior). A value the
+    /// vocabulary does not carry stays None here: the `fno config set` door
+    /// rejects the same value, so a hand-edited typo degrades to the absent
+    /// behavior while a written one refuses loudly.
     pub(super) human: Option<ReviewHuman>,
     /// config.review.max_rounds (default 2, clamped at least 1 at read): the
     /// review-round budget. Once this many rounds pass, the review obligation

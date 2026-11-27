@@ -185,7 +185,8 @@
       "stop",
       "tool_calls",
       "tool_errors",
-      "turn_policy_source"
+      "turn_policy_source",
+      "watch"
     ]
   },
   "known_gaps": {},

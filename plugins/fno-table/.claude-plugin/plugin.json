@@ -1,0 +1,16 @@
+{
+  "name": "fno-table",
+  "version": "0.0.1",
+  "description": "A Claude Code mod. /fno opens a table of your fleet and backlog; keys spawn, target, join, peek, or open an agent in the mux.",
+  "author": {
+    "name": "Jason Noah Choi",
+    "url": "https://github.com/fnodotdev/fno"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "fno",
+    "fleet",
+    "backlog",
+    "mod"
+  ]
+}

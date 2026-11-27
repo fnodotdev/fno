@@ -9,7 +9,10 @@
 #   RULE   A = a hand-built `<root>/.fno/<state file>` path.
 #          B = a zero-argument lru_cache/cache over a reader that resolves a
 #              state root (R5).
+#          C = a Rust join of a name onto a state root that
+#              docs/state-root-layout.tsv carries no row for.
 #   key    rule A: the state filename. rule B: the function name.
+#          rule C: the joined name's first segment.
 #   owner  the node that owns draining it, or `unowned`.
 # The key is (RULE, path, key) and deliberately carries NO line number: a line
 # number moves on every unrelated edit above it, so a line-keyed baseline
@@ -84,3 +87,18 @@ A	crates/fno-agent/src/runtime/state/cli.rs	target-state.md	unowned	the state do
 A	crates/fno/src/events/event_emit.rs	events.jsonl	unowned	the native event emitter appends the project journal its deleted Python twin wrote; no crate journal resolver exists yet, so the hand-built join stays a declared root until one lands.
 A	crates/fno/src/events/event_emit.rs	target-state.md	unowned	the protocol-envelope stamp reads the session manifest at the cwd, ported verbatim from the deleted Python emitter; target-state.md has NO resolver today (STATE_FILES records resolver=None).
 A	crates/fno/src/events/event_gate.rs	events.jsonl	unowned	the gate-escape reader names the project journal its deleted Python twin read; drains when a crate journal resolver lands.
+C	crates/fno-agent/src/runtime/attention_arm.rs	answered.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/attention_arm.rs	questions.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/attention_chat/mod.rs	chat.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/attention_http.rs	deliveries.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/attention_http.rs	sink-health.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/attention_reply.rs	replies.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/codex_fake_daemon.rs	app-server.pid	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/event_rules.rs	judge.jsonl	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/harness_reader.rs	probe-nonce	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/mcp/sidecar.rs	sidecar-state.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/mcp/sidecar.rs	sidecar.sock	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+C	crates/fno-agent/src/runtime/observer/isolation.rs	memory	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+A	crates/fno-agent/src/runtime/hook/front/post_tool.rs	target-state.md	unowned	the claim-heartbeat leg keeps the legacy checkout fallback its script read beside state_path::resolve; target-state.md has no resolver, as for hook/stop.rs above.
+A	crates/fno-agent/src/runtime/hook/front/stop.rs	events.jsonl	unowned	the context-nudge leg appends to the repo-root journal its script wrote, so old and new sessions in one fleet write one journal; drains with the Rust journal sites.
+A	crates/fno-agent/src/runtime/hook/front/user_prompt.rs	events.jsonl	unowned	the born-with-why leg reads the repo-root journal and its .think-offer-cursor beside it, the layout its script read; drains with the Rust journal sites.
