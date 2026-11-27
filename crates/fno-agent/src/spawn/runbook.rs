@@ -314,8 +314,9 @@ pub fn resolve_runbook(mut args: Vec<String>) -> Result<Vec<String>, (String, i3
     let rehearse = rehearse_at.is_some();
     let run_file = create_run(&runs_dir(), &path, &sha, &book, rehearse, &scheduler, &cwd)
         .map_err(|e| (e, 1))?;
-    let prompt = prompt_text(&book, &run_file, rehearse);
-    // Remove --rehearse first when it sits after --runbook, so `at` holds.
+    let prompt = prompt_text(&book, &path, &run_file, rehearse);
+    // Drop the runbook tokens and --rehearse from the back, then put the
+    // prompt where --runbook stood.
     let mut drop: Vec<usize> = (at..at + width).collect();
     if let Some(r) = rehearse_at {
         drop.push(r);
@@ -357,8 +358,11 @@ fn prompt_positional(head: &[String]) -> bool {
     count > usize::from(!named)
 }
 
-fn prompt_text(book: &Runbook, run_file: &Path, rehearse: bool) -> String {
+fn prompt_text(book: &Runbook, book_path: &Path, run_file: &Path, rehearse: bool) -> String {
     let f = run_file.display();
+    let mut stop_list = vec!["a check fails", "a command exits nonzero"];
+    stop_list.extend(book.stop_when.iter().map(String::as_str));
+    let stops = stop_list.join("; ");
     let ids: Vec<&str> = book.sequence().iter().map(|(_, s)| s.id.as_str()).collect();
     let mode = if rehearse {
         "This is a rehearse run: every irreversible step is skipped by the door and still gets its receipt."
@@ -367,14 +371,17 @@ fn prompt_text(book: &Runbook, run_file: &Path, rehearse: bool) -> String {
     };
     format!(
         "You run the runbook {name} (run file {f}). {mode}\n\
+         First read the runbook at {book_path}: its body is your guide. Stop when any of these holds: {stops}.\n\
          Run the steps in this order, each only through the door: {ids}.\n\
-         1. For each id run: fno do runbook step {f} <id>. The door runs the command and prints its output.\n\
+         1. For each id run: fno do runbook step {f} <id>. The door runs the command and prints its output. Run it as a background command, so a long step outlives your tool-call limit, and wait for it to exit.\n\
          2. When a step has a check, read the output against it, then run: fno do runbook check {f} <id> --read \"<what you read>\" --verdict pass|fail [--count name=value]...\n\
-         3. If the door refuses an irreversible step, ask the user with fno inbox outstanding ask, naming run {run_id} and the step id, wait for the answer, then run the step again with --yes <question id>.\n\
+         3. If the door refuses an irreversible step, ask the user with fno inbox outstanding ask, naming run {run_id} and step <id>, with a first option that starts with Yes. Wait for the answer, then run the step again with --yes <question id>.\n\
          4. On any failed check or nonzero exit, stop. Run: fno do runbook rollback {f}\n\
          5. At the end, or after the rollback, run: fno do runbook close {f}\n\
          Never run a step's command yourself. Never skip a step.",
         name = book.runbook,
+        book_path = book_path.display(),
+        stops = stops,
         ids = ids.join(", "),
         run_id = run_id_of(run_file),
     )
@@ -677,7 +684,7 @@ fn gate_step(
 fn yes_verdict(stores: &str, qid: &str, run_id: &str, step: &str) -> Result<Value, String> {
     let asked = question_text(stores, qid)
         .ok_or_else(|| format!("question {qid} is not in the question stores"))?;
-    if !asked.contains(run_id) || !asked.contains(step) {
+    if !names_token(&asked, run_id) || !names_token(&asked, step) {
         return Err(format!(
             "question {qid} does not name run {run_id} and step {step}; ask one that does"
         ));
@@ -699,6 +706,18 @@ fn yes_verdict(stores: &str, qid: &str, run_id: &str, step: &str) -> Result<Valu
     }
     Ok(json!({"question": qid, "answer": answer,
               "closed_by": closes.get(qid).map(|c| c.closed_by.clone())}))
+}
+
+/// Whether `text` names `token` as a whole id: the characters on both sides
+/// are not id characters, so step `visits` is not named by `visits-dry`.
+fn names_token(text: &str, token: &str) -> bool {
+    let id_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    !token.is_empty()
+        && text.match_indices(token).any(|(i, _)| {
+            let before = text.get(..i).and_then(|s| s.chars().next_back());
+            let after = text.get(i + token.len()..).and_then(|s| s.chars().next());
+            !before.is_some_and(id_char) && !after.is_some_and(id_char)
+        })
 }
 
 /// The newest `operator_question` text for one question id.
@@ -730,8 +749,13 @@ fn question_stores(st: &RunState) -> String {
         "operator_question_closed",
         "attention_answer",
     ]);
+    let mut paths = crate::needs::question_journals(&fno_dir, &cwd);
+    if let Ok(here) = std::env::current_dir() {
+        paths.push(crate::paths::space_dir(&here).join("events.jsonl"));
+    }
+    paths.dedup();
     let mut out = String::new();
-    for path in crate::needs::question_journals(&fno_dir, &cwd) {
+    for path in paths {
         if let Ok(text) = crate::event_store::journal_text_checked(&path, &query) {
             out.push_str(&text);
             out.push('\n');
@@ -1055,7 +1079,7 @@ mod tests {
     #[test]
     fn a_yes_holds_only_for_the_users_own_answer_naming_the_step() {
         let ask = r#"{"type":"operator_question","data":{"question_id":"D1","question":"run rb-1 step push: yes?"}}"#;
-        let user = r#"{"type":"attention_answer","data":{"item_id":"D1","delegated":false}}"#;
+        let user = r#"{"type":"attention_answer","data":{"item_id":"D1","delegate":false}}"#;
         let closed = r#"{"type":"operator_question_closed","data":{"question_id":"D1","answer":"Yes, run it.","closed_by":"s"}}"#;
         let all = format!("{ask}\n{user}\n{closed}\n");
         assert!(yes_verdict(&all, "D1", "rb-1", "push").is_ok());
@@ -1066,6 +1090,15 @@ mod tests {
         assert!(
             yes_verdict(&all, "D1", "rb-2", "push").is_err(),
             "another run"
+        );
+        assert!(
+            yes_verdict(&all, "D1", "rb-1", "pus").is_err(),
+            "a step id inside a longer id"
+        );
+        let delegated = all.replace("\"delegate\":false", "\"delegate\":true");
+        assert!(
+            yes_verdict(&delegated, "D1", "rb-1", "push").is_err(),
+            "a delegate's answer"
         );
         let no = all.replace("Yes, run it.", "No.");
         assert!(yes_verdict(&no, "D1", "rb-1", "push").is_err(), "a no");
