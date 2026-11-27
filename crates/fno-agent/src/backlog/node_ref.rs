@@ -439,6 +439,9 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
             .iter()
             .position(|e| crate::backlog::row_facts::RowFacts::id_of(e) == Some(id.as_str()))
         {
+            if let Some(line) = number_only_notice(node_id, &id) {
+                eprintln!("{line}");
+            }
             return Some(hit);
         }
     }
@@ -451,6 +454,22 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// The stderr line for a token that is both a display number and the shape of
+/// an all-digit hash id (`x-2844`: four to eight decimal digits), served by the
+/// number tier alone. It names both readings so a typo of a hash id is seen
+/// before a write lands on the node the number names. `None` for any other
+/// token.
+pub(crate) fn number_only_notice(token: &str, served_id: &str) -> Option<String> {
+    let digits = token.split_once('-').map_or("", |(_, d)| d);
+    let hash_width = (4..=8).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit());
+    (hash_width && token != served_id).then(|| {
+        format!(
+            "note: no node has id '{token}'; '{token}' is the display number of {served_id}, \
+             so that node was used. If you meant a hash id, retype it."
+        )
+    })
 }
 
 /// The token gate the write doors apply: the id grammar, or a display
@@ -783,6 +802,16 @@ mod tests {
         assert!(names_node_token("x-15"));
         assert!(names_node_token("x-bbbb"));
         assert!(!names_node_token("--flag"));
+    }
+
+    #[test]
+    fn a_hash_width_number_served_by_the_number_tier_names_both_readings() {
+        let note = number_only_notice("x-2844", "x-ea0e").unwrap();
+        assert!(note.contains("no node has id 'x-2844'"));
+        assert!(note.contains("display number of x-ea0e"));
+        assert!(number_only_notice("x-15", "x-ea0e").is_none());
+        assert!(number_only_notice("x-2844", "x-2844").is_none());
+        assert!(number_only_notice("x-ea0e", "x-ea0e").is_none());
     }
 
     #[test]
