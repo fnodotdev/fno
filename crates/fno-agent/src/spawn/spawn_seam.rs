@@ -110,6 +110,10 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
         eprintln!("{reason}");
         code
     })?;
+    let args = crate::spawn::runbook::resolve_runbook(args).map_err(|(reason, code)| {
+        eprintln!("fno agent spawn: {reason}");
+        code
+    })?;
     let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     refuse_codex_without_git_grant(&args, &here)?;
 

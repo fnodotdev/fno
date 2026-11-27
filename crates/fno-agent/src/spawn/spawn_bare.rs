@@ -57,6 +57,7 @@ pub const SCALAR_OWNED_FLAGS: &[&str] = &[
     "--in-place",
     "--bounded-placement",
     "--list-scheduled",
+    "--rehearse",
 ];
 
 /// Whether a post-prompt `token` is spawn-owned: a flag whose job is spawn
