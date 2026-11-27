@@ -107,7 +107,7 @@ pub(crate) fn read_drain_bus(bus_dir: &Path, form: &str) -> Vec<Value> {
     let msgs = read_bus(bus_dir);
     let (cursor, _) =
         crate::bus_read::read_cursor_file(&bus_dir.join("cursors").join(format!("{form}.json")));
-    let rotated_out = cursor.is_some_and(|id| {
+    let rotated_out = cursor.as_deref().is_some_and(|id| {
         !msgs
             .iter()
             .any(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
