@@ -2111,10 +2111,11 @@ mod tests {
         invocations_from_transcript(&lines.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    /// A Skill call and its result are one row. A copy of the call on a line
-    /// with no type adds no row, a call on a subagent's sidechain line adds no
-    /// row, prose that names Skill adds no row, and a malformed line is
-    /// skipped. The skill read is the kind=skill slice.
+    /// A Skill call and its result are one row. A copy of the call adds no
+    /// row, on a request blob line or on a line with no type. A call on a
+    /// subagent's sidechain line adds no row, prose that names Skill adds no
+    /// row, and a malformed line is skipped. The skill read is the kind=skill
+    /// slice.
     #[test]
     #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn skill_fixture_folds_one_row_per_call() {
@@ -2122,6 +2123,7 @@ mod tests {
             call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-aaaa"}"#),
             call_line("2026-11-24T04:13:00.000Z", "call_b", "Skill", r#"{"skill":"fno:review"}"#),
             r#"{"message":{"content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
+            r#"{"type":"api-request-blob","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#.to_string(),
             "not json at all but says Skill".to_string(),
             r#"{"type":"assistant","isSidechain":true,"sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T04:12:49.000Z","message":{"content":[{"type":"tool_use","id":"call_side","name":"Skill","input":{"skill":"fno:think"}}]}}"#.to_string(),
