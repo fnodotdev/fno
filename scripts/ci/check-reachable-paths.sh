@@ -477,11 +477,11 @@ self_test() {
     printf 'def cmd_spawn():\n    "--split",\n' > "$1/cli/src/fno/agents/cli.py"
   }
   write_placement_reach_missing() {
-    mkdir -p "$1/crates/fno-agent/src/bin"
+    mkdir -p "$1/crates/fno-agent/src/client_cli"
     printf 'fn build() {\n    // no placement arms here\n}\n' > "$1/crates/fno-agent/src/client_cli/mod.rs"
   }
   write_placement_reach_full() {
-    mkdir -p "$1/crates/fno-agent/src/bin"
+    mkdir -p "$1/crates/fno-agent/src/client_cli"
     printf 'fn build() {\n    "--split" | "-x" => {}\n    "--portal" => {}\n}\n' > "$1/crates/fno-agent/src/client_cli/mod.rs"
   }
 
