@@ -48,7 +48,10 @@ pub(crate) fn notify_to(bus_dir: &Path, session: &str, out: &mut impl std::io::W
         return 0;
     }
 
-    let msgs = read_bus(bus_dir);
+    let msgs = read_drain_bus(
+        bus_dir,
+        &crate::spawn_context::session_identity_key(session),
+    );
     let mut pending = pending(
         bus_dir,
         &msgs,
@@ -93,6 +96,27 @@ pub(crate) fn read_bus(bus_dir: &Path) -> Vec<Value> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The rows one drain pass scans for `form`: the live log, plus the retained
+/// segments when `form`'s ack cursor is absent or names a row the live log no
+/// longer holds. The second shape is a drain that was down across a rotation:
+/// its unread rows live in the older segments now, and a live-only read
+/// silently never reaches them. Healthy sessions read the live log only.
+pub(crate) fn read_drain_bus(bus_dir: &Path, form: &str) -> Vec<Value> {
+    let msgs = read_bus(bus_dir);
+    let (cursor, _) =
+        crate::bus_read::read_cursor_file(&bus_dir.join("cursors").join(format!("{form}.json")));
+    let rotated_out = cursor.as_deref().is_some_and(|id| {
+        !msgs
+            .iter()
+            .any(|m| m.pointer("/id").and_then(Value::as_str) == Some(id))
+    });
+    if cursor.is_none() || rotated_out {
+        fno_mail::log::read_bus_segments(&bus_dir.join("messages.jsonl"))
+    } else {
+        msgs
+    }
 }
 
 /// Unread ordinary mail for one session: each row paired with whether it
@@ -397,7 +421,126 @@ mod tests {
             assert!(out.contains("state unclear"), "no unclear wording in {out}");
             assert!(out.contains("fno agent peek"), "no peek command in {out}");
             assert!(out.contains("fno agent resume"), "no wake command in {out}");
-            assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
+            assert!(
+                !out.contains("ESC to steer"),
+                "red when ESC-claim or dropped commands in {out}"
+            );
+        });
+        a_rotated_row_drains_at_the_next_boundary();
+        a_live_cursor_target_keeps_the_segments_off();
+    }
+
+    /// A row the cursor never judged that landed in a retained segment
+    /// still drains at the prompt boundary: the drain was down across a
+    /// rotation, and the segments carry the rows after the cursor target.
+    /// Rows up to the cursor stay judged. Runs its own with_hold_env
+    /// (never call from inside one: the test env lock is not reentrant).
+    fn a_rotated_row_drains_at_the_next_boundary() {
+        let session = "d9daf3e8-1111-2222-3333-444455556666";
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (_dir, bus) = bus_fixture("rotated-drain");
+            // The older segment holds the judged rows and the stranded
+            // unread row; the live log holds a newer row. The cursor names
+            // the segment's middle row.
+            let judged = format!(
+                "{{\"id\":\"msg-judged\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"predates the cursor\",\
+                \"ts\":\"2026-11-25T04:55:54Z\"}}\n"
+            );
+            let cursor_row = format!(
+                "{{\"id\":\"msg-cursor\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"cursor target\",\
+                \"ts\":\"2026-11-25T05:00:00Z\"}}\n"
+            );
+            let stranded = format!(
+                "{{\"id\":\"msg-stranded\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the rotated segment\",\
+                \"ts\":\"2026-11-25T06:00:00Z\"}}\n"
+            );
+            let fresh = format!(
+                "{{\"id\":\"msg-fresh\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the live log\",\
+                \"ts\":\"2026-11-26T12:00:00Z\"}}\n"
+            );
+            std::fs::write(
+                bus.join("messages.jsonl.1"),
+                format!("{judged}{cursor_row}{stranded}"),
+            )
+            .unwrap();
+            std::fs::write(bus.join("messages.jsonl"), &fresh).unwrap();
+            let form = crate::spawn_context::session_identity_key(session);
+            let cursors = bus.join("cursors");
+            std::fs::create_dir_all(&cursors).unwrap();
+            std::fs::write(
+                cursors.join(format!("{form}.json")),
+                "{\"last_seen_id\":\"msg-cursor\"}\n",
+            )
+            .unwrap();
+            let mut out = Vec::new();
+            assert_eq!(notify_to(&bus, session, &mut out), 0);
+            let out = String::from_utf8(out).unwrap();
+            assert!(
+                out.contains("from the rotated segment"),
+                "stranded row not drained: {out}"
+            );
+            assert!(out.contains("from the live log"), "live row missing: {out}");
+            assert!(
+                !out.contains("predates the cursor"),
+                "judged row relitigated: {out}"
+            );
+            let (cursor, _) =
+                crate::bus_read::read_cursor_file(&cursors.join(format!("{form}.json")));
+            assert_eq!(
+                cursor.as_deref(),
+                Some("msg-fresh"),
+                "cursor did not advance"
+            );
+        });
+    }
+
+    /// A cursor target the live log still holds keeps the drain on the live
+    /// log: an older segment row predates the cursor's last judgment, so a
+    /// second scan would relitigate it.
+    fn a_live_cursor_target_keeps_the_segments_off() {
+        let session = "d9daf3e8-1111-2222-3333-444455556666";
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (_dir, bus) = bus_fixture("live-cursor");
+            let judged = format!(
+                "{{\"id\":\"msg-judged\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"already judged\",\
+                \"ts\":\"2026-11-24T00:00:00Z\"}}\n"
+            );
+            let cursor_row = format!(
+                "{{\"id\":\"msg-cursor\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"cursor target\",\
+                \"ts\":\"2026-11-25T05:00:00Z\"}}\n"
+            );
+            let fresh = format!(
+                "{{\"id\":\"msg-fresh\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the live log\",\
+                \"ts\":\"2026-11-26T12:00:00Z\"}}\n"
+            );
+            std::fs::write(bus.join("messages.jsonl.1"), &judged).unwrap();
+            std::fs::write(bus.join("messages.jsonl"), format!("{cursor_row}{fresh}")).unwrap();
+            let form = crate::spawn_context::session_identity_key(session);
+            let cursors = bus.join("cursors");
+            std::fs::create_dir_all(&cursors).unwrap();
+            std::fs::write(
+                cursors.join(format!("{form}.json")),
+                "{\"last_seen_id\":\"msg-cursor\"}\n",
+            )
+            .unwrap();
+            let mut out = Vec::new();
+            assert_eq!(notify_to(&bus, session, &mut out), 0);
+            let out = String::from_utf8(out).unwrap();
+            assert!(
+                !out.contains("already judged"),
+                "segment row relitigated despite a live cursor: {out}"
+            );
+            assert!(
+                out.contains("from the live log"),
+                "live row not drained: {out}"
+            );
         });
     }
 }

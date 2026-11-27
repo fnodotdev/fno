@@ -1371,6 +1371,33 @@ pub(crate) fn config_nested_str(
     })
 }
 
+/// One config value regardless of file format: the [`config_str`] walk with
+/// a reader that parses TOML and YAML by suffix (the `fno config get`
+/// chain), so a legacy `settings.yaml` pin answers class-home keys instead
+/// of silently reading the platform default. Bare keys win over the legacy
+/// `config:` envelope, the order `paths_cli::live_lookup` established.
+pub(crate) fn config_str_any_format(cwd: &Path, section: &str, key: &str) -> Option<String> {
+    resolve_config_key(cwd, &|path| {
+        let doc = crate::config_cli::parse_config_file(path)?;
+        read_json_section(&doc, section, key).or_else(|| {
+            read_json_section(&crate::config_cli::unwrap_config_dict(&doc), section, key)
+        })
+    })
+}
+
+/// One `section.key` scalar out of a parsed config tree, the coercion
+/// [`scalar`] applies: string, bool, integer or float as its raw text.
+fn read_json_section(value: &serde_json::Value, section: &str, key: &str) -> Option<String> {
+    let obj = value.as_object()?;
+    let hit = obj.get(section)?.as_object()?.get(key)?;
+    match hit {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 pub(crate) fn mux_restore_hold_workers(cwd: &Path) -> bool {
     config_nested_str(cwd, "mux", "restore", "hold_workers")
         .and_then(|value| parse_bool(&value))

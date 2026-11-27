@@ -266,6 +266,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_SCCACHE_WATCH` | rs | Pins the sccache-watch state file (last server pid + restart timestamps, written per machine-watch tick); tests use it to keep off the live machine's file. |
 | `FNO_SCHEDULE_FIRE_SEAM` | rs | Test seam for the daemon's scheduled-spawn fire: set, the fire re-entry runs this program with the recorded argv instead of the fno binary, so a probe asserts the exact re-entry shape without launching a worker (crates/fno-agent/src/runtime/schedule_fire.rs `fire_argv`). |
 | `FNO_SERVER` | rs | Names the target mux server; the session-state entry also reads it as the namespace of the turn-pin file (session_state.rs). |
+| `FNO_STATE_HOME` | rs | The state class home pin: the default state root resolves it over config `paths.state_dir_local` and the platform state folder (`$XDG_STATE_HOME/fno` when set, else `~/.local/state/fno`). |
 | `FNO_SESSION` | rs | Deprecated alias of FNO_SERVER; the Rust pane-send audit row also reads it as the calling session the send came from. |
 | `FNO_SESSION_HARNESS` | rs | The launcher-stamped harness half of the session-proof pair; a known name beside a live `FNO_SESSION_PID` answers the harness before the census walk (spawn_context.rs stamp_pair_harness). |
 | `FNO_SESSION_ID` | rs | Current session id. `fleet-incident` uses it for caller attribution; `loops pause-all` records a full UUID or `ses_` id as the mail-hold owner, falling back to `fno whoami --json` otherwise. |
@@ -409,7 +410,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
-| `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (paths_cli.rs). |
+| `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (fno-homes class-home resolver; paths_cli delegates). |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |
 | `XDG_DATA_HOME` | rs | Relocates the XDG data dir where the opencode session store is read and where the update census resolves the uv tool dir default; unset reads ~/.local/share. |
 | `XDG_RUNTIME_DIR` | rs | Runtime dir base (mcp sidecar); the session-state entry also parents its 0700 turn-pin rendezvous dir here when set (session_state.rs). |

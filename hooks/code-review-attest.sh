@@ -416,7 +416,8 @@ else
 fi
 
 if bash "$script_dir/../skills/review/scripts/emit-attestation.sh" code-review "$verdict" \
-  "$reviewer_context" "$execution_context" "$output_contract" --findings-file "$payload_file"; then
+  "$reviewer_context" "$execution_context" "$output_contract" \
+  --stamp-provenance derived --findings-file "$payload_file"; then
   :
 else
   emit_rc=$?

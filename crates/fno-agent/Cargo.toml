@@ -43,6 +43,11 @@ path = "src/bin/worker.rs"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 serde_json = { version = "1", features = ["preserve_order"] }
+# The one class-home resolver: cache/data/state precedence and the platform
+# table, shared with the front door. Production dep (not dev): the daemon's
+# cache_home/data_home/state_home resolve through it, the same leg the front
+# door reads. A caret range: the crate versions on its own.
+fno-homes = { path = "../fno-homes", version = "0.1" }
 # The mail protocol core. A caret range: fno-mail versions on its own, and
 # under 0.x a breaking change bumps the minor, which this range refuses.
 fno-mail = { path = "../fno-mail", version = "0.1" }

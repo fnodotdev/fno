@@ -16,7 +16,7 @@
 //!   empty values where the Python field reader rejects both.
 
 use crate::mail_control_drain::{present_mail_ids, unread_messages};
-use crate::mail_notify_self::{advance_main_cursor, read_bus};
+use crate::mail_notify_self::advance_main_cursor;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Value};
@@ -58,7 +58,7 @@ pub fn run_drain_self(args: &[String]) -> i32 {
     // can share never drains here.
     let forms = [crate::spawn_context::session_identity_key(&sid)];
     let bus = crate::mail_paths::state_bus_dir(&home);
-    let msgs = read_bus(&bus);
+    let msgs = crate::mail_notify_self::read_drain_bus(&bus, &forms[0]);
 
     let mut last_by_form: Vec<(String, String)> = Vec::new();
     let mut form_by_id: HashMap<String, String> = HashMap::new();

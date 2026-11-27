@@ -27,6 +27,10 @@ pub struct DayInputs {
     pub checkin_state: String,
     pub questions_state: String,
     pub questions_path: String,
+    /// `--since` for the away report; overrides the previous boundary cutoff.
+    pub since: Option<String>,
+    /// Open operator questions, read once by the IO layer for the away report.
+    pub asks: Vec<super::outstanding::Question>,
 }
 
 fn parse_ts(raw: &str) -> Option<DateTime<FixedOffset>> {
@@ -280,8 +284,8 @@ fn checkin_summary(
 pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
     let now =
         parse_ts(&inputs.now).ok_or_else(|| format!("invalid --now RFC3339: {}", inputs.now))?;
-    if inputs.kind != "start" && inputs.kind != "end" {
-        return Err("--kind must be start or end".to_string());
+    if !matches!(inputs.kind.as_str(), "start" | "end" | "away") {
+        return Err("--kind must be start, end or away".to_string());
     }
     let history = prior_boundaries(&inputs.questions_raw);
     let newest = latest_boundary(&history);
@@ -306,6 +310,7 @@ pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
         })
         .and_then(parse_ts)
         .unwrap_or_else(|| local_midnight(now));
+    let from = inputs.since.as_deref().and_then(parse_ts).unwrap_or(from);
     let label = if newest.is_some() {
         "since previous boundary"
     } else {
@@ -404,7 +409,17 @@ pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
         receipts.push(json!({"source":"journal", "path":path, "state":state, "scanned":raw.lines().count(), "matched":raw.lines().filter(|line| line.contains("retracts_attester")).count()}));
     }
     let id = boundary_id(&inputs.kind, now);
+    let away = (inputs.kind == "away").then(|| {
+        super::away::fold_away(
+            &inputs.graph_entries,
+            &inputs.decisions_raw,
+            &inputs.asks,
+            from,
+            now,
+        )
+    });
     Ok(json!({
+        "away": away,
         "boundary_id": id,
         "kind": inputs.kind,
         "reused": false,
@@ -423,6 +438,9 @@ pub fn fold_day(inputs: &DayInputs) -> Result<Value, String> {
 }
 
 fn render(payload: &Value) -> String {
+    if payload["kind"] == "away" {
+        return super::away::render(payload);
+    }
     let questions = &payload["questions"];
     let questions_state = payload["questions_state"].as_str().unwrap_or("read");
     let questions_path = payload["questions_path"]
@@ -590,6 +608,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
     let mut json_output = false;
     let mut event_paths = Vec::new();
     let mut commit = false;
+    let mut since = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i].as_str() {
@@ -608,6 +627,10 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
             "--json" | "-J" => {
                 json_output = true;
                 i += 1;
+            }
+            "--since" if i + 1 < rest.len() => {
+                since = rest.get(i + 1).cloned();
+                i += 2;
             }
             "--commit" => {
                 commit = true;
@@ -659,10 +682,20 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         &graph_path(home),
         &crate::backlog::RowQuery {
             fields: Some(
-                ["id", "pr_number"]
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
+                [
+                    "id",
+                    "pr_number",
+                    "pr_url",
+                    "title",
+                    "project",
+                    "status",
+                    "completed_at",
+                    "merge_status",
+                    "sessions",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
             ),
             with_blockers: true,
             ..Default::default()
@@ -699,6 +732,17 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
             Err(_) => (None, "unreadable".to_string()),
         }
     };
+    let asks = if kind == "away" {
+        match super::outstanding::read_open_questions(&questions_path) {
+            Ok(asks) => asks,
+            Err(error) => {
+                eprintln!("fno-agent day: {error}");
+                return 1;
+            }
+        }
+    } else {
+        Vec::new()
+    };
     let input = DayInputs {
         kind,
         now,
@@ -715,6 +759,8 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
         checkin_state,
         questions_state,
         questions_path: questions_path.display().to_string(),
+        since,
+        asks,
     };
     match fold_day(&input) {
         Ok(payload) => {
@@ -980,6 +1026,9 @@ mod tests {
     fn fold_refuses_a_kind_outside_start_and_end() {
         let input = inputs("noon", "2026-09-10T12:00:00Z", "");
         let error = fold_day(&input).unwrap_err();
-        assert!(error.contains("--kind must be start or end"), "{error}");
+        assert!(
+            error.contains("--kind must be start, end or away"),
+            "{error}"
+        );
     }
 }

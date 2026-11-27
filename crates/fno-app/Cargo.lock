@@ -1792,6 +1792,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "fno-homes",
  "fno-mail",
  "fno-proto",
  "image",
@@ -1840,6 +1841,10 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
 ]
+
+[[package]]
+name = "fno-homes"
+version = "0.1.0"
 
 [[package]]
 name = "fno-mail"

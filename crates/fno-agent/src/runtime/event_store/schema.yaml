@@ -524,6 +524,10 @@ event_types:
           type: string
           enum: [fresh, shared, unknown]
           description: "Positive evidence about the reviewer's execution context: fresh means a harness-recorded forked review context, shared means a same-context review tool result, and unknown means no positive context marker. Measures context independence, never who invoked the verb, and is not gating."
+        stamp_provenance:
+          type: string
+          enum: [typed, derived]
+          description: "How the reviewer_context stamp was made (D2344 ruling 3). typed: the calling lane passed the positional - a claim by the dispatching session, never producer evidence. The emitter defaults to it, so every run without --stamp-provenance derived is typed. derived: the producer read harness records itself (the native code-review hook's fork/in-session derivation) and stamped from them, the stronger evidence. OPTIONAL: rows before this field predate it."
         execution_context:
           type: string
           enum: [inline, fork]
