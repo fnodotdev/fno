@@ -43,6 +43,10 @@
 #                       answer was not machine-readable; it always rides a
 #                       fail verdict, because an unreadable answer must leave
 #                       a row without clearing coverage.
+#   [--stamp-provenance typed|derived]  how the reviewer_context stamp was
+#               made (D2344 ruling 3). typed (default) is the calling lane's
+#               claim; derived is a producer that read harness records itself
+#               and stamped from them (the native code-review hook passes it).
 #   [--findings-file <path>]  a JSON findings payload; classified by `fno do
 #               review classify` and carried on the event as the finding record.
 #               A malformed or unreadable file is a refusal, never an empty record.
@@ -109,6 +113,7 @@ esac
 # --repo-root <path> rides the same shape: positionals first, flag after.
 findings_file=""
 repo_root_target=""
+stamp_provenance="typed"
 prev_arg=""
 positional=()
 for arg in "$@"; do
@@ -127,6 +132,15 @@ for arg in "$@"; do
     continue
   fi
   if [[ "$arg" == "--repo-root" ]]; then
+    prev_arg="$arg"
+    continue
+  fi
+  if [[ "$prev_arg" == "--stamp-provenance" ]]; then
+    stamp_provenance="$arg"
+    prev_arg=""
+    continue
+  fi
+  if [[ "$arg" == "--stamp-provenance" ]]; then
     prev_arg="$arg"
     continue
   fi
@@ -156,6 +170,10 @@ if [[ -z "$refuse_reason" ]]; then
   case "$execution_context" in
     inline|fork) ;;
     *) echo "emit-attestation: execution_context must be inline or fork (got '$execution_context')" >&2; exit 2 ;;
+  esac
+  case "$stamp_provenance" in
+    typed|derived) ;;
+    *) echo "emit-attestation: stamp_provenance must be typed or derived (got '$stamp_provenance')" >&2; exit 2 ;;
   esac
   case "$output_contract" in
     report_findings|json_block|prose_unparseable) ;;
@@ -659,6 +677,7 @@ data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdi
   --arg session_id "$session_id" --arg harness "$harness" \
   --arg provider "$provider" \
   --arg reviewer_context "$reviewer_context" \
+  --arg stamp_provenance "$stamp_provenance" \
   --arg execution_context "$execution_context" \
   --arg output_contract "$output_contract" \
   --arg invocation_id "$invocation_id" \
@@ -671,7 +690,7 @@ data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdi
   --arg review_round "$review_round" \
   --arg level "$review_level" \
   --argjson review_flags "$review_flags" \
-  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end) + (if ($review_flags | index("--verify-fixes")) then {verify_fixes: true} else {} end)')"
+  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,stamp_provenance:$stamp_provenance,execution_context:$execution_context,output_contract:$output_contract,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end) + (if $level == "" or $level == "unset" then {} else {level: $level} end) + (if ($review_flags | index("--verify-fixes")) then {verify_fixes: true} else {} end)')"
 # FNO overrides the binary (defaults to the native front); tests point it at a built front,
 # which is on PATH in the uv test env where the mux is not installed.
 "${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
@@ -737,4 +756,4 @@ if [[ "$reviewer" == "peer" ]]; then
 elif [[ "$reviewer_context" == "fresh" ]]; then
   review_level_word="fresh"
 fi
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count target_repo_root=${repo_root_target:-inline}" >&2
+echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context stamp_provenance=$stamp_provenance review_level=$review_level_word lines=$reviewed_line_count files=$reviewed_file_count target_repo_root=${repo_root_target:-inline}" >&2
