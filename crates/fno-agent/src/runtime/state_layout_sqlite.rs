@@ -625,9 +625,11 @@ fn run_protocol(root: &Path, row: &Row, legacy: &Path, new: &Path, stamp: &str) 
 /// The journal files at the root, and the held ones already as entries.
 fn journal_family(
     root: &Path,
+    journal: &str,
     live: &Path,
     holds: &Holds,
 ) -> (Vec<PathBuf>, Vec<(String, Status)>) {
+    let prefix = format!("{journal}.");
     let mut family: Vec<PathBuf> = Vec::new();
     if live.exists() {
         family.push(live.to_path_buf());
@@ -635,7 +637,7 @@ fn journal_family(
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(rest) = name.strip_prefix("events.jsonl.") else {
+            let Some(rest) = name.strip_prefix(prefix.as_str()) else {
                 continue;
             };
             if rest == "ephemeral" || (!rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
@@ -657,7 +659,7 @@ fn journal_family(
 }
 
 /// Whether an earlier pass already retired the root journal.
-fn retired_before(live: &Path) -> bool {
+fn retired_before(live: &Path, journal: &str) -> bool {
     let prior = crate::event_store::query_events(
         live,
         &crate::event_store::EventQuery {
@@ -675,7 +677,7 @@ fn retired_before(live: &Path) -> bool {
                     .and_then(|j| j.as_str())
                     .map(str::to_string)
             })
-            .is_some_and(|j| j == "events.jsonl")
+            .is_some_and(|j| j == journal)
     })
 }
 
@@ -772,8 +774,9 @@ pub(crate) fn straggler_import(
     out
 }
 
-/// The root journal family retires once: `events.jsonl`, every
-/// `events.jsonl.<digits>` rotation and the ephemeral sibling park under the
+/// Each root journal family retires once: `events.jsonl`, `questions.jsonl`
+/// or `decisions.jsonl`, every `<journal>.<digits>` rotation and the
+/// ephemeral sibling park under the
 /// migration backup folder, then the parked copies import into the store.
 /// Nothing unlinks, so the bytes always survive in the parked copy; that is
 /// the never-move-or-destroy rule the migrate passes follow. A file a stale
@@ -787,9 +790,39 @@ pub(crate) fn journal_retire(
     apply: bool,
     holds: &Holds,
 ) -> Vec<(String, Status)> {
-    let live = root.join("events.jsonl");
-    let (family, mut out) = journal_family(root, &live, holds);
+    ["events.jsonl", "questions.jsonl", "decisions.jsonl"]
+        .into_iter()
+        .flat_map(|journal| retire_one(root, journal, stamp, apply, holds))
+        .collect()
+}
+
+fn retire_one(
+    root: &Path,
+    journal: &str,
+    stamp: &str,
+    apply: bool,
+    holds: &Holds,
+) -> Vec<(String, Status)> {
+    let live = root.join(journal);
+    let (family, mut out) = journal_family(root, journal, &live, holds);
     if family.is_empty() {
+        return out;
+    }
+    // A question or decision journal holding bytes its store lacks stays
+    // at the root: the next routed read ingests them, and a later pass parks
+    // the file once nothing in it is new.
+    let store = crate::event_store::store_path(&live);
+    if journal != "events.jsonl"
+        && live.is_file()
+        && crate::event_store::stray_has_uningested_bytes(&live, &store)
+    {
+        out.push((
+            journal.to_string(),
+            Status::Pending(format!(
+                "{journal} holds rows {} lacks; a store read imports them first",
+                store.display()
+            )),
+        ));
         return out;
     }
     let names: Vec<String> = family
@@ -836,7 +869,7 @@ pub(crate) fn journal_retire(
     // order (oldest rotation first, then the live name, then the ephemeral
     // sibling). The parked path is new to the ingest cursor, so each copy
     // imports whole, and `row_hash` keeps a retried pass insert-free.
-    parked.sort_by_key(|(name, _)| family_order(name));
+    parked.sort_by_key(|(name, _)| family_order(journal, name));
     let refs: Vec<&Path> = parked.iter().map(|(_, p)| p.as_path()).collect();
     let dir = backup_dir(root, stamp);
     let receipt = match crate::event_store::sync_sources(&live, &refs) {
@@ -860,9 +893,9 @@ pub(crate) fn journal_retire(
     // legacy_journal signal. `repeat` is true when an earlier pass already
     // retired this journal.
     if parked.len() == names.len() {
-        let repeat = retired_before(&live);
+        let repeat = retired_before(&live, journal);
         let mut fields = serde_json::Map::new();
-        fields.insert("journal".into(), serde_json::Value::from("events.jsonl"));
+        fields.insert("journal".into(), serde_json::Value::from(journal));
         fields.insert("files".into(), serde_json::Value::from(parked.len()));
         fields.insert("bytes".into(), serde_json::Value::from(receipt.read_bytes));
         fields.insert("ingested".into(), serde_json::Value::from(receipt.ingested));
@@ -884,15 +917,18 @@ pub(crate) fn journal_retire(
 /// Import order for a parked journal family, mirroring `import_all`:
 /// rotations by generation ascending, then the live name, then the
 /// ephemeral sibling.
-fn family_order(name: &str) -> (u8, u64) {
-    if name == "events.jsonl" {
+fn family_order(journal: &str, name: &str) -> (u8, u64) {
+    let Some(rest) = name.strip_prefix(journal) else {
+        return (0, u64::MAX);
+    };
+    if rest.is_empty() {
         return (1, 0);
     }
-    if name == "events.jsonl.ephemeral" {
+    if rest == ".ephemeral" {
         return (2, 0);
     }
-    let gen = name
-        .strip_prefix("events.jsonl.")
+    let gen = rest
+        .strip_prefix('.')
         .and_then(|g| g.parse::<u64>().ok())
         .unwrap_or(u64::MAX);
     (0, gen)

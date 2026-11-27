@@ -530,6 +530,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         alias,
         None,
         &cwd,
+        payload.pointer("/node").and_then(Value::as_str),
     )?;
     let template = crate::spawn_compose::resolve_template(
         harness,

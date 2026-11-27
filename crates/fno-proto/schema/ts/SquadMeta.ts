@@ -8,7 +8,7 @@ import type { TabMeta } from "./TabMeta";
  * resolved repo root the squad is keyed by; `name` is display-only (the
  * root's basename, disambiguated by a parent segment when needed).
  */
-export type SquadMeta = { id: number, name: string, canonical_cwd: string, tabs: Array<TabMeta>, active_tab: number, 
+export type SquadMeta = { id: number, name: string, canonical_cwd: string, project?: string | null, tabs: Array<TabMeta>, active_tab: number, 
 /**
  * (v19) Total live pane count across ALL the squad's tabs - the
  * blast radius the `RemoveSquad` confirm names before it reaps them.

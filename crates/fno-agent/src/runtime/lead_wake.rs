@@ -77,7 +77,9 @@ pub(crate) struct WakePlan<'a> {
     pub park_beat: bool,
 }
 
-fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
+/// The node ids a scope spelling names: its comma-separated members, trimmed.
+/// A project-name scope yields names no graph row carries.
+pub(crate) fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
     scope.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 

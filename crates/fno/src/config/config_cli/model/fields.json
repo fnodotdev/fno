@@ -28,7 +28,8 @@
     {
      "name": "build",
      "default": {
-      "agent_freeze": false
+      "agent_freeze": false,
+      "sccache": false
      }
     },
     {
@@ -327,8 +328,6 @@
       "mode": "park",
       "destinations": [],
       "min_wait_minutes": 30,
-      "sleep_hours": "",
-      "sleep_timezone": "",
       "canary_survive_minutes": 15,
       "quorum": 2
      }
@@ -847,6 +846,10 @@
     {
      "name": "agent_freeze",
      "default": false
+    },
+    {
+     "name": "sccache",
+     "default": false
     }
    ]
   },
@@ -989,6 +992,18 @@
     {
      "name": "favorite_skills",
      "default": []
+    },
+    {
+     "name": "timezone",
+     "default": ""
+    },
+    {
+     "name": "working_hours",
+     "default": null
+    },
+    {
+     "name": "auto_approve_routine",
+     "default": false
     }
    ]
   },
@@ -1005,6 +1020,10 @@
     },
     {
      "name": "image",
+     "default": null
+    },
+    {
+     "name": "host",
      "default": null
     }
    ]
@@ -1214,6 +1233,10 @@
    "fields": [
     {
      "name": "posture",
+     "default": null
+    },
+    {
+     "name": "human",
      "default": null
     },
     {
@@ -1447,14 +1470,6 @@
     {
      "name": "min_wait_minutes",
      "default": 30
-    },
-    {
-     "name": "sleep_hours",
-     "default": ""
-    },
-    {
-     "name": "sleep_timezone",
-     "default": ""
     },
     {
      "name": "canary_survive_minutes",
@@ -3563,10 +3578,14 @@
   "inbox.tool_boundary_ordinary",
   "user.name",
   "user.favorite_skills",
+  "user.timezone",
+  "user.working_hours",
+  "user.auto_approve_routine",
   "join.sandbox",
   "sandbox.on_unavailable",
   "sandbox.provider",
   "sandbox.image",
+  "sandbox.host",
   "obsidian.enabled",
   "obsidian.vault",
   "project.id",
@@ -3593,6 +3612,7 @@
   "batch.max_nodes",
   "batch.max_loc",
   "build.agent_freeze",
+  "build.sccache",
   "post_merge.parking_lot_path",
   "post_merge.maintainer_marker",
   "post_merge.enabled",
@@ -3633,6 +3653,7 @@
   "review.self_review_required",
   "review.require_corroboration",
   "review.github_approval_satisfies",
+  "review.human",
   "review.max_rounds",
   "review.carry_interdiff_lines",
   "review.invocation_ttl_minutes",
@@ -3923,8 +3944,6 @@
   "provider_cap.mode",
   "provider_cap.destinations",
   "provider_cap.min_wait_minutes",
-  "provider_cap.sleep_hours",
-  "provider_cap.sleep_timezone",
   "provider_cap.canary_survive_minutes",
   "provider_cap.quorum",
   "main_repair.auto_revert",

@@ -53,8 +53,14 @@ impl Provider {
     pub fn engine(self) -> Res<Engine> {
         match self {
             Self::None => Err("[sandbox] provider = \"none\" runs no sandbox".into()),
-            Self::Docker | Self::Devcontainer => Ok(Engine { bin: "docker" }),
-            Self::Podman => Ok(Engine { bin: "podman" }),
+            Self::Docker | Self::Devcontainer => Ok(Engine {
+                bin: "docker",
+                host: None,
+            }),
+            Self::Podman => Ok(Engine {
+                bin: "podman",
+                host: None,
+            }),
             Self::Apple => Err(
                 "apple/container has no passing sandbox journey for no network, exec stdio \
                  and dropped privileges; use provider docker (OrbStack or Docker Desktop) or podman"
@@ -67,13 +73,139 @@ impl Provider {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Engine {
     pub bin: &'static str,
+    /// A remote daemon on the user's own VM, `ssh://[user@]host[:port]`.
+    /// Every call carries it, so the engine CLI moves the argv over its own
+    /// API and no remote shell quotes anything.
+    pub host: Option<&'static str>,
+}
+
+/// A checked `sandbox.host` value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshHost {
+    pub user: Option<String>,
+    pub host: String,
+    pub port: Option<u16>,
+}
+
+impl SshHost {
+    /// `ssh://[user@]host[:port]`, with only `[A-Za-z0-9._-]` in the user
+    /// and host, no leading dash, and a port in 1..=65535. Anything else
+    /// refuses and names the value.
+    pub fn parse(raw: &str) -> Res<Self> {
+        let bad = || {
+            Refusal(format!(
+                "sandbox.host = {:?} is not ssh://[user@]host[:port] with plain characters",
+                super::escape(raw, 120)
+            ))
+        };
+        let rest = raw.strip_prefix("ssh://").ok_or_else(bad)?;
+        let (user, hostport) = match rest.split_once('@') {
+            Some((u, h)) => (Some(u), h),
+            None => (None, rest),
+        };
+        let (host, port) = match hostport.rsplit_once(':') {
+            Some((h, p)) => (
+                h,
+                Some(p.parse::<u16>().ok().filter(|p| *p > 0).ok_or_else(bad)?),
+            ),
+            None => (hostport, None),
+        };
+        let plain = |s: &str| {
+            !s.is_empty()
+                && !s.starts_with('-')
+                && s.len() <= 253
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        if !plain(host) || user.is_some_and(|u| !plain(u)) {
+            return Err(bad());
+        }
+        Ok(Self {
+            user: user.map(str::to_string),
+            host: host.to_string(),
+            port,
+        })
+    }
+
+    /// The destination ssh reads: `[user@]host`.
+    pub fn dest(&self) -> String {
+        match &self.user {
+            Some(u) => format!("{u}@{}", self.host),
+            None => self.host.clone(),
+        }
+    }
+
+    /// Refuse a host the user has not trusted, or an ssh config that would
+    /// forward the agent or a port to the VM. Run once before first use.
+    pub fn preflight(&self) -> Res<()> {
+        let known = match self.port {
+            Some(p) if p != 22 => format!("[{}]:{p}", self.host),
+            _ => self.host.clone(),
+        };
+        let mut c = Command::new("ssh-keygen");
+        c.args(["-F", &known]);
+        let trusted = crate::bounded_cmd::output_with_timeout_result(c, 30)
+            .is_ok_and(|o| o.status.success() && !o.stdout.is_empty());
+        if !trusted {
+            return Err(Refusal(format!(
+                "sandbox.host {} is not in known_hosts; connect once with ssh and check its key",
+                self.host
+            )));
+        }
+        let mut c = Command::new("ssh");
+        c.arg("-G");
+        if let Some(p) = self.port {
+            c.args(["-p", &p.to_string()]);
+        }
+        c.arg("--").arg(self.dest());
+        let out = crate::bounded_cmd::output_with_timeout_result(c, 30)
+            .map_err(|e| format!("ssh -G {}: {e}", self.host))?;
+        let config = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+        if let Some(line) = forwarding(&config) {
+            return Err(Refusal(format!(
+                "the ssh config for {} sets `{line}`; a sandbox host gets no agent or port forward",
+                self.host
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// The first `ssh -G` line that forwards the agent or a port, if any.
+pub fn forwarding(config: &str) -> Option<String> {
+    config
+        .lines()
+        .map(str::trim)
+        .find(|l| {
+            *l == "forwardagent yes"
+                || l.starts_with("localforward ")
+                || l.starts_with("remoteforward ")
+                || l.starts_with("dynamicforward ")
+        })
+        .map(str::to_string)
 }
 
 impl Engine {
     fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(self.bin);
+        if let Some(h) = self.host {
+            let flag = if self.bin == "podman" { "--url" } else { "-H" };
+            c.args([flag, h]);
+        }
         c.args(args);
         c
+    }
+
+    /// This engine against a remote daemon, or the local one for `None`.
+    pub fn on(self, host: Option<&'static str>) -> Self {
+        Self { host, ..self }
+    }
+
+    /// One command inside with its exit status kept, under `secs`.
+    pub fn exec_raw(&self, name: &str, argv: &[&str], secs: u64) -> std::io::Result<Output> {
+        let mut args = vec!["exec", "-w", super::CONTAINER_WORK, name];
+        args.extend_from_slice(argv);
+        crate::bounded_cmd::output_with_timeout_result(self.cmd(&args), secs)
     }
 
     /// One bounded call. A non-zero exit is an error naming the call and the
@@ -401,6 +533,36 @@ mod tests {
             Some("podman")
         );
         assert_eq!(Provider::parse("nope"), None);
+        // AC9-EDGE: an unsafe host value refuses; a forwarding config names
+        // the line; a remote engine carries the host on every call.
+        for bad in [
+            "host",
+            "ssh://-oProxyCommand=x",
+            "ssh://a b",
+            "ssh://u@h:0",
+            "ssh://u@h:99999",
+            "ssh://h;rm",
+            "ssh://$(x)",
+        ] {
+            assert!(SshHost::parse(bad).is_err(), "{bad}");
+        }
+        let h = SshHost::parse("ssh://runner@localhost:2222").unwrap();
+        assert_eq!((h.dest(), h.port), ("runner@localhost".into(), Some(2222)));
+        assert_eq!(
+            forwarding("user x\nforwardagent yes\n").as_deref(),
+            Some("forwardagent yes")
+        );
+        assert_eq!(forwarding("forwardagent no\nport 22\n"), None);
+        let remote = Engine {
+            bin: "podman",
+            host: Some("ssh://u@h"),
+        };
+        let argv: Vec<String> = remote
+            .cmd(&["ps"])
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(argv, ["--url", "ssh://u@h", "ps"]);
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("devcontainer.json");
         std::fs::write(&f, "{ // c\n \"image\": \"debian:12\" /* x */ }").unwrap();

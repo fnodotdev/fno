@@ -36,6 +36,11 @@ pub mod pack;
 #[cfg(feature = "vt")]
 pub mod vt_text;
 
+/// The activity feed's shared search grammar, row and table. Behind the
+/// `feed` feature so a plain wire client never links chrono.
+#[cfg(feature = "feed")]
+pub mod feed;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {
@@ -437,12 +442,14 @@ fn default_true() -> bool {
 /// floor stays 58.
 /// v133: `AgentRow` adds the four token classes behind `session_tokens`
 /// (serde default); floor stays 58.
-/// v134: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
+/// v134: `Command::NewSquad.project` and `SquadMeta.project` (serde default),
+/// the explicit project id a workspace was made for; floor stays 58.
+/// v135: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
 /// sweep projection; floor stays 58.
-/// v135: `PrStatusFact` adds `review_rounds` and `title` (serde default), the
+/// v136: `PrStatusFact` adds `review_rounds` and `title` (serde default), the
 /// review rounds spent and the PR's title, both optional and absent on rows
 /// whose door read printed none; floor stays 58.
-pub const PROTO_VERSION: u32 = 135;
+pub const PROTO_VERSION: u32 = 136;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2094,6 +2101,10 @@ pub enum Command {
     NewSquad {
         name: String,
         origin: Option<String>,
+        // The config project id the workspace is made for; the server keeps
+        // it beside the origins, so the link never rests on folder equality.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
     },
     /// (v114) Move a session into workspace `squad` by hand. The server pins
     /// `(harness, harness_session_id)` on that workspace's stored row, so the
@@ -2692,6 +2703,10 @@ pub struct SquadMeta {
     pub id: u64,
     pub name: String,
     pub canonical_cwd: String,
+    // The explicit project id this workspace was made for, when it was made
+    // from a config project. Absent for a workspace the operator named by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     pub tabs: Vec<TabMeta>,
     pub active_tab: usize,
     /// (v19) Total live pane count across ALL the squad's tabs - the
@@ -3176,6 +3191,7 @@ mod tests {
                     id: 1,
                     name: "footnote".into(),
                     canonical_cwd: "/code/footnote/footnote".into(),
+                    project: None,
                     tabs: vec![
                         TabMeta {
                             id: 7,
@@ -3554,7 +3570,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 135);
+        assert_eq!(PROTO_VERSION, 136);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

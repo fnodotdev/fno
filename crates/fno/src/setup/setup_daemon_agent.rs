@@ -254,6 +254,8 @@ fn render_plist(daemon_bin: &str, agents_home: &str, label: &str) -> String {
     <string>{home}</string>
     <key>FNO_AGENT_HOME</key>
     <string>{agents_home}</string>
+    <key>FNO_MUX_DIR</key>
+    <string>{mux_dir}</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -282,6 +284,7 @@ fn render_plist(daemon_bin: &str, agents_home: &str, label: &str) -> String {
         file = DAEMON_PLIST_FILENAME,
         daemon_bin = esc(daemon_bin),
         agents_home = esc(agents_home),
+        mux_dir = esc(&crate::proto::mux_dir().display().to_string()),
         path = esc(&launchd_path(daemon_bin)),
         home = esc(&home.display().to_string()),
         log_out = esc(&logs.join("daemon-agent.out.log").display().to_string()),
@@ -437,6 +440,7 @@ mod tests {
         // binary's own resolution.
         assert!(rendered.contains("<string>--home</string>"));
         assert!(rendered.contains("<key>FNO_AGENT_HOME</key>"));
+        assert!(rendered.contains("<key>FNO_MUX_DIR</key>"));
         assert!(rendered.contains("/Users/u/.fno/agents"));
     }
 

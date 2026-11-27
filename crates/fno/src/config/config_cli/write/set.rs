@@ -67,6 +67,7 @@ pub fn set_values(
     if scope == "project" {
         refuse_project_grant(&order)?;
     }
+    refuse_without_tty(&order, std::io::IsTerminal::is_terminal(&std::io::stdin()))?;
     let target = target_path(scope)?;
     let touched = order.iter().any(|key| is_merge_gating(key));
     let mut finals: Vec<(String, Value)> = Vec::new();
@@ -131,6 +132,27 @@ fn refuse_project_grant(keys: &[String]) -> Res<()> {
     Err(Refusal::new(
         format!(
             "{key} grants access, so a project file cannot set it. Nothing was written. Set it for this machine: fno config set {key} '<value>'"
+        ),
+        1,
+    ))
+}
+
+/// Keys that widen what a worker may do without asking. A person sets them
+/// from an interactive terminal. An agent has no terminal, and an env var it
+/// strips cannot give it one.
+const OPERATOR_ONLY: [&str; 1] = ["user.auto_approve_routine"];
+
+fn refuse_without_tty(keys: &[String], tty: bool) -> Res<()> {
+    let Some(key) = keys
+        .iter()
+        .filter(|_| !tty)
+        .find(|key| OPERATOR_ONLY.contains(&key.as_str()))
+    else {
+        return Ok(());
+    };
+    Err(Refusal::new(
+        format!(
+            "{key} widens what workers do without asking, so it needs an interactive terminal. Nothing was written. Run `fno config set {key} true` yourself in a terminal."
         ),
         1,
     ))
@@ -497,6 +519,14 @@ fn couple_grant_observer() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn an_operator_only_key_needs_an_interactive_terminal() {
+        let keys = vec!["user.auto_approve_routine".to_string()];
+        assert!(refuse_without_tty(&keys, false).is_err());
+        assert!(refuse_without_tty(&keys, true).is_ok());
+        assert!(refuse_without_tty(&["user.name".to_string()], false).is_ok());
+    }
+
     /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads
     /// github.app_id, github.app_installation_id and github.app_key_path from
     /// the global config; one `config set -g` batch must accept all three and
@@ -523,6 +553,43 @@ mod tests {
         assert!(written.contains("app_installation_id = \"42\""));
         setup_rewrites_the_rows_the_writer_replaces(&pin);
         a_project_write_of_a_grant_changes_no_file(dir.path());
+        std::env::remove_var("FNO_CONFIG");
+    }
+
+    /// The rustc wrapper reads `build.sccache` straight from the TOML.
+    /// `fno config set` takes the same key, and a miss still refuses.
+    #[test]
+    fn set_takes_the_sccache_key_and_a_miss_still_refuses() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        // Same pin and env lock as the GitHub App keys above.
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
+        std::env::set_var("FNO_CONFIG", &pin);
+        let results = set_values(
+            &[("build.sccache".to_string(), "true".to_string())],
+            "global",
+            None,
+        )
+        .expect("set takes build.sccache");
+        let [first] = results.as_slice() else {
+            panic!("set returned {} results, expected 1", results.len());
+        };
+        assert_eq!(first.value, Value::Bool(true));
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("sccache = true"), "{written}");
+        let missed = set_values(
+            &[("build.sccache_no_such".to_string(), "true".to_string())],
+            "global",
+            None,
+        );
+        let Err(refusal) = missed else {
+            panic!("a miss must refuse");
+        };
+        assert_eq!(
+            refusal.message,
+            "unknown config key 'build.sccache_no_such'"
+        );
+        assert_eq!(refusal.code, 1);
         std::env::remove_var("FNO_CONFIG");
     }
 

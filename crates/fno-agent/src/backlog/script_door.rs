@@ -20,7 +20,6 @@ const USAGE: &str = "usage: fno backlog script-door <op>
   match <query> [--branch B]                 one loose-match answer as JSON
   has-file-surface <plan>                    exit 0 when the plan names files, else 7
   partition                                  stdin {items:[[id,[path...]]]} to the collision partition
-  root-patterns <doc>                        the state-root inventory patterns, one per line
   plan-claims <plan>                         the plan's claimed node ids, as a JSON array
   plan-rung <plan>                           the plan's rung, one word
   terminal-ids                               every closed node id, as a JSON array
@@ -273,24 +272,6 @@ pub fn run(tail: &[String]) -> i32 {
         "terminal-ids" => run_terminal_ids(),
         "execute-open" => run_execute_open(rest),
         "store-request" => run_store_request(rest),
-        "root-patterns" => {
-            let Some(doc) = rest.first() else {
-                eprintln!("{USAGE}");
-                return 2;
-            };
-            match std::fs::read_to_string(doc) {
-                Ok(text) => {
-                    for pattern in crate::state_root_drift::top_level_patterns(&text) {
-                        println!("{pattern}");
-                    }
-                    0
-                }
-                Err(e) => {
-                    eprintln!("fno backlog script-door root-patterns: cannot read {doc}: {e}");
-                    2
-                }
-            }
-        }
         _ => {
             eprintln!("{USAGE}");
             2

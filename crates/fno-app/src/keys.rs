@@ -253,6 +253,12 @@ fn tilde_key(k: &Key, n: u8) -> Vec<u8> {
     }
 }
 
+/// The scanner holds a prefix, a chord candidate or a tab number: the next
+/// keystroke, text included, belongs to it.
+pub fn chord_in_flight(scanner: &fno::ui::keys::Scanner) -> bool {
+    scanner.prefix_pending() || scanner.chord_pending() || scanner.digits_pending()
+}
+
 /// True for a key that types text: the window leaves it to the platform
 /// input handler, so dead keys, option-compose and IME compose before the
 /// text reaches the pane. Ctrl, cmd and named keys are encoded here.
@@ -387,6 +393,19 @@ pub enum MuxAction {
     RowMenu,
     /// prefix+Z: focus the next pane whose agent waits on the user.
     NextWaiting,
+    /// A fleet overlay chord: the app's own surface for it opens.
+    Overlay(Overlay),
+}
+
+/// The app surface a mux overlay chord opens in place of the TUI overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    /// The go-to palette: the selector and the navigator.
+    GoTo,
+    /// The Inbox view: questions, decisions and the activity feed.
+    Inbox,
+    /// The command center board: backlog, team and org.
+    Board,
 }
 
 /// One command-block action the wire carries.
@@ -398,9 +417,9 @@ pub enum BlockOp {
 }
 
 /// Translate one scanner event. Forward, wire commands, tab ordinals,
-/// detach and the five overlay events run app-side; every other
-/// client-local overlay event has no app surface yet and becomes a notice
-/// naming it, so a prefix chord never leaks into the pane.
+/// detach, the five overlay events and the fleet overlay chords run app-side;
+/// every other client-local overlay event has no app surface yet and becomes
+/// a notice naming it, so a prefix chord never leaks into the pane.
 pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
     use fno::ui::keys::Event;
     match event {
@@ -416,6 +435,13 @@ pub fn translate(event: fno::ui::keys::Event) -> MuxAction {
         Event::OpenRename => MuxAction::Rename,
         Event::OpenSidelineMenu => MuxAction::RowMenu,
         Event::FocusNextBlocked => MuxAction::NextWaiting,
+        Event::OpenSelector | Event::OpenNav => MuxAction::Overlay(Overlay::GoTo),
+        Event::OpenAnswers | Event::OpenDecisions | Event::OpenFeed | Event::FocusFeed => {
+            MuxAction::Overlay(Overlay::Inbox)
+        }
+        Event::OpenBacklogBoard | Event::OpenTeam | Event::OpenOrgView => {
+            MuxAction::Overlay(Overlay::Board)
+        }
         other => MuxAction::Notice(format!("{other:?} has no app action yet")),
     }
 }
@@ -562,6 +588,31 @@ mod tests {
         assert_eq!(paste("a\nb", modes), b"\x1b[200~a\rb\x1b[201~");
     }
 
+    /// The key after the prefix is a text key, which
+    /// the window receives through the input handler. That path must hand it
+    /// to the scanner while a chord is in flight, and only then.
+    #[test]
+    fn a_text_key_after_the_prefix_belongs_to_the_scanner() {
+        use fno::ui::keys::{Event, Scanner};
+        use std::time::Instant;
+        let mut scanner = Scanner::default();
+        assert!(!chord_in_flight(&scanner), "plain typing stays pane input");
+        scanner.scan(&[0x02], Instant::now());
+        assert!(chord_in_flight(&scanner), "the prefix claims the next key");
+        let events = scanner.scan(b"c", Instant::now());
+        assert!(
+            matches!(events.as_slice(), [Event::Cmd(_)]),
+            "prefix+c runs a command, got {events:?}"
+        );
+        assert!(!chord_in_flight(&scanner), "the chord resolved");
+        scanner.scan(&[0x02], Instant::now());
+        scanner.scan(b"3", Instant::now());
+        assert!(
+            chord_in_flight(&scanner),
+            "a held tab number still owns the next key"
+        );
+    }
+
     /// The app_prefix contract: the shared scanner claims the prefix before
     /// any pane input, and translate maps the actionable arms. `u` is
     /// unbound in the default table, so a post-prefix u is the Bell arm.
@@ -606,10 +657,19 @@ mod tests {
             MuxAction::Input(vec![0x02])
         );
         assert_eq!(translate(Event::Bell), MuxAction::Bell);
-        assert!(matches!(
+        assert_eq!(
             translate(Event::OpenSelector),
-            MuxAction::Notice(_)
-        ));
+            MuxAction::Overlay(Overlay::GoTo)
+        );
+        assert_eq!(
+            translate(Event::OpenAnswers),
+            MuxAction::Overlay(Overlay::Inbox)
+        );
+        assert_eq!(
+            translate(Event::OpenBacklogBoard),
+            MuxAction::Overlay(Overlay::Board)
+        );
+        assert!(matches!(translate(Event::OpenReview), MuxAction::Notice(_)));
         // The five overlay events each run an app arm, never a notice.
         use fno::proto::BlockDir;
         assert_eq!(

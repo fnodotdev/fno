@@ -428,6 +428,7 @@ enum Role {
     /// `fno agent mail unread`: the native cursor-bounded unread listing.
     /// The command and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
+    MailSent(Vec<OsString>),
     /// `fno agent mail view`: refused by name; the command is now `show`
     /// (no compat shell, the same rule as a removed mux command).
     MailViewRenamed,
@@ -478,9 +479,9 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
-    /// `fno do docs ...`: the docs release-binding family (bind, surface,
-    /// gate) execs the sibling binary's docs dispatcher, the same
-    /// byte-verbatim handover as DoCi.
+    /// `fno do docs ...`: the docs family, tie doc pages to releases
+    /// (link, surface, gate), execs the sibling binary's docs dispatcher,
+    /// the same byte-verbatim handover as DoCi.
     DoDocs,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
@@ -570,6 +571,15 @@ fn fno_agent_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Pat
     cmd.args(action);
     cmd.args(rest);
     cmd.envs(fno::cli_usage::exec_env());
+    // The agent's in-process mux client reads the socket dir from this one
+    // variable; a user shell exports none, so the front door's resolution
+    // rides along.
+    if std::env::var_os("FNO_MUX_DIR")
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        cmd.env("FNO_MUX_DIR", proto::mux_dir());
+    }
     let error = cmd.exec();
     eprintln!("{label}: could not run fno-agent: {error}");
     1
@@ -1355,7 +1365,12 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // RemoteMail claim this arm replaces never fires for reply.
             Some(Role::MailReply(tail.to_vec()))
         }
-        "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
+        "sent" => Some(Role::MailSent(
+            std::iter::once(OsString::from(command))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "hold" | "dnd" | "hold-release" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(command))
                 .chain(tail.to_vec())
                 .collect(),
@@ -1953,6 +1968,11 @@ fn main() {
     fno::legacy_env::adopt();
     fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
+    // Under the sandbox pin no store exists to open: the loop's commands
+    // forward as typed ops and the rest refuse, before any door runs.
+    if let Some(code) = fno::sandbox_door::run(&args) {
+        std::process::exit(code);
+    }
     fno::cli_usage::start(&args);
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
@@ -2387,11 +2407,22 @@ fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
             &["spawn-remote"],
             &rest,
         )),
-        Role::MailHold(rest) => fno::cli_usage::exit(fno_agent_exec(
-            "fno agent mail hold|dnd|hold-release|sent|ack",
-            &["mail"],
-            &rest,
-        )),
+        Role::MailHold(rest) => {
+            let is_hold = rest.first().is_some_and(|c| c == "hold" || c == "dnd");
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match is_hold.then(|| fno::mail_hold_status::run(&args)).flatten() {
+                Some(code) => fno::cli_usage::exit(code),
+                None => fno::cli_usage::exit(fno_agent_exec(
+                    "fno agent mail hold|dnd|hold-release|sent|ack",
+                    &["mail"],
+                    &rest,
+                )),
+            }
+        }
         Role::MailSend(rest) => {
             // Role::MailSend carries the tail without the command; the exec
             // prefix re-adds `send` or an id-shaped target reads as the command.
@@ -2436,7 +2467,30 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
             &rest,
         )),
         Role::MailUnread(rest) => {
-            fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match fno::mail_unread::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+                }
+            }
+        }
+        Role::MailSent(rest) => {
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match fno::mail_sent::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail sent", &["mail"], &rest))
+                }
+            }
         }
         Role::MailViewRenamed => {
             eprintln!("fno agent mail view was renamed: use fno agent mail show");

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -402,8 +402,32 @@ impl Apply<'_> {
     /// The shared backlog tables. A decision's key moves in two flushes, so
     /// the primary (foreign keys on, deletes sent first) never sees a join
     /// row point at a missing decision: first the copy under the number and
-    /// the repointed joins, then the delete of the hex row.
+    /// the repointed joins, then the delete of the hex row. A peer that wrote
+    /// a row first gets its row back through the share take-back, so each
+    /// flush the primary refuses as stale runs the pass again over it.
     fn backlog(&mut self, graph: &Path) -> Result<(), MigrateError> {
+        let mut moved = BTreeSet::new();
+        self.backlog_pass(graph, &mut moved)?;
+        settle(graph, || self.backlog_pass(graph, &mut moved))?;
+        let drop_moved = || -> Result<(), MigrateError> {
+            let mut conn = crate::backlog::open_holding_lock(graph)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for from in &moved {
+                drop_decision(&tx, from)?;
+            }
+            Ok(tx.commit()?)
+        };
+        drop_moved()?;
+        settle(graph, drop_moved)
+    }
+
+    /// One rewrite of the shared tables in one local transaction. A decision
+    /// an earlier pass moved takes its joins again without a second entry.
+    fn backlog_pass(
+        &mut self,
+        graph: &Path,
+        moved: &mut BTreeSet<String>,
+    ) -> Result<(), MigrateError> {
         let map = self.map;
         let db = crate::backlog::database_path(graph);
         let mut conn = crate::backlog::open_holding_lock(graph)?;
@@ -414,13 +438,13 @@ impl Apply<'_> {
             rows.collect::<Result<_, _>>()?
         };
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut moved = Vec::new();
         for (rowid, event_id, data) in rows {
             let after = self.text(&data).into_owned();
             match map.get(&event_id) {
                 Some(label) => {
-                    if copy_decision(&tx, &event_id, label, &after)? {
-                        moved.push(event_id.clone());
+                    if copy_decision(&tx, &event_id, label, &after)?
+                        && moved.insert(event_id.clone())
+                    {
                         self.log.push(Undo::Moved {
                             graph: graph.to_path_buf(),
                             from: event_id,
@@ -481,15 +505,7 @@ impl Apply<'_> {
             }
         }
         tx.commit()?;
-        self.log.commit()?;
-        crate::backlog_share::flush(graph)?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for from in &moved {
-            drop_decision(&tx, from)?;
-        }
-        tx.commit()?;
-        crate::backlog_share::flush(graph)?;
-        Ok(())
+        self.log.commit()
     }
 
     /// One event db: every row whose line names a mapped key gets the new
@@ -628,6 +644,35 @@ fn copy_decision(
 /// The delete half of a decision's key move.
 fn drop_decision(conn: &Connection, from: &str) -> Result<(), MigrateError> {
     Ok(crate::backlog::decisions::drop_moved_key(conn, from)?)
+}
+
+/// Flushes one store's shared writes may take: each stale-row refusal costs
+/// one more, and a refusal past the last reaches the caller.
+const SHARE_ATTEMPTS: usize = 5;
+
+/// Flush the shared backlog behind `graph`. A stale-row refusal took the
+/// primary's rows back for the node a peer wrote. The sync brings the rest
+/// of the peer's writes, such as a new join on a hex key the drop must keep,
+/// then `again` runs over the fresh rows and the flush goes again.
+fn settle(
+    graph: &Path,
+    mut again: impl FnMut() -> Result<(), MigrateError>,
+) -> Result<(), MigrateError> {
+    let mut attempt = 1;
+    loop {
+        match crate::backlog_share::flush(graph) {
+            Ok(_) => return Ok(()),
+            Err(refusal)
+                if crate::backlog_share::is_stale_row_refusal(&refusal)
+                    && attempt < SHARE_ATTEMPTS =>
+            {
+                attempt += 1;
+                crate::backlog_share::sync(graph)?;
+                again()?;
+            }
+            Err(refusal) => return Err(refusal.into()),
+        }
+    }
 }
 
 fn write_atomic(path: &Path, text: &str) -> Result<(), MigrateError> {
@@ -977,35 +1022,85 @@ pub(crate) fn rollback(dir: &Path) -> i32 {
 /// a later write changed stays, and its line comes back in the result.
 fn undo_all(entries: Vec<Undo>) -> Vec<String> {
     let mut left = Vec::new();
-    let mut moved: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
-    for entry in entries.into_iter().rev() {
-        if let Err(reason) = undo_one(&entry) {
-            left.push(format!("{entry:?}: {reason}"));
-            continue;
+    let mut cells = BTreeSet::new();
+    let mut shared: BTreeMap<PathBuf, Vec<&Undo>> = BTreeMap::new();
+    for entry in entries.iter().rev() {
+        // A share take-back makes apply write one cell twice. The newest
+        // entry holds what the cell read before the last write.
+        if let Undo::Cell {
+            db,
+            table,
+            column,
+            rowid,
+            ..
+        } = entry
+        {
+            if !cells.insert((db, table, column, *rowid)) {
+                continue;
+            }
         }
-        // Only a move that went back loses its numbered row: one a later
-        // write changed is the sole copy of that decision.
-        if let Undo::Moved { graph, to, .. } = entry {
-            moved.entry(graph).or_default().push(to);
+        match entry.shared_store() {
+            Some(db) => shared.entry(db).or_default().push(entry),
+            None => {
+                if let Err(reason) = undo_one(entry) {
+                    left.push(format!("{entry:?}: {reason}"));
+                }
+            }
         }
     }
-    // The second half of each move back: the number's row goes once the
-    // primary holds the hex row and its joins again.
-    for (graph, labels) in moved {
-        let done = (|| -> Result<(), MigrateError> {
-            crate::backlog_share::flush(&graph)?;
-            let conn = crate::backlog::open_holding_lock(&graph)?;
-            for label in &labels {
+    for (db, group) in shared {
+        let mut failed = Vec::new();
+        let mut back = Vec::new();
+        let mut pass = || -> Result<(), MigrateError> {
+            failed.clear();
+            back.clear();
+            for entry in &group {
+                match undo_one(entry) {
+                    Err(reason) => failed.push(format!("{entry:?}: {reason}")),
+                    // Only a move that went back loses its numbered row: one
+                    // a later write changed is the sole copy of that decision.
+                    Ok(()) => {
+                        if let Undo::Moved { to, .. } = entry {
+                            back.push(to.clone());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        };
+        let settled = pass().and_then(|()| settle(&db, &mut pass));
+        left.extend(failed);
+        // The second half of each move back: the number's row goes once the
+        // primary holds the hex row and its joins again.
+        let drop_back = || -> Result<(), MigrateError> {
+            let conn = crate::backlog::open_holding_lock(&db)?;
+            for label in &back {
                 drop_decision(&conn, label)?;
             }
-            crate::backlog_share::flush(&graph)?;
             Ok(())
-        })();
+        };
+        let done = settled.and_then(|()| drop_back().and_then(|()| settle(&db, drop_back)));
         if let Err(reason) = done {
-            left.push(format!("decisions in {}: {reason}", graph.display()));
+            left.push(format!("shared backlog {}: {reason}", db.display()));
         }
     }
     left
+}
+
+/// The two shared backlog tables a cell entry can name, beside `decisions`.
+fn shared_table(table: &str) -> bool {
+    table == "decisions" || TEXT_CELLS.iter().any(|(t, _)| *t == table)
+}
+
+impl Undo {
+    /// The shared backlog store an entry writes through, by its db path.
+    fn shared_store(&self) -> Option<PathBuf> {
+        match self {
+            Self::Moved { graph, .. } => Some(crate::backlog::database_path(graph)),
+            Self::Cell { db, table, .. } if shared_table(table) => Some(db.clone()),
+            _ => None,
+        }
+    }
 }
 
 fn changed(n: usize) -> Result<(), MigrateError> {
@@ -1043,6 +1138,37 @@ fn undo_line(
     .map_err(MigrateError::from)
 }
 
+/// Take one text cell back while it reads what apply wrote. A cell a share
+/// take-back already put back reads its before value, and that is done too.
+fn undo_cell(
+    db: &Path,
+    table: &str,
+    column: &str,
+    rowid: i64,
+    before: &str,
+    after: &str,
+) -> Result<(), MigrateError> {
+    // The shared tables take their writes through the share path.
+    let conn = if shared_table(table) {
+        crate::backlog::open_holding_lock(db)?
+    } else {
+        Connection::open(db)?
+    };
+    let wrote = conn.execute(
+        &format!("UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2 AND \"{column}\" = ?3"),
+        params![before, rowid, after],
+    )?;
+    let held: Option<String> = conn
+        .query_row(
+            &format!("SELECT \"{column}\" FROM \"{table}\" WHERE rowid = ?1"),
+            params![rowid],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    changed(wrote.max(usize::from(held.as_deref() == Some(before))))
+}
+
 fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
     let open = |db: &Path| Connection::open(db);
     match entry {
@@ -1053,25 +1179,7 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
             rowid,
             before,
             after,
-        } => {
-            // The shared tables take their writes through the share path.
-            let shared =
-                table == "decisions" || TEXT_CELLS.iter().any(|(t, _)| *t == table.as_str());
-            let conn = if shared {
-                crate::backlog::open_holding_lock(&crate::graph_get::default_graph_path())?
-            } else {
-                open(db)?
-            };
-            changed(
-                conn.execute(
-                    &format!(
-                        "UPDATE \"{table}\" SET \"{column}\" = ?1 WHERE rowid = ?2 AND \"{column}\" = ?3"
-                    ),
-                    params![before, rowid, after],
-                )
-                ?,
-            )
-        }
+        } => undo_cell(db, table, column, *rowid, before, after),
         Undo::Line {
             db,
             table,
@@ -1111,6 +1219,15 @@ fn undo_one(entry: &Undo) -> Result<(), MigrateError> {
                     |r| r.get(0),
                 )
                 .optional()?;
+            if held.is_none() {
+                // An earlier rollback finished this move: the hex row holds.
+                let back: bool = conn.query_row(
+                    "SELECT EXISTS (SELECT 1 FROM decisions WHERE event_id = ?1)",
+                    params![from],
+                    |r| r.get(0),
+                )?;
+                return changed(usize::from(back));
+            }
             if held.as_deref() != Some(after.as_str()) {
                 return changed(0);
             }
@@ -1461,5 +1578,147 @@ mod tests {
             assert!(to.starts_with(&vault_b), "{to:?}");
             assert!(to.is_file(), "{to:?}");
         }
+    }
+
+    fn node_with_decision(graph: &Path, title: &str) -> Connection {
+        let board = crate::backlog::open(graph).unwrap();
+        board
+            .execute(
+                "INSERT INTO nodes (id, ordinal, slug, title, kind, status, priority) \
+                 VALUES ('x-1', 1, 'x-1', ?1, 'task', 'idea', 'p2')",
+                [title],
+            )
+            .unwrap();
+        let event = json!({"ts": "2026-11-24T00:00:00Z", "type": "operator_decision",
+            "source": "test", "data": {"decision_id": "d-0000c007", "decision": "kept", "subject": "x-1"}});
+        crate::backlog::decisions::record(&board, &event).unwrap();
+        board
+    }
+
+    /// The 2026-11-24 stop: a peer retitles a node between this machine's
+    /// sync and its apply. The primary refuses the stale batch and takes the
+    /// node's rows back; the next pass rewrites the peer's title and lands.
+    /// The rollback then puts the primary back on the hex key, nothing left.
+    #[test]
+    fn an_apply_a_peer_wrote_under_lands_on_the_primary_and_rolls_back_clean() {
+        use crate::backlog_share::{flush, route_to_primary, seed, sync};
+        let primary = crate::store_remote::test_primary::start();
+        let on = |graph: &Path| {
+            route_to_primary(Some((
+                primary.remote.clone(),
+                crate::backlog::database_path(graph),
+            )))
+        };
+        let (a_dir, b_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (a, b) = (
+            a_dir.path().join("graph.json"),
+            b_dir.path().join("graph.json"),
+        );
+        drop(crate::backlog::open(&a).unwrap());
+        drop(crate::backlog::open(&b).unwrap());
+        on(&a);
+        seed(&a).unwrap();
+        drop(node_with_decision(&a, "cites d-0000c007"));
+        flush(&a).unwrap();
+        on(&b);
+        sync(&b).unwrap();
+        crate::backlog::open(&b)
+            .unwrap()
+            .execute(
+                "UPDATE nodes SET title = 'b cites d-0000c007 too' WHERE id = 'x-1'",
+                [],
+            )
+            .unwrap();
+        flush(&b).unwrap();
+
+        on(&a);
+        let m = map(&[("d-0000c007", "D7")]);
+        let dir = tempfile::tempdir().unwrap();
+        let mut run = Apply {
+            map: &m,
+            log: Log::open(dir.path()).unwrap(),
+            tally: Tally::default(),
+        };
+        run.backlog(&a).unwrap();
+        let read = || -> (String, String, String) {
+            primary
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT (SELECT title FROM nodes WHERE id = 'x-1'), \
+                     (SELECT group_concat(event_id) FROM node_decisions WHERE node_id = 'x-1'), \
+                     (SELECT group_concat(event_id) FROM decisions)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        };
+        let landed = ("b cites D7 too".to_string(), "D7".into(), "D7".into());
+        assert_eq!(read(), landed);
+
+        let left = undo_all(run.log.entries);
+        assert!(left.is_empty(), "{left:?}");
+        let hex = "d-0000c007".to_string();
+        assert_eq!(read(), ("b cites d-0000c007 too".into(), hex.clone(), hex));
+        route_to_primary(None);
+    }
+
+    /// The leftover shape the stopped apply left on 25 decisions: the node
+    /// joined under both keys, and a cell the take-back already put back.
+    /// Rollback ends on the hex key alone and names nothing.
+    #[test]
+    fn a_rollback_over_a_node_joined_under_both_keys_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        let board = node_with_decision(&graph, "cites d-0000c007");
+        let before: String = board
+            .query_row(
+                "SELECT data FROM decisions WHERE event_id = 'd-0000c007'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let after = before.replace("kept", "kept, numbered");
+        crate::backlog::decisions::copy_under_key(&board, "d-0000c007", "D7", &after).unwrap();
+        board
+            .execute(
+                "INSERT INTO node_decisions (node_id, event_id, seq) VALUES ('x-1', 'd-0000c007', 9)",
+                [],
+            )
+            .unwrap();
+        let rowid: i64 = board
+            .query_row("SELECT rowid FROM nodes WHERE id = 'x-1'", [], |r| r.get(0))
+            .unwrap();
+        let left = undo_all(vec![
+            Undo::Moved {
+                graph: graph.clone(),
+                from: "d-0000c007".into(),
+                to: "D7".into(),
+                before,
+                after,
+            },
+            Undo::Cell {
+                db: crate::backlog::database_path(&graph),
+                table: "nodes".into(),
+                column: "title".into(),
+                rowid,
+                before: "cites d-0000c007".into(),
+                after: "cites D7".into(),
+            },
+        ]);
+        assert!(left.is_empty(), "{left:?}");
+        let (joins, decisions): (String, String) = board
+            .query_row(
+                "SELECT (SELECT group_concat(event_id) FROM node_decisions), \
+                 (SELECT group_concat(event_id) FROM decisions)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (joins.as_str(), decisions.as_str()),
+            ("d-0000c007", "d-0000c007")
+        );
     }
 }

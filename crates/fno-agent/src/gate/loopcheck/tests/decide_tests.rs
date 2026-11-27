@@ -121,6 +121,23 @@ fn block_reason_stops_demanding_a_push_for_a_shipped_head() {
         "shipped head must not be told to push: {reason}"
     );
     assert!(!reason.is_empty(), "a reason is still rendered: {reason}");
+    // The person gate rides this declaration (G3 is shrink-only): an owed
+    // person with no other named gap must read the person sentence, not the
+    // generic config lecture that teaches a wait nothing will satisfy.
+    let mut pr = PrInfo::default();
+    pr.state = PrState::Open;
+    pr.number = 7;
+    pr.ci_conclusion = CiConclusion::Success;
+    pr.human_approval_owed = true;
+    let reason = build_block_reason(&pr, "23480a0e", true, true);
+    assert!(
+        reason.contains("review.human"),
+        "the block must name the person gate: {reason}"
+    );
+    assert!(
+        !reason.contains("arm a watcher"),
+        "the person gate teaches no arm-and-tag ritual: {reason}"
+    );
 }
 
 #[test]

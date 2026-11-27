@@ -87,6 +87,36 @@ pub(crate) fn door_near_refusal(
     unnamed_near_refusal(&near, supersedes, keep)
 }
 
+/// The decide door's near-ruling refusal. A decision on one subject (a PR
+/// hold, a node ruling) competes only with live rulings on that same subject;
+/// holds on other PRs share role words but not the ruling.
+pub(crate) fn decide_near_refusal(
+    subject: &str,
+    decision: &str,
+    scope: &str,
+    supersedes: Option<&str>,
+    keep: &[String],
+) -> Option<String> {
+    let index = decision_index::default_store_live().ok()?;
+    let near = same_subject(near_rulings(&index, subject, decision, scope), subject);
+    unnamed_near_refusal(&near, supersedes, keep)
+}
+
+/// A `--keep` value read as ids: one id, or a comma list of them.
+pub(crate) fn split_ids(typed: &str) -> impl Iterator<Item = String> + '_ {
+    typed
+        .split(',')
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map(String::from)
+}
+
+fn same_subject<'a>(near: Vec<&'a Value>, subject: &str) -> Vec<&'a Value> {
+    near.into_iter()
+        .filter(|r| s(r, "subject").eq_ignore_ascii_case(subject.trim()))
+        .collect()
+}
+
 /// A user's own board answer is the ruling, so it never refuses. Near a live
 /// ruling it supersedes the first one `--keep` does not name, and returns
 /// that id with the warning line the door prints.
@@ -366,6 +396,27 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_hold_on_another_pr_is_not_near() {
+        let text =
+            "pr-hold PR 600 waits for the operator before merge while the freeze stands in force";
+        let row = |id: &str, subject: &str| {
+            json!({"decision_id": id, "subject": subject, "authority_source": "role",
+                   "ts": "2026-11-12T08:30:14Z", "decision": text})
+        };
+        let idx = decision_index::Index {
+            rows: vec![row("d-1", "pr-hold:599"), row("d-2", "pr-hold:600")],
+            damaged: 0,
+        };
+        let near = near_rulings(&idx, "pr-hold:600", text, "global");
+        assert_eq!(near.len(), 2);
+        let ids: Vec<&str> = same_subject(near, "pr-hold:600")
+            .iter()
+            .map(|r| s(r, "decision_id"))
+            .collect();
+        assert_eq!(ids, vec!["d-2"]);
+    }
 
     #[test]
     fn a_contradicting_ruling_under_a_node_subject_is_near_and_must_be_named() {

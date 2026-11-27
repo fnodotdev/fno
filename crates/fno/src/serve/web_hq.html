@@ -578,7 +578,7 @@ const cam = {x: 0, y: 0, k: 1, tx: 0, ty: 0, tk: 1, ox: 0, oy: 0, tox: 0, toy: 0
 readTokens(); matchMedia("(prefers-color-scheme: light)").addEventListener("change", readTokens);
 const proj = (r) => r.s.project || "unassigned";
 const epic = (r) => r.s.work && r.s.work.epic;
-const leadName = (r) => r.s.role ? r.s.short || r.s.name : null;
+const leadName = (r) => r.s.role ? r.s.name || r.s.short : null;
 const visible = (r) => !hiddenHosts.has(r.host) && !hiddenStates.has(r.s.status);
 const AR = () => W && H > TOP + 100 ? Math.min(2.4, Math.max(.7, W / (H - TOP))) : 1.6;
 const hx = (host) => { const i = hosts.findIndex((h) => h.host === host), n = hosts.length; return n < 2 ? 0 : i / (n - 1) * 2 - 1; };
@@ -769,7 +769,7 @@ function drawGraph(now) {
         // A name that would land on a pill, a hub name or another lead's name goes below its star.
         const lw = ctx.measureText(lead).width / 2 + 4, hit = (y) => pills.some((b) => p.x + lw > b.x && p.x - lw < b.x + b.w && y > b.y - 2 && y - 12 < b.y + b.h + 2);
         const ly = hit(p.y - r - 11) ? p.y + r + 20 : p.y - r - 11; ctx.fillText(lead, p.x, ly); pills.push({x: p.x - lw, y: ly - 12, w: lw * 2, h: 14}); }
-      else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.short || n.r.s.name, p.x, p.y - r - 9); }
+      else if (focus === n || cam.k > 1.3) { ctx.fillStyle = T.subtext0; ctx.font = "500 11px " + DATA; ctx.textAlign = "center"; ctx.fillText(work(n.r, "id") || n.r.s.name || n.r.s.short, p.x, p.y - r - 9); }
       if (sel === n.r) { ctx.strokeStyle = T.text; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 9 + (still ? 0 : 2 * Math.sin(now / 250)), 0, 7); ctx.stroke(); } }
     ctx.globalAlpha = 1; });
 }

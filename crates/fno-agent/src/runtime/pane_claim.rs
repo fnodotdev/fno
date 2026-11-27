@@ -14,7 +14,7 @@ use crate::harness::Harness;
 use crate::spawn_context;
 use std::collections::BTreeMap;
 
-/// Mirrors `spawn_context::MAX_ANCESTRY_DEPTH` (private there).
+/// Mirrors `self_identity::MAX_ANCESTRY_DEPTH` (private there).
 const MAX_ANCESTRY_DEPTH: usize = 25;
 
 /// A proven pane claim: the mux session name and pane id a foreground

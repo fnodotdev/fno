@@ -303,7 +303,9 @@ The alias will be removed in a future release."
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
             "--job" => door.job.push(take(&mut i)?),
-            "--keep" => door.keep.push(take(&mut i)?),
+            "--keep" => door
+                .keep
+                .extend(crate::law_reach::split_ids(&take(&mut i)?)),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
@@ -953,7 +955,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return decide_authority_refusal(&provenance.decided_by);
         }
     }
-    if let Some(message) = crate::law_reach::door_near_refusal(
+    if let Some(message) = crate::law_reach::decide_near_refusal(
         &subject,
         &decision,
         "global",

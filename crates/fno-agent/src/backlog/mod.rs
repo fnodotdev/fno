@@ -143,12 +143,15 @@ pub mod decisions_cache;
 pub mod digest;
 pub mod epic_issue;
 pub mod feed;
+pub(crate) mod feed_serve;
 pub mod fleet_law;
 pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
 pub mod join_marker;
 pub mod keeper_wire;
+pub mod law_archive;
+pub mod law_at;
 pub mod law_filters;
 pub mod law_firings;
 pub mod law_match;
@@ -156,6 +159,7 @@ pub mod law_pr_shape;
 pub mod law_reach;
 pub mod law_recheck;
 pub mod law_renew;
+pub mod law_rescope;
 pub mod law_restore;
 pub mod law_upkeep;
 pub mod law_when;
@@ -1111,7 +1115,12 @@ pub(crate) fn authoritative_sync_prepared(
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, version)?;
-    confirm_ids_landed_in(&transaction, after, &report.present_ids, true)?;
+    confirm_ids_landed_in(
+        &transaction,
+        &report.present_ids,
+        &report.deleted_ids,
+        Some(after.len()),
+    )?;
     transaction.commit()?;
     Ok(version.to_string())
 }
@@ -1212,7 +1221,7 @@ pub(crate) fn authoritative_sync_rebased(
     );
     let report = write_changed_ids(&transaction, before, after, true, changed)?;
     stamp_version(&transaction, &version)?;
-    confirm_ids_landed_in(&transaction, after, &report.present_ids, false)?;
+    confirm_ids_landed_in(&transaction, &report.present_ids, &report.deleted_ids, None)?;
     transaction.commit()?;
     Ok(Some(version))
 }
@@ -1311,69 +1320,62 @@ pub(crate) struct WriteReport {
     deleted_ids: Vec<String>,
 }
 
-/// The read-back the publish trusts, over exactly the ids `changed_present`
-/// names (the changed ids that survive in `after`; a deletion is a changed
-/// id that must NOT be present, and the count check catches one that
-/// failed to land): the store must still hold every row of `after` by
-/// count, and each surviving changed id must be present in the typed table
-/// or the raw carry.
+/// The read-back the publish trusts, over the id sets this write touched and
+/// nothing else: every id it wrote must be in the typed table or the raw
+/// carry, and every id it deleted must be in neither. The total is only a
+/// floor: a concurrent add raises it with no loss, but a total below the
+/// rows this write meant to leave behind means an untouched row was lost.
+/// `floor` is `None` for a rebased write, which sees only its own rows.
 fn confirm_ids_landed_in(
     connection: &Connection,
-    after: &[Value],
-    changed_present: &[String],
-    exact_total: bool,
+    written: &[String],
+    deleted: &[String],
+    floor: Option<usize>,
 ) -> Result<(), StoreDbError> {
     const SQLITE_BIND_BATCH: usize = 900;
-    let stored_count: i64 = connection.query_row(
-        "SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM nodes_raw)",
-        [],
-        |row| row.get(0),
-    )?;
-
-    let mut stored = std::collections::BTreeSet::new();
-    let ids: Vec<&str> = changed_present.iter().map(String::as_str).collect();
-    for batch in ids.chunks(SQLITE_BIND_BATCH) {
-        let placeholders = std::iter::repeat_n("?", batch.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let query = format!("SELECT id FROM nodes WHERE id IN ({placeholders})");
-        let mut statement = connection.prepare(&query)?;
-        let rows = statement
-            .query_map(rusqlite::params_from_iter(batch.iter().copied()), |row| {
-                row.get::<_, String>(0)
-            })?;
-        for row in rows {
-            stored.insert(row?);
+    fn stored_among(
+        connection: &Connection,
+        ids: &[String],
+    ) -> Result<std::collections::BTreeSet<String>, StoreDbError> {
+        let mut stored = std::collections::BTreeSet::new();
+        for table in ["nodes", "nodes_raw"] {
+            for batch in ids.chunks(SQLITE_BIND_BATCH) {
+                let placeholders = std::iter::repeat_n("?", batch.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let query = format!("SELECT id FROM {table} WHERE id IN ({placeholders})");
+                let mut statement = connection.prepare(&query)?;
+                let rows = statement
+                    .query_map(rusqlite::params_from_iter(batch.iter()), |row| {
+                        row.get::<_, String>(0)
+                    })?;
+                for row in rows {
+                    stored.insert(row?);
+                }
+            }
         }
+        Ok(stored)
     }
-    // Raw-carried rows landed too: they answer reads verbatim.
-    for batch in ids.chunks(SQLITE_BIND_BATCH) {
-        let placeholders = std::iter::repeat_n("?", batch.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        let query = format!("SELECT id FROM nodes_raw WHERE id IN ({placeholders})");
-        let mut statement = connection.prepare(&query)?;
-        let rows = statement
-            .query_map(rusqlite::params_from_iter(batch.iter().copied()), |row| {
-                row.get::<_, String>(0)
-            })?;
-        for row in rows {
-            stored.insert(row?);
-        }
-    }
-    let missing: Vec<&str> = changed_present
+    let stored = stored_among(connection, written)?;
+    let missing: Vec<&str> = written
         .iter()
         .map(String::as_str)
         .filter(|id| !stored.contains(*id))
         .collect();
-    // A rebased write sees only its own rows: rows other writers added or
-    // removed since its snapshot make the total differ without any loss.
-    if (!exact_total || stored_count == after.len() as i64) && missing.is_empty() {
+    let lingering: Vec<String> = stored_among(connection, deleted)?.into_iter().collect();
+    let stored_total: i64 = connection.query_row(
+        "SELECT (SELECT COUNT(*) FROM nodes) + (SELECT COUNT(*) FROM nodes_raw)",
+        [],
+        |row| row.get(0),
+    )?;
+    let below_floor = floor.is_some_and(|floor| stored_total < floor as i64);
+    if missing.is_empty() && lingering.is_empty() && !below_floor {
         return Ok(());
     }
     Err(StoreDbError::Refused(format!(
-        "publish read-back mismatch: expected {} ids, stored {stored_count}; missing ids {missing:?}",
-        changed_present.len()
+        "publish read-back mismatch: wrote {} ids, deleted {}; stored {stored_total}, floor {floor:?}; missing ids {missing:?}; undeleted ids {lingering:?}",
+        written.len(),
+        deleted.len()
     )))
 }
 
@@ -2489,6 +2491,72 @@ mod tests {
             carried["status"], "not-a-status",
             "the raw row rides verbatim"
         );
+    }
+
+    fn idea_row(id: &str) -> Value {
+        serde_json::json!({
+            "id": id, "slug": id, "title": id, "type": "feature",
+            "status": "idea", "priority": "p2", "domain": "code",
+        })
+    }
+
+    /// Two adds read the same snapshot; the second publishes after the first
+    /// landed. Its read-back compares the ids it wrote, so the extra row the
+    /// first add left in the store never fails it, and the id it printed
+    /// reads back.
+    #[test]
+    fn a_concurrent_add_never_fails_the_readback_and_the_id_reads_back() {
+        let (_dir, graph) = seeded_sqlite_fixture();
+        let before = read_entries(&graph).unwrap();
+        let mut first = before.clone();
+        first.push(idea_row("ab-first"));
+        let mut second = before.clone();
+        second.push(idea_row("ab-second"));
+
+        authoritative_sync(&graph, &before, &first).unwrap();
+        let changed = vec!["ab-second".to_string()];
+        authoritative_sync_prepared(&graph, &before, &second, &changed, "sqlite:test").unwrap();
+
+        let stored = read_entries(&graph).unwrap();
+        for id in ["ab-first", "ab-second"] {
+            assert!(
+                stored.iter().any(|row| RowFacts::id_of(row) == Some(id)),
+                "{id} reads back after its publish returned"
+            );
+        }
+    }
+
+    /// The other arm: a written id absent from both tables, a deleted id still
+    /// present, or an untouched row lost under the floor always fails the
+    /// read-back.
+    #[test]
+    fn the_readback_refuses_a_missing_undeleted_or_lost_untouched_id() {
+        let (_dir, graph) = seeded_sqlite_fixture();
+        let connection = open(&graph).unwrap();
+
+        let missing = confirm_ids_landed_in(&connection, &["ab-ghost".to_string()], &[], None)
+            .expect_err("a written id that is not stored must fail");
+        assert!(missing.to_string().contains("ab-ghost"), "{missing}");
+
+        let undeleted = confirm_ids_landed_in(&connection, &[], &["ab-one".to_string()], None)
+            .expect_err("a deleted id that is still stored must fail");
+        assert!(undeleted.to_string().contains("ab-one"), "{undeleted}");
+
+        confirm_ids_landed_in(
+            &connection,
+            &["ab-one".to_string()],
+            &["ab-ghost".to_string()],
+            None,
+        )
+        .expect("present written id and absent deleted id pass");
+
+        // A write that lost an untouched row: the store holds 1 row but the
+        // publish meant to leave 2. The total is only a floor, so it fails.
+        delete_aggregate(&connection, "ab-two").unwrap();
+        let lost = confirm_ids_landed_in(&connection, &[], &[], Some(2))
+            .expect_err("a total below the rows the write meant to keep must fail");
+        assert!(lost.to_string().contains("floor"), "{lost}");
+        confirm_ids_landed_in(&connection, &[], &[], Some(1)).expect("a total at the floor passes");
     }
 
     // -- single-row mutations --------------------------------------------

@@ -1008,21 +1008,6 @@ pub(crate) struct AppliedTransition {
     pub(crate) cause: &'static str,
 }
 
-fn status_word(s: AgentStatus) -> &'static str {
-    match s {
-        AgentStatus::Spawning => "spawning",
-        AgentStatus::Ready => "ready",
-        AgentStatus::Idle => "idle",
-        AgentStatus::Busy => "busy",
-        AgentStatus::Live => "live",
-        AgentStatus::Restarting => "restarting",
-        AgentStatus::Orphaned => "orphaned",
-        AgentStatus::Failed => "failed",
-        AgentStatus::Exited => "exited",
-        AgentStatus::PermanentDead => "permanent_dead",
-    }
-}
-
 /// The one batched registry write both modes share: apply every planned
 /// change and the batch's title readings in one lock window. ServeOnly
 /// writes a status only when the row's own pid proved it (`pid_proven`), so a
@@ -1082,8 +1067,8 @@ pub(crate) fn apply_reconcile_changes(
                         row: e.name.clone(),
                         harness: e.harness.clone(),
                         harness_session: e.harness_session_id.clone(),
-                        from: status_word(from),
-                        to: status_word(to),
+                        from: from.as_str(),
+                        to: to.as_str(),
                         cause: if ch.team_revive {
                             "revival"
                         } else if ch.pid_proven {

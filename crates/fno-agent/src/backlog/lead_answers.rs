@@ -446,7 +446,68 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
     let (quiet, due): (Vec<Value>, Vec<Value>) = rows
         .into_iter()
         .partition(|r| r.pointer("/quiet").is_some_and(|q| !q.is_null()));
-    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
+    let seen_file = crate::attention_arm::attention_dir()
+        .ok()
+        .map(|d| d.join("seen-held.json"));
+    let seen = seen_file
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|raw| crate::hook::prompt::parse_seen(&raw))
+        .unwrap_or_default();
+    let (shown, folded, next) = fold_reported(due, &seen, scope);
+    if let Some(path) = seen_file.as_deref().filter(|_| next != seen) {
+        crate::hook::prompt::write_seen(path, &next);
+    }
+    Ok(json!({"open": shown.len(), "quiet": quiet.len() + folded, "rows": shown}))
+}
+
+/// The fields `fold_reported` reads from one due row, typed once.
+#[derive(serde::Deserialize, Default)]
+struct DueFields {
+    question_id: Option<String>,
+    window: Option<i64>,
+    overdue: Option<String>,
+}
+
+/// A due question is said once per 24h window. Rows whose window the record
+/// already holds fold into the quiet count; a lost record only repeats a
+/// question once. Other scopes' keys pass through untouched.
+fn fold_reported(
+    due: Vec<Value>,
+    seen: &std::collections::HashMap<String, i64>,
+    scope: &str,
+) -> (Vec<Value>, usize, std::collections::HashMap<String, i64>) {
+    let prefix = format!("{scope}|");
+    let mut next: std::collections::HashMap<String, i64> = seen
+        .iter()
+        .filter(|(k, _)| !k.starts_with(&prefix))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    let mut shown = Vec::new();
+    let mut folded = 0;
+    for row in due {
+        let fields: DueFields = serde_json::from_value(row.clone()).unwrap_or_default();
+        let Some(qid) = fields.question_id else {
+            shown.push(row);
+            continue;
+        };
+        let key = format!("{prefix}{qid}");
+        let window = fields.window.unwrap_or(0);
+        let recorded = seen.get(&key).copied();
+        // A take-recommended default is a work order, not news: it lists
+        // until the lead records it, whatever session reads the beat.
+        let work_order = fields
+            .overdue
+            .is_some_and(|o| o.starts_with("overdue: take"));
+        if work_order || recorded.is_none_or(|r| window > r) {
+            next.insert(key, window);
+            shown.push(row);
+        } else {
+            next.insert(key, recorded.unwrap_or(window));
+            folded += 1;
+        }
+    }
+    (shown, folded, next)
 }
 
 /// The held reads' typed error (rust-style R6): one seam, one enum;
@@ -546,8 +607,26 @@ struct CachedRecommendation {
     option: Option<u64>,
 }
 
+/// Whether every node of a page's frozen team sits inside the check-in's
+/// scope. A lead promoted to a wider scope keeps the team string its open
+/// pages were written under, so an exact match hides those questions. Subset
+/// (not any-overlap) keeps a sibling lead's partly shared page off this line.
+fn team_within(team: &str, scope: &str) -> bool {
+    let members: BTreeSet<&str> = scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let nodes: Vec<&str> = team
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    !nodes.is_empty() && nodes.iter().all(|node| members.contains(node))
+}
+
 /// The pure fold: open pages whose question_id the stem names and whose
-/// team equals this check-in's canonical scope, oldest first. Rows carry
+/// team sits inside this check-in's scope, oldest first. Rows carry
 /// what the render needs to name the decide command. Each row joins the
 /// arm's cached item by id: `quiet` is `snoozed` or `deadline` while the
 /// question waits on either, and `overdue` names what a past deadline means
@@ -559,7 +638,6 @@ pub(crate) fn held_from_pages(
     items: &[CachedItem],
     now: i64,
 ) -> Vec<Value> {
-    let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
     for (stem, text) in pages {
         let Some((front, _)) = crate::attention_file::parse_page(text) else {
@@ -571,7 +649,7 @@ pub(crate) fn held_from_pages(
         if !crate::attention_arm::stem_names_id(stem, &front.question_id) {
             continue;
         }
-        if crate::territory::canonical_scope(&front.team) != canon {
+        if !team_within(&front.team, scope) {
             continue;
         }
         let epoch = chrono::DateTime::parse_from_rfc3339(&front.asked_at)
@@ -611,6 +689,10 @@ pub(crate) fn held_from_pages(
                     _ => "overdue: waits (on_silence wait)".to_string(),
                 }
             });
+        let window = match state {
+            Some(crate::attention::Quiet::Due { epoch }) => Some(epoch),
+            _ => None,
+        };
         rows.push((
             epoch,
             json!({
@@ -621,6 +703,7 @@ pub(crate) fn held_from_pages(
                 "epoch": epoch,
                 "quiet": quiet,
                 "overdue": overdue,
+                "window": window,
             }),
         ));
     }
@@ -811,7 +894,7 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
     }
     let quiet = value.pointer("/quiet").and_then(Value::as_u64).unwrap_or(0);
     let quiet_line = format!(
-        "held: {quiet} quiet until their deadline or snooze (fno inbox outstanding lists them)"
+        "held: {quiet} quiet (snoozed, before their deadline, or already reported this window; fno inbox outstanding lists them)"
     );
     // This team's questions: the rows carry node, question id and ask
     // time; a row with a node names the decide command, a row with none names
@@ -971,6 +1054,31 @@ mod tests {
         };
         assert!(row_line(1), "{lines:?}");
         assert!(row_line(2), "{lines:?}");
+        a_due_question_lists_once_per_window_and_other_scopes_keep_their_record();
+        a_re_scoped_lead_still_sees_its_open_questions();
+    }
+
+    fn a_due_question_lists_once_per_window_and_other_scopes_keep_their_record() {
+        let row = |window: u64| json!({"question_id": "q-1", "window": window});
+        let other = std::collections::HashMap::from([("other|q-9".to_string(), 3)]);
+        let (shown, folded, seen) = fold_reported(vec![row(0)], &other, "lead");
+        assert_eq!((shown.len(), folded), (1, 0), "first sight lists");
+        assert_eq!(seen.get("other|q-9"), Some(&3));
+        let (shown, folded, seen) = fold_reported(vec![row(0)], &seen, "lead");
+        assert_eq!(
+            (shown.len(), folded),
+            (0, 1),
+            "same window folds into quiet"
+        );
+        let (shown, folded, _) = fold_reported(vec![row(1)], &seen, "lead");
+        assert_eq!((shown.len(), folded), (1, 0), "a newer window lists again");
+        let order = json!({"question_id": "q-1", "window": 0, "overdue": "overdue: take option 2 and record it"});
+        let (shown, folded, _) = fold_reported(vec![order], &seen, "lead");
+        assert_eq!(
+            (shown.len(), folded),
+            (1, 0),
+            "a default to take always lists"
+        );
     }
 
     fn texts(items: &[&str]) -> Vec<String> {
@@ -1017,5 +1125,49 @@ mod tests {
         );
         let failed = quiet_line(&worker, || Tail::Unreadable("transcript unreadable".into()));
         assert_eq!(failed, "READER FAILED transcript unreadable");
+    }
+
+    fn open_page(question_id: &str, team: &str) -> (String, String) {
+        let text = format!(
+            "---\nquestion_id: {question_id}\nstatus: open\nasked_at: 2026-10-20T15:32:09Z\nteam: {team}\nnode: lead-node\n---\nbody\n"
+        );
+        (format!("{question_id}-ask"), text)
+    }
+
+    /// A lead re-scoped with one more node added still sees the questions its
+    /// pages were written under, and a lead whose scope shares no node does not.
+    fn a_re_scoped_lead_still_sees_its_open_questions() {
+        let old_team = "lead-a,lead-b,lead-c,lead-d,lead-e,lead-f,lead-g,lead-h";
+        let pages = vec![
+            open_page("q-63c90fdc", old_team),
+            open_page("q-499a7db0", old_team),
+            open_page("q-other01", "lead-x,lead-y"),
+        ];
+        let widened = format!("{old_team},lead-w");
+        let rows = held_from_pages(&pages, &widened, &[], 0);
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
+        let own = held_from_pages(&pages, "lead-x,lead-y", &[], 0);
+        let own_ids: Vec<&str> = own
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(own_ids, ["q-other01"], "{own:?}");
+        let narrower = held_from_pages(&pages, "lead-x", &[], 0);
+        assert!(
+            narrower.is_empty(),
+            "a page team wider than the scope stays off: {narrower:?}"
+        );
+        let mut partly = pages.clone();
+        partly.push(open_page("q-partly1", "lead-a,lead-z"));
+        let rows = held_from_pages(&partly, &widened, &[], 0);
+        assert_eq!(
+            rows.len(),
+            2,
+            "a page with a node outside the scope stays off: {rows:?}"
+        );
     }
 }

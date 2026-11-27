@@ -329,8 +329,12 @@ pub enum AppOp {
     /// the first) on the question the focused chat waits on; refuses
     /// naming the session when none runs
     Answer(AppAnswerArgs),
+    /// `mux app approve <pr> [--repo <slug>]`: post the person's GitHub
+    /// APPROVED review from the terminal; the satisfier of
+    /// config.review.human = ui. Works with the app closed.
+    Approve(AppApproveArgs),
     /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]
-    /// [--find bar|chords] [--ask rows|overflow]`: render one offscreen
+    /// [--find bar|chords] [--ask rows|overflow] [--notice]`: render one offscreen
     /// demo frame and write a
     /// png; never opens a window on any display
     Shot(AppShotArgs),
@@ -423,6 +427,16 @@ pub struct AppAnswerArgs {
     pub common: MuxCommon,
 }
 
+/// `mux app approve`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppApproveArgs {
+    /// The PR number to approve
+    pub pr: u64,
+    /// The owner/name slug when the cwd is not the repo checkout
+    #[arg(long)]
+    pub repo: Option<String>,
+}
+
 /// `mux app focus`'s flags.
 #[derive(Args, Debug, PartialEq, Eq, Clone)]
 pub struct AppFocusArgs {
@@ -462,6 +476,10 @@ pub struct AppShotArgs {
     /// options frame, `overflow` makes the first option wrap
     #[arg(long, value_parser = ["rows", "overflow"])]
     pub ask: Option<String>,
+    /// End the seeded chat on a raw task-notification row, which the chat
+    /// folds to one caret line
+    #[arg(long)]
+    pub notice: bool,
     /// Open one overlay through its real code path before the capture:
     /// the row menu (`row-menu-node` gives the agent a node first), the
     /// in-tab rename field, the scrolled-back pill, or the demo row's
@@ -1473,12 +1491,36 @@ mod tests {
             }) => assert!(matches!(op, AppOp::Shot(_))),
             other => panic!("typed app shot expected, got {other:?}"),
         }
+        // The approve command parses with its positional PR and --repo; it
+        // is the satisfier of config.review.human = ui.
+        let r = classify(&os(&[
+            "mux",
+            "app",
+            "approve",
+            "569",
+            "--repo",
+            "fnodotdev/fno",
+        ]));
+        match r {
+            FrontDoor::Mux(MuxParsed {
+                cmd: MuxCmd::App { op },
+            }) => match op {
+                AppOp::Approve(args) => {
+                    assert_eq!(args.pr, 569);
+                    assert_eq!(args.repo.as_deref(), Some("fnodotdev/fno"));
+                }
+                other => panic!("typed app approve expected, got {other:?}"),
+            },
+            other => panic!("typed app approve expected, got {other:?}"),
+        }
         // Bare group: the refusal is the self-teaching surface; it names
         // the commands and the guide door in one command-qualified line.
         let r = classify(&os(&["mux", "app"]));
         match r {
             FrontDoor::Usage { message } => {
-                assert!(message.contains("open, show, focus, answer, shot, state or close"));
+                assert!(
+                    message.contains("open, show, focus, answer, approve, shot, state or close")
+                );
                 assert!(message.contains("fno whoami guide app"));
             }
             other => panic!("bare app usage expected, got {other:?}"),

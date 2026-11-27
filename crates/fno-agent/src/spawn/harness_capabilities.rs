@@ -97,6 +97,10 @@ const PROVIDER_ACTIONS: [&str; 3] = ["compact", "goal_get", "goal_set"];
 /// What keeps a lead waking between events on a harness. `agents.<harness>.beat
 /// = "auto"` resolves to the row's member; see `harness_beat`.
 pub const BEATS: [&str; 4] = ["daemon", "loop", "goal", "schedule"];
+/// The fresh-context reviewer a harness offers `/fno:review --fresh`:
+/// `native` = its own subagent or fork, `package` = an installed package adds
+/// one, `none` = no measured fresh path. Every row must name one.
+pub const FRESH_REVIEW: [&str; 3] = ["native", "package", "none"];
 
 /// Name the reason a harness cannot use the thread spawn lane.
 pub fn thread_substrate_refusal(harness: &str) -> String {
@@ -352,6 +356,9 @@ pub struct HarnessCapabilities {
     /// One of [`BEATS`]. Empty reads `daemon`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub beat: String,
+    /// One of [`FRESH_REVIEW`]. Required on every row; no default, so a new
+    /// harness row cannot skip the decision.
+    pub fresh_review: String,
     /// The mux composer's effort-picker list. `None` = no effort surface at
     /// all; `Some([])` = the axis exists but values are provider passthrough
     /// (free text); a filled list is the enumerable choices. Absent on a row
@@ -1782,6 +1789,9 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
     }
     if !caps.beat.is_empty() && !BEATS.contains(&caps.beat.as_str()) {
         return Err(field_error(harness, "beat", "unknown member"));
+    }
+    if !FRESH_REVIEW.contains(&caps.fresh_review.as_str()) {
+        return Err(field_error(harness, "fresh_review", "unknown member"));
     }
     // Only an `extension` row may name an artifact: a `native` row
     // closes its loop through a shell hook and a `none` row closes it

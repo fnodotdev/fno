@@ -70,7 +70,6 @@ fn fixture() -> (TempDir, PathBuf, Vec<(String, String)>) {
             "FNO_GLOBAL_SETTINGS_PATH".to_string(),
             "/dev/null".to_string(),
         ),
-        ("FNO_SKIP_MIGRATION".to_string(), "1".to_string()),
     ];
     (dir, fx, env)
 }

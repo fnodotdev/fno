@@ -895,6 +895,76 @@ pub(crate) fn gh_pr_is_open(pr: u64, cwd: &str) -> Option<bool> {
     crate::additional_prs::gh_pr_state(&path, cwd).map(|state| state == PrState::Open)
 }
 
+/// Workers that read distinct PRs at once. Each read is a `gh api` call
+/// bounded at 30s, so a serial pass over a dozen held rows ran for minutes.
+const PR_PREFETCH_WORKERS: usize = 16;
+
+/// The `(cwd, pr)` pairs the open-PR keep can ask about: the PR of every
+/// unmerged node a row's session drives, minus keys the graph read staged.
+fn prefetch_keys(graph: &GraphRead, rows: &[&state::RegistryEntry]) -> Vec<(String, u64)> {
+    let mut keys: std::collections::BTreeSet<(String, u64)> = std::collections::BTreeSet::new();
+    for e in rows {
+        let sid = e
+            .harness_session_id
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let Some(nodes) = graph.do_nodes.get(&sid) else {
+            continue;
+        };
+        for node in nodes {
+            let Some(pr) = graph.pr_number.get(node).copied().flatten() else {
+                continue;
+            };
+            let merged = graph
+                .pr_state
+                .get(node)
+                .and_then(|(merge_status, _, _)| merge_status.as_deref())
+                == Some("merged");
+            let key = (e.cwd.clone(), pr);
+            if !merged && !graph.pr_reads.contains_key(&key) {
+                keys.insert(key);
+            }
+        }
+    }
+    keys.into_iter().collect()
+}
+
+/// Read every `(cwd, pr)` the open-PR keep will ask about before pass 1, in
+/// parallel, and seed the pass cache with the answers. The keys are the PRs
+/// of unmerged nodes a staged row's session drives, so a row that never
+/// reaches the keep pays no read. A key the graph read already staged is
+/// skipped. A miss later in the pass still resolves lazily.
+fn prefetch_open_pr_reads(
+    graph: &GraphRead,
+    rows: &[&state::RegistryEntry],
+    cache: &std::cell::RefCell<HashMap<(String, u64), Option<bool>>>,
+) {
+    let keys = prefetch_keys(graph, rows);
+    if keys.len() < 2 {
+        return;
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let answers: std::sync::Mutex<Vec<((String, u64), Option<bool>)>> =
+        std::sync::Mutex::new(Vec::with_capacity(keys.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..PR_PREFETCH_WORKERS.min(keys.len()) {
+            scope.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((cwd, pr)) = keys.get(i) else { break };
+                let answer = gh_pr_is_open(*pr, cwd);
+                if let Ok(mut out) = answers.lock() {
+                    out.push(((cwd.clone(), *pr), answer));
+                }
+            });
+        }
+    });
+    if let Ok(done) = answers.into_inner() {
+        cache.borrow_mut().extend(done);
+    }
+}
+
 /// Every open do row sitting on a settled node. Every clause is a positive
 /// marker: `status == "done"`; the merge question settled one of two ways -
 /// `merge_status == "merged"`, a field written only when a caller resolved
@@ -1814,6 +1884,14 @@ pub(crate) fn run_with_release(
     // wins; a miss resolves through gh. The cache lives for the whole sweep,
     // keyed by cwd and PR, so two rows driving one PR pay one read.
     let pr_cache: std::cell::RefCell<HashMap<(String, u64), Option<bool>>> = Default::default();
+    if let Some(graph) = graph.as_ref() {
+        let quiet: Vec<&state::RegistryEntry> = age_entries
+            .iter()
+            .copied()
+            .filter(|e| matches!(ages.get(&row_handle(e)).copied().flatten(), Some(a) if a > grace_secs))
+            .collect();
+        prefetch_open_pr_reads(graph, &quiet, &pr_cache);
+    }
     let mut pr_read_adapter = |pr: u64, cwd: &str| -> Option<bool> {
         let key = (cwd.to_string(), pr);
         if let Some(graph) = graph.as_ref() {

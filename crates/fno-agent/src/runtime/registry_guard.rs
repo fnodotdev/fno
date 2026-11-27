@@ -29,7 +29,6 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::state::RegistryEntry;
-use crate::AgentStatus;
 
 /// The row-loss override, shared verbatim with the Python mirror.
 pub const ROW_LOSS_OVERRIDE_ENV: &str = "FNO_REGISTRY_ALLOW_ROW_LOSS";
@@ -110,17 +109,9 @@ pub fn check_env(target: &Path, loss: LiveLoss) -> Result<(), String> {
     })
 }
 
-/// Live rows by the `OWNERSHIP_LIVE_STATUSES` vocabulary.
+/// Live rows by the `AgentStatus::LIVE_STATUSES` vocabulary.
 fn is_live(e: &RegistryEntry) -> bool {
-    matches!(
-        e.status,
-        AgentStatus::Spawning
-            | AgentStatus::Ready
-            | AgentStatus::Idle
-            | AgentStatus::Busy
-            | AgentStatus::Live
-            | AgentStatus::Restarting
-    )
+    crate::spawn_gate::status_is_liveish(&e.status)
 }
 
 /// The row's identity: its harness session id, else its name.
@@ -162,6 +153,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AgentStatus;
     use std::path::PathBuf;
 
     fn inputs(target: &Path, loss: LiveLoss) -> GuardInputs<'_> {

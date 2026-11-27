@@ -1059,7 +1059,8 @@ impl Root {
                 let open = Action::OpenAnswer(item.id.clone());
                 div()
                     .absolute()
-                    .top(px(ui::TITLE_H + 24.0))
+                    // Below the Questions heading on the HQ board, never over it.
+                    .top(px(ui::TITLE_H + 44.0))
                     .right(px(12.0))
                     .w(px(420.0))
                     .flex()
@@ -1359,6 +1360,10 @@ impl Root {
     /// launch), then the panel's in-place refusals, then the door. The
     /// draft stays until the verdict lands.
     fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = launch::typed_project(&self.launch.state.draft) {
+            self.add_project_path(path, cx);
+            return;
+        }
         if let Some(cmd) = launch::shell_command(&self.launch.state.draft) {
             self.run_shell_from_composer(cmd, cx);
             return;
@@ -2480,6 +2485,46 @@ impl Root {
         cx.notify();
     }
 
+    /// The composer's add-project row: register the picked folder in the
+    /// config off the UI loop, then open a workspace for it unless one already
+    /// roots there.
+    pub(super) fn add_project_path(&mut self, path: String, cx: &mut Context<Self>) {
+        let typed =
+            launch::typed_project(&self.launch.state.draft).as_deref() == Some(path.as_str());
+        let rooted = self.layout.squads.iter().any(|s| s.canonical_cwd == path);
+        cx.spawn(async move |this, cx| {
+            let added = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { fno::app_api::client::agent_launcher::add_project(&path) }
+                })
+                .await;
+            this.update(cx, |root, cx| match added {
+                Ok(project) => {
+                    // A refused add leaves the typed path in place to fix.
+                    if typed {
+                        root.launch.state.draft.select_all();
+                        root.launch.state.draft.replace_selection("");
+                    }
+                    if !rooted {
+                        root.send(ClientMsg::Command(Command::NewSquad {
+                            name: project.name.clone(),
+                            origin: Some(project.path.clone()),
+                            project: Some(project.id.clone()),
+                        }));
+                    }
+                    root.launch.state.refresh_config();
+                    root.launch.state.refresh_projects(&root.layout);
+                    root.say(format!("added project {}", project.name), cx);
+                }
+                Err(why) => root.say(format!("refused: {why}"), cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Run `fno-agent` off the UI loop and say how it ended.
     fn run_agent_tool(&mut self, argv: Vec<String>, done: String, cx: &mut Context<Self>) {
         let bin = fno::app_api::digest_overlay::fno_agent_bin();
@@ -2719,7 +2764,9 @@ impl Root {
                 }
             }
             "enter" => self.launch.state.draft.replace_selection("\n"),
-            "tab" if self.launch.state.complete_skill() => {}
+            "tab"
+                if self.launch.state.complete_skill()
+                    || self.launch.state.complete_typed_path() => {}
             "escape" if self.launch.state.skill_close() => {}
             "up" | "down" if self.launch.state.skill_step(key.key == "down") => {}
             "backspace" => self.launch.state.draft.backspace(),
@@ -3206,7 +3253,11 @@ impl Root {
                         }
                         self.send(ClientMsg::Command(Command::RenameSquad { squad: id, name }))
                     }
-                    None => self.send(ClientMsg::Command(Command::NewSquad { name, origin: None })),
+                    None => self.send(ClientMsg::Command(Command::NewSquad {
+                        name,
+                        origin: None,
+                        project: None,
+                    })),
                 }
             }
             "escape" => self.squad_field = None,
@@ -3416,10 +3467,40 @@ impl Root {
             keys::MuxAction::Rename => self.rename_open(cx),
             keys::MuxAction::RowMenu => self.row_menu_open(cx),
             keys::MuxAction::NextWaiting => self.focus_next_waiting(cx),
+            keys::MuxAction::Overlay(overlay) => self.open_overlay(overlay, window, cx),
             keys::MuxAction::Bell => {
                 alerts::beep();
                 let name = String::from_utf8_lossy(key).escape_debug().to_string();
                 self.say(format!("prefix {name}: no mux action is bound"), cx);
+            }
+        }
+    }
+
+    /// A fleet overlay chord: close the key sheet and palette, then open the
+    /// app's surface. A second go-to chord leaves the palette open.
+    fn open_overlay(
+        &mut self,
+        overlay: keys::Overlay,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice = None;
+        match overlay {
+            keys::Overlay::GoTo => {
+                cx.notify();
+                if self.goto.is_none() {
+                    self.toggle_goto(&GoTo, window, cx);
+                }
+            }
+            keys::Overlay::Inbox | keys::Overlay::Board => {
+                self.goto = None;
+                self.sheet = false;
+                let view = match overlay {
+                    keys::Overlay::Inbox => MainView::Inbox,
+                    _ => MainView::Orchestration,
+                };
+                self.show(view, cx);
+                cx.notify();
             }
         }
     }
@@ -4027,7 +4108,7 @@ impl EntityInputHandler for Root {
         &mut self,
         range: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // The palette's query owns the keyboard while it shows.
@@ -4056,6 +4137,13 @@ impl EntityInputHandler for Root {
         }
         self.set_preedit(None, cx);
         if self.main != MainView::Terminal || text.is_empty() {
+            return;
+        }
+        // A prefix chord mid-flight owns the next text key: `c`, `%`, `d` and
+        // the tab digits arrive here, not through on_key, so they must reach
+        // the scanner or the prefix claims nothing.
+        if keys::chord_in_flight(&self.scanner) {
+            self.mux_key(text.as_bytes().to_vec(), window, cx);
             return;
         }
         if self.notice.take().is_some() {

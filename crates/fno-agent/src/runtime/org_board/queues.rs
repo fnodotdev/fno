@@ -833,13 +833,17 @@ fn warn_unmeasured_holders(ctx: &BoardCtx<'_>, warnings: &mut Vec<String>) {
 }
 
 fn undispatched_rows(inputs: &BoardInputs, scoping: &mut BoardScope<'_>) -> Vec<Value> {
-    // Undispatched: planned work with no claim, lead priorities only.
+    // Undispatched: planned work with no claim. The unscoped board keeps lead
+    // priorities only; a scoped lead beat reads every priority in its scope.
+    let unscoped = scoping.ids.is_none();
     if inputs.undispatched.is_ok() {
         inputs
             .undispatched
             .rows()
             .into_iter()
-            .filter(|node| LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or("")))
+            .filter(|node| {
+                !unscoped || LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or(""))
+            })
             .filter(|node| {
                 // A held node has a named question, not a missing dispatch
                 //; it renders under held, never here.
@@ -871,6 +875,7 @@ fn undispatched_rows(inputs: &BoardInputs, scoping: &mut BoardScope<'_>) -> Vec<
 
 fn unplanned_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value> {
     let inputs = ctx.inputs;
+    let unscoped = scoping.ids.is_none();
     // Unplanned: cold-dispatchable ideas off the ready list.
     let foreign_owned: HashSet<String> = inputs
         .foreign_owned
@@ -882,7 +887,9 @@ fn unplanned_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value
         .ready
         .rows()
         .into_iter()
-        .filter(|node| LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or("")))
+        .filter(|node| {
+            !unscoped || LEAD_PRIORITIES.contains(&s_str(node, "priority").unwrap_or(""))
+        })
         .filter(|node| {
             node.get("plan_path")
                 .map(|p| p.is_null() || p.as_str().map(|s| s.is_empty()).unwrap_or(false))
@@ -1411,7 +1418,12 @@ fn question_rows(outstanding: &Map<String, Value>) -> Vec<Value> {
                             .and_then(crate::numbers::label),
                         "question": r.get("question"),
                         "ts": r.get("ts"),
-                        "session_id": r.get("session_id")
+                        "session_id": r.get("session_id"),
+                        // Absent (null here) once the question is due: the
+                        // notify_watch due lane reads exactly this stamp,
+                        // so a snoozed or pre-deadline question never
+                        // re-fires it.
+                        "quiet": s_str(r, "quiet")
                     })
                 })
                 .collect()
@@ -2226,6 +2238,23 @@ mod tests {
                 observed_model: Value::Null,
             },
         )
+    }
+
+    #[test]
+    fn a_scoped_board_keeps_a_p2_undispatched_row_the_unscoped_board_drops() {
+        let mut inputs = pr_board_inputs(json!([]), json!([]));
+        inputs.undispatched = SourceRead::ok(json!([
+            {"id": "x-in", "priority": "p2", "title": "a p2 plan in scope"},
+        ]));
+        let scoped = build_board(&inputs);
+        assert_eq!(queue_rows(&scoped, "undispatched").len(), 1, "{scoped}");
+        inputs.scope_ids = None;
+        inputs.role_scope = None;
+        let unscoped = build_board(&inputs);
+        assert!(
+            queue_rows(&unscoped, "undispatched").is_empty(),
+            "{unscoped}"
+        );
     }
 
     #[test]

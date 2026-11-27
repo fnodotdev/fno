@@ -524,6 +524,20 @@ pub(super) fn build_block_reason(
                 hint("review")
             );
         }
+        if pr.human_approval_owed {
+            // The person gate (config.review.human = ui or always) with no
+            // approver in. The approval arrives only when a person acts, so
+            // like the unattested-reviewers arm this teaches no arm-and-tag
+            // ritual - arming a watcher on a person's decision parks the
+            // session.
+            return format!(
+                "PR #{}: review.human requires a person's GitHub approval of this \
+                 head and none is in. A person can approve from the terminal with \
+                 `fno mux app approve {}`, or on the PR's GitHub page (the lever is \
+                 config.review.human). Nothing arrives on its own.",
+                pr.number, pr.number
+            );
+        }
         // Unknown AFTER the specific arms but BEFORE the config complaint:
         // the unmet gate, the unaddressed finding, and the outstanding bot
         // are all more actionable than the read remedy, but "no reviewer is

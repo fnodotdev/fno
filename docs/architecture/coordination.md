@@ -296,6 +296,8 @@ Current paths that acquire `node:<id>` include target init and successor reacqui
 
 Every producer must leave a holder identity the claim reader can check. Missing registry data alone is not proof of abandonment: an unreadable or unresolved witness stays unknown, and unknown keeps the claim. A new holder shape must add its liveness and expiry rule alongside its producer.
 
+A sandboxed target worker adds no producer. Its relay runs `fno do target start <node>` on the host for the sandbox session. The claim is the ordinary host-held `node:<id>`, with that session as holder. The worker never touches the claim store. Inside, `claim status` is a typed op the host answers, and the claim ends the way any target claim does. Its mail goes to its spawner only, labelled sandbox origin ([sandbox host](sandbox-host.md#a-sandboxed-worker-in-the-target-loop)).
+
 ### The reader is the half that covers every path
 
 No producer can reach a prose payload or a hand-started session, so `fno agent claim status node:<id>` cross-checks the fleet roster before it renders a `free` reading. It names its instrument in four distinct ways, and each string is produced by exactly one outcome:

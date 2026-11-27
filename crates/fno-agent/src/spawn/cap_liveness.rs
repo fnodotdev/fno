@@ -5,6 +5,7 @@
 //! reader keeps its path.
 
 use crate::harness::Harness;
+use serde_json::{json, Value};
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,7 +19,7 @@ use crate::state::{load_registry, Registry, RegistryEntry};
 /// liveness implementation.
 pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec<RegistryEntry> {
     match live_rows_checked(registry_path, warnings) {
-        LiveRead::Rows(rows) => rows,
+        LiveRead::Rows { rows, .. } => rows,
         // The slot cap degrades to 0 on an unreadable registry; callers that
         // must not act on a degraded read use [`live_rows_checked`].
         LiveRead::RegistryUnreadable(_) => Vec::new(),
@@ -28,10 +29,108 @@ pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec
 /// A liveness read that keeps its failure. Zero rows from an unreadable
 /// registry is a degraded answer, not an empty fleet: a caller whose next
 /// step would erase state it failed to see (a scope sweep dropping ladders)
-/// holds on [`LiveRead::RegistryUnreadable`] instead.
+/// holds on [`LiveRead::RegistryUnreadable`] instead. A read that holds rows
+/// also carries the live-status worker rows it dropped, counted by reason.
 pub(crate) enum LiveRead {
-    Rows(Vec<RegistryEntry>),
+    Rows {
+        rows: Vec<RegistryEntry>,
+        dropped: Dropped,
+    },
     RegistryUnreadable(String),
+}
+
+/// Why one live-status row took no worker slot.
+#[derive(Debug, Clone, Copy)]
+enum DropReason {
+    /// Its inside-leg report reads done: a finished worker frees its slot.
+    ReportedDone,
+    /// Its session holds a terminal-run receipt.
+    TerminalRun,
+    /// Its recorded pid, with its start time, is gone.
+    DeadPid,
+    /// A claude fleet mint the roster does not list.
+    RosterMiss,
+    /// No roster answers for it, and its last session report is absent or
+    /// older than a day.
+    StaleReport,
+    /// The harness reports its claude session usage-blocked.
+    UsageBlocked,
+}
+
+/// The live-status rows one read dropped, counted by reason. The six counts
+/// cover worker rows only, so their sum plus the worker rows kept is the
+/// live-status non-lead row count of the registry read.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Dropped {
+    reported_done: usize,
+    terminal_run: usize,
+    dead_pid: usize,
+    roster_miss: usize,
+    stale_report: usize,
+    usage_blocked: usize,
+    /// Lead rows dropped. A lead takes no slot, so each sits outside the six.
+    leads: usize,
+}
+
+impl Dropped {
+    fn note(&mut self, reason: DropReason) {
+        match reason {
+            DropReason::ReportedDone => self.reported_done += 1,
+            DropReason::TerminalRun => self.terminal_run += 1,
+            DropReason::DeadPid => self.dead_pid += 1,
+            DropReason::RosterMiss => self.roster_miss += 1,
+            DropReason::StaleReport => self.stale_report += 1,
+            DropReason::UsageBlocked => self.usage_blocked += 1,
+        }
+    }
+
+    /// Every worker row dropped.
+    fn total(&self) -> usize {
+        self.reported_done
+            + self.terminal_run
+            + self.dead_pid
+            + self.roster_miss
+            + self.stale_report
+            + self.usage_blocked
+    }
+
+    /// The probe's `dropped` object. Every reason is present, a zero count
+    /// too, so a reader sees each way a row can drop.
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "total": self.total(),
+            "reported_done": self.reported_done,
+            "terminal_run": self.terminal_run,
+            "dead_pid": self.dead_pid,
+            "roster_miss": self.roster_miss,
+            "stale_report": self.stale_report,
+            "usage_blocked": self.usage_blocked,
+            "leads": self.leads,
+        })
+    }
+
+    /// One note line with the same counts, for the readers that print notes.
+    /// `None` when the read dropped nothing.
+    pub(crate) fn note_line(&self) -> Option<String> {
+        if self.total() == 0 && self.leads == 0 {
+            return None;
+        }
+        let mut line = format!(
+            "{NOTE} {} live worker row(s) dropped from the slot count: reported done {}, \
+             terminal run {}, dead pid {}, roster miss {}, stale report {}, usage blocked {}",
+            self.total(),
+            self.reported_done,
+            self.terminal_run,
+            self.dead_pid,
+            self.roster_miss,
+            self.stale_report,
+            self.usage_blocked
+        );
+        if self.leads > 0 {
+            line.push_str(&format!("; {} lead row(s) dropped", self.leads));
+        }
+        Some(line)
+    }
 }
 
 pub(crate) fn live_rows_checked(registry_path: &Path, warnings: &mut Vec<String>) -> LiveRead {
@@ -68,6 +167,7 @@ fn live_rows_with_blocked(
     let home = crate::paths::AgentsHome::at(registry_path.parent().unwrap_or(Path::new(".")));
     let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
     let mut rows = Vec::new();
+    let mut dropped = Dropped::default();
     let mut blocked: Option<std::collections::HashSet<String>> = None;
     let mut dropped_blocked: Vec<String> = Vec::new();
     match load_registry(registry_path) {
@@ -76,49 +176,24 @@ fn live_rows_with_blocked(
                 if !crate::spawn_gate::status_is_liveish(&e.status) {
                     continue;
                 }
-                if e.role_level.is_none() && !holds_capacity(&e, &terminal) {
-                    continue;
-                }
-                let mut alive = match e.pid {
-                    Some(p) => pid_is_ours(p, e.pid_start_time),
-                    None => {
-                        let roster_live = e
-                            .transport_short()
-                            .map(|sid| live_roster_short_ids.contains(sid));
-                        if roster_live == Some(true) {
-                            true
-                        } else if roster_live == Some(false) && is_roster_policed(&e) {
-                            // The roster polices this row (a claude fleet
-                            // mint) and answers no: dead, at once - a dead
-                            // bg worker frees its slot (Codex P1, PR #235).
-                            false
-                        } else {
-                            // No oracle answers for this row: the user's own
-                            // session, a non-claude native, or an unreadable
-                            // roster. The last session report's freshness
-                            // stands in (d-d0c63de7).
-                            report_is_fresh(&e, now_secs)
-                        }
-                    }
-                };
-                if alive && e.harness_kind() == Harness::Claude {
+                let mut reason = drop_reason(&e, &terminal, &live_roster_short_ids, now_secs);
+                if reason.is_none() && e.harness_kind() == Harness::Claude {
                     // A usage-blocked session holds no working slot: the
                     // harness's own state is the witness transcript recency
                     // cannot give. Positive readings only - a row absent
                     // from the agents list, or a root that failed to parse,
                     // answers nothing here; the roster polices death.
-                    if blocked.is_none() {
-                        blocked = Some(read_blocked());
-                    }
-                    if e.transport_short()
-                        .is_some_and(|sid| blocked.as_ref().unwrap().contains(sid))
-                    {
-                        alive = false;
+                    let blocked = blocked.get_or_insert_with(|| read_blocked());
+                    if e.transport_short().is_some_and(|sid| blocked.contains(sid)) {
+                        reason = Some(DropReason::UsageBlocked);
                         dropped_blocked.push(e.name.clone());
                     }
                 }
-                if alive {
-                    rows.push(e);
+                match reason {
+                    None => rows.push(e),
+                    // A lead takes no slot, so its drop sits outside the worker reasons.
+                    Some(_) if e.role_level.is_some() => dropped.leads += 1,
+                    Some(reason) => dropped.note(reason),
                 }
             }
         }
@@ -136,18 +211,79 @@ fn live_rows_with_blocked(
             dropped_blocked.join(", ")
         ))
     }
-    LiveRead::Rows(rows)
+    LiveRead::Rows { rows, dropped }
+}
+
+/// The evidence that a row released its capacity, or `None` while it holds.
+/// [`holds_capacity`] is this read answering nothing.
+fn capacity_release(
+    row: &RegistryEntry,
+    terminal: &std::collections::HashSet<String>,
+) -> Option<DropReason> {
+    if crate::reap_evidence::reported_done(row, crate::daemon::now_epoch_secs().max(0) as u64) {
+        Some(DropReason::ReportedDone)
+    } else if row
+        .harness_session_id
+        .as_deref()
+        .is_some_and(|sid| terminal.contains(sid))
+    {
+        Some(DropReason::TerminalRun)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn holds_capacity(
     row: &RegistryEntry,
     terminal: &std::collections::HashSet<String>,
 ) -> bool {
-    !crate::reap_evidence::reported_done(row, crate::daemon::now_epoch_secs().max(0) as u64)
-        && !row
-            .harness_session_id
-            .as_deref()
-            .is_some_and(|sid| terminal.contains(sid))
+    capacity_release(row, terminal).is_none()
+}
+
+/// Why a live-status row takes no slot, or `None` while it stays. The first
+/// reason that holds wins, so the reasons split the dropped rows: each row
+/// lands in one count.
+fn drop_reason(
+    row: &RegistryEntry,
+    terminal: &std::collections::HashSet<String>,
+    live_roster_short_ids: &std::collections::HashSet<String>,
+    now_secs: i64,
+) -> Option<DropReason> {
+    // A lead takes no worker slot, so capacity evidence keeps its count.
+    // Only death or the harness's blocked state drops it.
+    let released = match row.role_level {
+        Some(_) => None,
+        None => capacity_release(row, terminal),
+    };
+    released.or_else(|| death_reason(row, live_roster_short_ids, now_secs))
+}
+
+/// Why a live-status row is gone, or `None` while it lives.
+fn death_reason(
+    row: &RegistryEntry,
+    live_roster_short_ids: &std::collections::HashSet<String>,
+    now_secs: i64,
+) -> Option<DropReason> {
+    match row.pid {
+        Some(p) if !pid_is_ours(p, row.pid_start_time) => Some(DropReason::DeadPid),
+        Some(_) => None,
+        None => {
+            let roster_live = row
+                .transport_short()
+                .map(|sid| live_roster_short_ids.contains(sid));
+            match roster_live {
+                Some(true) => None,
+                // The roster polices this row (a claude fleet mint) and
+                // answers no: dead, at once. A dead bg worker frees its
+                // slot.
+                Some(false) if is_roster_policed(row) => Some(DropReason::RosterMiss),
+                // No oracle answers for this row: the user's own session, a
+                // non-claude native, or an unreadable roster. The last
+                // session report's freshness stands in.
+                _ => (!report_is_fresh(row, now_secs)).then_some(DropReason::StaleReport),
+            }
+        }
+    }
 }
 
 /// How long one session report asserts occupancy for a pid-less row the
@@ -312,17 +448,17 @@ mod tests {
         std::env::remove_var("FNO_CLAIMS_ROOT");
     }
 
-    /// A blocked fleet row frees its slot: the harness's positive blocked
-    /// reading drops a row the roster would keep. The unblocked
-    /// control row keeps its count.
+    /// Every way a live-status row drops lands in its own count, a dropped
+    /// lead row in its own, and the kept rows plus the tally are every
+    /// live-status row read. Both roster-backed rows ride our own live pid,
+    /// so the roster answers live for both: the harness's blocked reading is
+    /// the only witness that drops one, and the other is the control.
     #[test]
-    fn a_blocked_fleet_row_does_not_count_toward_max_live() {
+    fn the_tally_counts_each_dropped_row_under_one_reason() {
         let _g = claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let dir = empty_roster_dir();
-        // Both workers ride our own live pid, so the roster answers live
-        // for both and the pid-less fleet arm counts them before the join.
         let start = crate::daemon::process_start_time(std::process::id())
             .expect("our own start time reads");
         let worker = |short: &str| {
@@ -341,23 +477,85 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let mut fleet_a = pidless_reported_row("bg-a", "spawn", "claude");
-        fleet_a.short_id = "deadbeef".into();
-        fleet_a.last_report_at = Some(stamp_ago(60));
-        let mut fleet_b = pidless_reported_row("bg-b", "spawn", "claude");
-        fleet_b.short_id = "aaaa1111".into();
-        fleet_b.last_report_at = Some(stamp_ago(60));
-        let reg = write_reg(&dir, &[fleet_a, fleet_b]);
+        let fleet = |name: &str, short: &str| {
+            let mut e = pidless_reported_row(name, "spawn", "claude");
+            e.short_id = short.into();
+            e
+        };
+        let mut lead = pidless_reported_row("lead", "operator", "codex");
+        lead.role_level = Some(1);
+        lead.last_report_at = Some(stamp_ago(60));
+        let mut reported_done = pidless_reported_row("reported-done", "spawn", "codex");
+        reported_done.inside_leg = Some(crate::state::InsideLegReport {
+            state: crate::state::InsideLegState::Done,
+            received_at: stamp_ago(60),
+            ..Default::default()
+        });
+        let mut terminal_run = pidless_reported_row("terminal-run", "spawn", "codex");
+        terminal_run.harness_session_id = Some("terminal-run".into());
+        crate::terminal_run::write_receipt(
+            &crate::paths::AgentsHome::at(dir.path()),
+            "terminal-run",
+            "DonePRGreen",
+        )
+        .unwrap();
+        // 2^22+17: realistically never a live pid.
+        let mut dead_pid = pidless_reported_row("dead-pid", "spawn", "codex");
+        dead_pid.pid = Some(4_194_321);
+        let mut dropped_lead = pidless_reported_row("dropped-lead", "operator", "codex");
+        dropped_lead.role_level = Some(1);
+        let mut exited = pidless_reported_row("exited", "spawn", "codex");
+        exited.status = AgentStatus::Exited;
+        let reg = write_reg(
+            &dir,
+            &[
+                fleet("kept", "aaaa1111"),
+                lead,
+                reported_done,
+                terminal_run,
+                dead_pid,
+                fleet("roster-miss", "miss0001"),
+                pidless_reported_row("stale-report", "operator", "codex"),
+                dropped_lead,
+                fleet("usage-blocked", "deadbeef"),
+                exited,
+            ],
+        );
         let mut warnings = Vec::new();
-        let LiveRead::Rows(rows) = live_rows_with_blocked(
+        let LiveRead::Rows { rows, dropped } = live_rows_with_blocked(
             &reg,
             &|| std::collections::HashSet::from(["deadbeef".to_string()]),
             &mut warnings,
         ) else {
-            panic!("registry readable, so the read must carry rows");
+            panic!("registry readable, so the read must carry rows")
         };
-        assert_eq!(rows.len(), 1, "{warnings:?}");
-        assert_eq!(rows[0].name, "bg-b");
+        let kept_names: Vec<&str> = rows.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(kept_names, ["kept", "lead"]);
+        assert_eq!(
+            dropped.to_json(),
+            json!({
+                "total": 6,
+                "reported_done": 1,
+                "terminal_run": 1,
+                "dead_pid": 1,
+                "roster_miss": 1,
+                "stale_report": 1,
+                "usage_blocked": 1,
+                "leads": 1,
+            })
+        );
+        // Nine of the ten rows carry a live status. Each one is kept, dropped
+        // as a worker, or dropped as a lead.
+        assert_eq!(rows.len() + dropped.total() + dropped.leads, 9);
+        assert_eq!(
+            dropped.note_line(),
+            Some(format!(
+                "{NOTE} 6 live worker row(s) dropped from the slot count: reported done 1, \
+                 terminal run 1, dead pid 1, roster miss 1, stale report 1, usage blocked 1; \
+                 1 lead row(s) dropped"
+            ))
+        );
+        assert_eq!(Dropped::default().note_line(), None);
         assert!(
             warnings.iter().any(|w| w.contains("usage-blocked")),
             "{warnings:?}"

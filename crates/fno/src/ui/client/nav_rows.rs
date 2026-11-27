@@ -142,3 +142,101 @@ fn orphan_row(a: &AgentRow, active_squad: u64) -> NavRow {
     )
     .with_menu(row_menu::NavMenu::Agent(AgentIdent::of(a)))
 }
+
+/// One row of the navigator's flat catalog. Fully owned (no layout
+/// borrow) so goto can mutate the view after the catalog is built; recomputed
+/// per keypress, never cached.
+pub(crate) struct NavRow {
+    /// The displayed label (e.g. `nairobi › build` or `nairobi › claude#3`).
+    /// Rendering only - the text filter matches [`NavRow::match_key`].
+    pub(super) label: String,
+    /// The searchable identity, composed at build time and NEVER
+    /// displayed: `label` plus the row's identity tokens (a pane's id and
+    /// workspace; an agent's [`nav_agent_tokens`]), lowercased and
+    /// space-joined. The text filter matches HERE, so a row is findable by
+    /// what it IS (pane `307`, PR `3706`, model `opus`) not just by its
+    /// label text. A row whose
+    /// hit is invisible in the label shows the matched token
+    /// ([`nav_overlay_lines`]) - a hit with no visible reason reads as a bug.
+    pub(super) match_key: String,
+    /// Derived rollup state, for the state filter + the leading glyph.
+    pub(super) state: PaneState,
+    /// Switch to this squad before applying `hit`, when it is not already the
+    /// active one (an agent's or pane's row lives in another squad). `None` for a
+    /// squad/tab row (the switch is in `hit`) or a card (never switches).
+    pub(super) goto_squad: Option<u64>,
+    /// Switch to this tab (after `goto_squad`) before applying `hit`, when it is
+    /// not the active view's tab. `Some` only for a pane row (a pane lives in a
+    /// specific tab, which `FocusPane` alone does not select); `None` for every
+    /// other row. Together the two prefixes give a pane goto the full
+    /// SelectSquad -> SelectTab -> FocusPane sequence.
+    pub(super) goto_tab: Option<u64>,
+    /// The terminal action: SelectSquad/SelectTab for a container row,
+    /// FocusPane/AttachAgent for an agent, the dispatch confirm / focus for a
+    /// card, or a [`ChromeHit::Notice`] that keeps the navigator open.
+    pub(super) hit: ChromeHit,
+    /// What the row menu (Ctrl-o) acts on; set by [`NavRow::with_menu`].
+    pub(super) menu: row_menu::NavMenu,
+}
+
+impl NavRow {
+    /// (fix) The ONLY construction path: `match_key` is composed from
+    /// `label` + `tokens` here, so a row can never exist with an unset key.
+    /// The first cut left the field as `String::new()` at every literal plus
+    /// a chained `with_match_key` call - a row class that forgot the chain
+    /// compiled fine and rendered fine but was unfindable by EVERY query,
+    /// including its own label (F4 on PR 1194). Construction now carries the
+    /// invariant.
+    pub(super) fn new(
+        label: String,
+        state: PaneState,
+        goto_squad: Option<u64>,
+        goto_tab: Option<u64>,
+        hit: ChromeHit,
+        tokens: &[String],
+    ) -> Self {
+        Self {
+            match_key: nav_match_key(&label, tokens),
+            label,
+            state,
+            goto_squad,
+            goto_tab,
+            hit,
+            menu: row_menu::NavMenu::None,
+        }
+    }
+}
+
+/// Compose a nav row's searchable identity: the label plus every
+/// non-empty token, lowercased and space-joined. An unresolved field
+/// contributes NO token, so a squad row without a node binding is not made
+/// matchable by the empty string.
+pub(super) fn nav_match_key(label: &str, tokens: &[String]) -> String {
+    let mut key = label.to_lowercase();
+    for t in tokens {
+        if !t.is_empty() {
+            key.push(' ');
+            key.push_str(&t.to_lowercase());
+        }
+    }
+    key
+}
+
+/// The navigator state of an agent row: an exited pane reads `Idle` (finished,
+/// nothing to act on); otherwise derive from the badge + the server-owned
+/// seen bit: a looked-at `Done` reads `Idle`, an unseen one
+/// `DoneUnseen`.
+pub(super) fn nav_agent_state(a: &AgentRow) -> PaneState {
+    if a.exited {
+        PaneState::Idle
+    } else {
+        pane_state(a.badge, a.seen, a.pane_activity)
+    }
+}
+
+/// The leading state glyph for a navigator row, sourced from the one
+/// icon lattice so nav and sideline read identically: blocked `▲`,
+/// working `●`, done `✓`, idle `○`.
+pub(super) fn nav_glyph(s: PaneState) -> char {
+    lattice_glyph(pane_to_lattice(s)).0
+}

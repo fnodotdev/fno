@@ -973,7 +973,7 @@ pub fn run_intel(args: &[String]) -> i32 {
              pages to check by hand, and manifest.json (counts, scrub drops, leaks).\n\
              It refuses while the pages hold ticked items. --corpus-ingest <dir> reads\n\
              the ticked items and writes eval.jsonl. Nothing leaves the machine.\n\n\
-             --plans-ladder scores the fixed set in ~/.fno/evals/plan-labels/ladder-set.jsonl\n\
+             --plans-ladder scores the fixed set in ~/.fno/db/evals/plan-labels/ladder-set.jsonl\n\
              on fnod, then --teacher-url, then --hosted NAME=COMMAND, and stops at the\n\
              first pass. --plans [--limit N] [--dry-run] labels plan premises with the\n\
              winner and refuses, printing each score, when no rung passed.\n\n\
@@ -991,7 +991,8 @@ pub fn run_intel(args: &[String]) -> i32 {
              never proven obedience.\n\n\
              --lens rules counts each event rule's fires and samples them with the reply\n\
              tail (--sample N or all, default 5). --labels <file> of judged fires prints\n\
-             each rule's false-fire rate. See docs/architecture/event-rules.md.\n"
+             each rule's false-fire rate. --score first asks fnod about the shadow\n\
+             judge's unscored Stop rows. See docs/architecture/event-rules.md.\n"
         );
         return 0;
     }
@@ -1011,6 +1012,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     let mut score_prior: Option<String> = None;
     let mut lens: Option<String> = None;
     let mut labels: Option<String> = None;
+    let mut score = false;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut i = 0;
     while i < args.len() {
@@ -1173,6 +1175,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                 }
             }
             "--json" | "-J" => json = true,
+            "--score" => score = true,
             "--all-projects" => all_projects = true,
             "--scorecard" => scorecard = true,
             other => {
@@ -1200,6 +1203,10 @@ pub fn run_intel(args: &[String]) -> i32 {
         eprintln!("fno-agent intel: --labels needs --lens rules");
         return 2;
     }
+    if score && lens.as_deref() != Some("rules") {
+        eprintln!("fno-agent intel: --score needs --lens rules");
+        return 2;
+    }
     let scoped = all_projects || !projects.is_empty() || !harness_spec.is_empty();
     if lens.is_some() && (scoped || session.is_some() || node.is_some()) {
         eprintln!("fno-agent intel: --lens reads this project's journal; drop the scope flags");
@@ -1212,7 +1219,7 @@ pub fn run_intel(args: &[String]) -> i32 {
     if let Some(name) = lens.as_deref() {
         return match name {
             "decisions" => crate::intel_lens::run_lens(days, json),
-            "rules" => crate::intel_rules_lens::run_lens(days, &sample, labels.as_deref()),
+            "rules" => crate::intel_rules_lens::run_lens(days, &sample, labels.as_deref(), score),
             _ => {
                 eprintln!("fno-agent intel: unknown lens {name} (known: decisions, rules)");
                 2
@@ -1231,7 +1238,7 @@ pub fn run_intel(args: &[String]) -> i32 {
             eprintln!("fno-agent intel: --categories needs --fold <saved fold JSON>");
             return 2;
         };
-        let facets_dir = fno_dir.join("intel").join("facets");
+        let facets_dir = crate::state_layout::place(&fno_dir, "intel").join("facets");
         return crate::intel_insights::run_categories(
             run_path,
             fold_path,

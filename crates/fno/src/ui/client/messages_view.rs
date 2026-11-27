@@ -525,6 +525,12 @@ fn text_of<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
+/// A row is the clicked message when its hash id or its short `fmail-<N>`
+/// number is the id the click carried.
+fn names_message(row: &Value, id: &str) -> bool {
+    text_of(row, "id") == id || text_of(row, "number") == id
+}
+
 impl MessagesBoard {
     fn projection(&self) -> Option<&Value> {
         self.snapshot.projection.as_deref()
@@ -1725,7 +1731,7 @@ pub(crate) fn apply_gather(view: &mut View, gen: u64, mail: Result<std::sync::Ar
                         .iter()
                         .find_map(|thread| {
                             let rows = thread.get("rows")?.as_array()?;
-                            let row = rows.iter().find(|row| text_of(row, "id") == id)?;
+                            let row = rows.iter().find(|row| names_message(row, &id))?;
                             Some((
                                 text_of(thread, "chat_id").to_string(),
                                 Some(text_of(row, "to_key").to_string()),
@@ -1741,7 +1747,7 @@ pub(crate) fn apply_gather(view: &mut View, gen: u64, mail: Result<std::sync::Ar
                             .iter()
                             .find_map(|channel| {
                                 let rows = channel.get("rows")?.as_array()?;
-                                rows.iter().any(|row| text_of(row, "id") == id).then(|| {
+                                rows.iter().any(|row| names_message(row, &id)).then(|| {
                                     (format!("channel:{}", text_of(channel, "scope")), None)
                                 })
                             });
@@ -1754,7 +1760,7 @@ pub(crate) fn apply_gather(view: &mut View, gen: u64, mail: Result<std::sync::Ar
                         .iter()
                         .find_map(|(agent, rows)| {
                             rows.as_array()?.iter().find_map(|row| {
-                                (text_of(row, "id") == id).then(|| {
+                                names_message(row, &id).then(|| {
                                     // The per-arm thread (item 6), not the
                                     // agent's aggregate.
                                     (
@@ -1788,7 +1794,7 @@ pub(crate) fn apply_gather(view: &mut View, gen: u64, mail: Result<std::sync::Ar
                     b.cursors[2] = b
                         .conversation_rows()
                         .iter()
-                        .position(|row| text_of(row, "id") == id)
+                        .position(|row| names_message(row, &id))
                         .unwrap_or(0);
                     b.selected_message_id = Some(id);
                     b.col = Col::Thread;

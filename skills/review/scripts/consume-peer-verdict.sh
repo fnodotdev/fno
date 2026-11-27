@@ -24,14 +24,19 @@ emit() {
   # verdict from the classified record on the findings path; the typed
   # verdict matters only on the legacy-shape refusal, which carries no
   # findings.
+  # reviewer_context=fresh (positional 3): the peer reviews in its own
+  # cross-model session and never shares the builder's context, which is
+  # the property the field measures, so a Reviewed peer row satisfies the
+  # independent rung. The stamp is the caller's claim, not hook-derived
+  # evidence; the emit script's header states that limit.
   # The emit script is named by its literal worktree-relative path. A
   # variable path names no file the Bash guard can read, so the runner line
   # refuses; the literal relative path resolves the same way at the gate
   # and at runtime, because the lane runs from the worktree root.
   if [[ -n "${2:-}" ]]; then
-    bash skills/review/scripts/emit-attestation.sh peer "$1" --findings-file "$2"
+    bash skills/review/scripts/emit-attestation.sh peer "$1" fresh --findings-file "$2"
   else
-    bash skills/review/scripts/emit-attestation.sh peer "$1"
+    bash skills/review/scripts/emit-attestation.sh peer "$1" fresh
   fi
 }
 

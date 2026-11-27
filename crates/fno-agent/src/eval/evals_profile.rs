@@ -20,7 +20,7 @@ fn derived(value: &str, basis: &str) -> Value {
 }
 
 pub(crate) fn id(state: &Path) -> Result<String, String> {
-    let dir = state.join("evals/profiles");
+    let dir = crate::evals::state_evals_dir(state).join("profiles");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(".seed");
     if !path.exists() {
@@ -60,7 +60,7 @@ fn refresh(
         }
     }
     let id = id(state)?;
-    let dir = state.join("evals/profiles");
+    let dir = crate::evals::state_evals_dir(state).join("profiles");
     let path = dir.join(format!("{id}.json"));
     let lock = std::fs::OpenOptions::new()
         .create(true)

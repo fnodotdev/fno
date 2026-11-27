@@ -1998,8 +1998,7 @@ fn graph_session_nodes(entries: Option<&[Value]>) -> HashMap<String, String> {
 }
 
 /// A registry row counts as a driver candidate only while its status sits in
-/// the LIVE vocabulary (spawning/ready/idle/busy/live/restarting; the same
-/// set spawn_gate.LIVE_STATUSES pins Python-side). A row whose child exited,
+/// the `AgentStatus::LIVE_STATUSES` vocabulary. A row whose child exited,
 /// failed, or died is a CLOSED run: its transcript may still answer for a
 /// while, and feeding it to the roster would let a finished worker suppress
 /// its node's undriven-PR row - the same snapshot-vs-process fold this feed

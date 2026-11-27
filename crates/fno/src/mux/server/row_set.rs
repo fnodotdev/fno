@@ -593,10 +593,20 @@ impl Core {
         }
 
         // 2. Watch-only appendix: registry rows no pane claimed.
-        for (i, a) in self.agents.iter().enumerate() {
-            if consumed[i] {
+        // The rows the sideline leaves out, by place in `out`: never by name,
+        // since an exited and a live row can share one.
+        let mut off_sideline_at = Vec::new();
+        for (claimed, a) in consumed.iter().zip(&self.agents) {
+            // Only a session a person can type into gets a sideline row. A
+            // headless run shows in the shell that started it: its registry
+            // row keeps the session id and events, read by name. One a person
+            // asked to watch (`fno agent spawn --mux`) keeps its place. The
+            // row is still built, for the sidecar below, and leaves `out` after it.
+            let off_sideline = a.substrate.as_deref() == Some("headless") && !a.watch;
+            if *claimed {
                 continue;
             }
+            let at = out.len();
             match &a.mux {
                 Some((sess, pane)) => {
                     // A row hosted in ANOTHER session is that server's to render.
@@ -716,7 +726,7 @@ impl Core {
                     })
                 }
                 None => {
-                    // Truly paneless (bg/headless/daemon/roster). Its attach map
+                    // Truly paneless (bg/daemon/roster). Its attach map
                     // pointed at no live pane (else a pane row claimed it), so it
                     // stays watch-only attachable - the AC1-FR revert.
                     // Never a mission squad: that id names a render-time header
@@ -826,6 +836,9 @@ impl Core {
                         project_root: self.project_by_cwd.get(&a.cwd).map(|p| p.root.clone()),
                     })
                 }
+            }
+            if off_sideline {
+                off_sideline_at.push(at);
             }
         }
         // 3.  Tombstone members DECORATE the row their registry entry
@@ -1000,6 +1013,12 @@ impl Core {
             crate::workspace_sidecar::publish(&crate::agents_view::runtime_home(), &out, |sid| {
                 self.session.squad(sid).and_then(|sq| sq.name.clone())
             });
+        }
+        // The sidecar above filed every session's counts, so the remote card
+        // of a hidden run keeps them. The sideline leaves the run out. The
+        // removals run last place first, so each one keeps the others true.
+        for at in off_sideline_at.iter().rev() {
+            out.remove(*at);
         }
         out
     }

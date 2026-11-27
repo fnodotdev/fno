@@ -234,6 +234,11 @@ impl Item {
             _ => None,
         }
     }
+
+    /// System-injected rows fold to a caret head instead of printing raw.
+    pub fn folds_notice(&self) -> bool {
+        matches!(self, Item::User { meta: true, .. })
+    }
 }
 
 fn text_item(part: String, text: String, thinking: bool, redacted: bool) -> Item {
@@ -484,6 +489,19 @@ mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_meta_user_row_folds_as_a_notice() {
+        let mut conv = Conversation::default();
+        let notice = json!({"seq": 0, "source": {"type": "line", "offset": 0}, "body": {"kind": "user_message", "id": "n1", "origin": "meta", "parts": [{"type": "text", "text": "<task-notification>\n<task-id>bhd3bt724</task-id>\n<output-file>/tmp/out</output-file>\n</task-notification>"}]}});
+        let row = conv.push(serde_json::from_value(notice).unwrap());
+        assert_eq!(row, Some(0));
+        assert!(matches!(conv.items[0], Item::User { meta: true, .. }));
+        assert!(conv.items[0].folds_notice());
+        let typed = json!({"seq": 1, "source": {"type": "line", "offset": 1}, "body": {"kind": "user_message", "id": "u1", "origin": "typed", "parts": [{"type": "text", "text": "hello"}]}});
+        conv.push(serde_json::from_value(typed).unwrap());
+        assert!(!conv.items[1].folds_notice());
+    }
 
     #[test]
     fn a_question_opens_then_closes_in_place() {

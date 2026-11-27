@@ -222,6 +222,7 @@ fn compose_route_file(
         None,
         (!session.is_empty()).then_some(session),
         cwd,
+        None,
     ) {
         Ok(Some(path)) => Ok(path),
         Ok(None) => Err("resume --route: the route wrote no settings file".to_string()),

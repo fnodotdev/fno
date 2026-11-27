@@ -97,7 +97,8 @@ make_fno_shim '{"recorded":false,"record_reason":"lock-timeout"}'
 
 # The production defaults are a coupled contract: the writer must refresh
 # before the reader can classify an active session as stale.
-writer_throttle="$(sed -n 's/^LIVE_THROTTLE=\([0-9][0-9]*\)$/\1/p' "$HEARTBEAT")"
+writer_throttle="$(sed -n 's/^const LIVE_THROTTLE_SECS: i64 = \([0-9][0-9]*\);$/\1/p' \
+  "$REPO_ROOT/crates/fno-agent/src/runtime/hook/front/post_tool.rs")"
 reader_window="$(sed -n 's/^WINDOW=\([0-9][0-9]*\)$/\1/p' "$HELPER")"
 if [[ "$writer_throttle" == 30 && "$reader_window" == 120 ]] \
     && (( writer_throttle < reader_window )); then

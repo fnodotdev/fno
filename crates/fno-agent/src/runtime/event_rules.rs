@@ -157,6 +157,10 @@ struct Ctx<'a> {
     home: &'a crate::paths::AgentsHome,
     /// The firing session's canonical (head-8) handle.
     session: String,
+    /// The session id as the harness sent it. The prompt hook's fire spans
+    /// carry this form, and the head-8 handle collides across same-window
+    /// codex sessions.
+    session_id: String,
     last_message: String,
     /// The matched_event key Stop rows dedupe and cap on.
     matched_event: String,
@@ -224,6 +228,7 @@ pub fn eval_stop_in(
         journal,
         home,
         session,
+        session_id: session_id.to_string(),
         last_message,
         matched_event,
         window_ms,
@@ -298,6 +303,7 @@ pub fn eval_stop_in(
             _ => {}
         }
     }
+    write_judge_request(journal, &ctx);
     if max_seq > cursor_seq || cursor_ts.is_none() {
         write_cursor(journal, &ctx.session, max_seq, max_ts);
     }
@@ -323,13 +329,10 @@ fn stop_block(
     if prior + 1 >= BLOCK_CAP {
         attrs.insert("cap_reached".to_string(), json!(true));
     }
-    let skip = ctx
-        .last_message
-        .chars()
-        .count()
-        .saturating_sub(EXCERPT_CHARS);
-    let excerpt: String = ctx.last_message.chars().skip(skip).collect();
-    attrs.insert("excerpt".to_string(), json!(excerpt));
+    attrs.insert(
+        "excerpt".to_string(),
+        json!(crate::fnod::tail(&ctx.last_message, EXCERPT_CHARS)),
+    );
     // fnod scores the same message beside the keyword verdict. Advice only:
     // the keyword answer already fired this block, and the span carries both
     // so `intel --lens rules` can compare them.
@@ -1043,6 +1046,221 @@ fn write_fire_span(
     }
 }
 
+// ── the shadow judge's request row ───────────────────────────────────────────
+
+/// How many behavioural laws one request row keeps. The cap keeps one pass
+/// per Stop small; `judge_dropped` counts the rest.
+const JUDGE_RULE_CAP: usize = 3;
+/// The reply tail a request row keeps for the judge, which reads it later.
+const JUDGE_TAIL_CHARS: usize = 4_000;
+/// Past this size the judge file rotates and keeps one older copy, so a row
+/// per Stop never grows without end.
+const JUDGE_ROTATE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// One row of the judge file. A request is written at each Stop. The
+/// scorer appends a verdict for each question it answers about a request.
+#[derive(Debug, Deserialize)]
+pub struct JudgeRow {
+    pub ts: String,
+    /// `request` or `verdict`.
+    pub phase: String,
+    pub span_id: String,
+    #[serde(default)]
+    pub session: String,
+    /// The Stop turn's key, `stop:<session>:<turn>`.
+    pub matched_event: String,
+    #[serde(default)]
+    pub machine: String,
+    /// `off`, `refused`, `down` or `up`, on a request.
+    #[serde(default)]
+    pub fnod: Option<String>,
+    /// The behavioural laws a request keeps, at most [`JUDGE_RULE_CAP`].
+    #[serde(default)]
+    pub rules: Vec<String>,
+    #[serde(default)]
+    pub judge_dropped: usize,
+    #[serde(default)]
+    pub judge_state: usize,
+    /// The reply tail, on a request written while fnod listens.
+    #[serde(default)]
+    pub excerpt: Option<String>,
+    /// The request a verdict answers, and the label it judged under.
+    #[serde(default)]
+    pub judge_of: Option<String>,
+    #[serde(default)]
+    pub judge: Option<String>,
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub escalate: Option<String>,
+    #[serde(default)]
+    pub trained: Option<bool>,
+    #[serde(default)]
+    pub fnod_error: Option<String>,
+    #[serde(default)]
+    pub fnod_ms: Option<f64>,
+    #[serde(default)]
+    pub fnod_is_ask: Option<f64>,
+}
+
+/// The shadow judge's request row, one per Stop: the behavioural laws this
+/// turn's prompt picked, how many state laws it picked, whether fnod
+/// listens here, and the reply tail when it does. The scorer
+/// (`fno-agent intel --lens rules --score`) reads these rows off the Stop
+/// path, so Stop itself asks fnod nothing. Best-effort: a lost row costs a
+/// verdict and nothing else.
+fn write_judge_request(journal: &Path, ctx: &Ctx) {
+    // Read on the first picked law only: a Stop that picked none pays no
+    // config read.
+    let mut tags: Option<crate::fnod_tags::Tags> = None;
+    let mut rules: Vec<String> = Vec::new();
+    let (mut state, mut dropped) = (0usize, 0usize);
+    for law in picked_laws(journal, ctx) {
+        let tags = tags.get_or_insert_with(|| crate::fnod_tags::Tags::read(ctx.cwd));
+        match tags.get(&law) {
+            crate::fnod_tags::Tag::Behavioural => {
+                if rules.len() < JUDGE_RULE_CAP {
+                    rules.push(law);
+                } else {
+                    dropped += 1;
+                }
+            }
+            crate::fnod_tags::Tag::State => state += 1,
+            crate::fnod_tags::Tag::Untagged => {}
+        }
+    }
+    // The shadow judge takes no default url. Until config names fnod, the
+    // row reads off and this path opens no connection.
+    let url = crate::fnod::named_url(ctx.cwd).unwrap_or_default();
+    let fnod = if url.trim().is_empty() {
+        "off"
+    } else if !crate::fnod::loopback(&url) {
+        "refused"
+    } else if crate::fnod::listening(&url) {
+        "up"
+    } else {
+        "down"
+    };
+    let tail =
+        (fnod == "up").then(|| crate::fnod::tail(&ctx.last_message, JUDGE_TAIL_CHARS).to_string());
+    let row = json!({
+        "ts": crate::events::now_rfc3339(),
+        "phase": "request",
+        "span_id": crate::decision_trace::new_span_id(),
+        "session": ctx.session,
+        "matched_event": ctx.matched_event,
+        "machine": crate::claims::hostname(),
+        "fnod": fnod,
+        "rules": rules,
+        "judge_dropped": dropped,
+        "judge_state": state,
+        "excerpt": tail,
+    });
+    append_judge_rows(journal, std::slice::from_ref(&row));
+}
+
+/// A rule fire span as `rules_source` writes it: the fields the pick reads.
+#[derive(Deserialize)]
+struct FireSpan {
+    data: FireData,
+}
+
+#[derive(Deserialize)]
+struct FireData {
+    span_kind: String,
+    event: String,
+    law: Option<String>,
+    #[serde(default)]
+    trace: FireTrace,
+}
+
+#[derive(Default, Deserialize)]
+struct FireTrace {
+    actor_session: Option<String>,
+}
+
+/// The laws the prompt and skill hooks picked for this turn: this
+/// session's `rule` fire spans since the turn began, each law once. Without
+/// a readable transcript the turn window is 30 minutes, so an older turn's
+/// picks can join.
+fn picked_laws(journal: &Path, ctx: &Ctx) -> Vec<String> {
+    let query = crate::event_store::EventQuery {
+        since_ms: Some(ctx.window_ms - 2_000),
+        ..crate::event_store::EventQuery::of_types(&["decision_span"])
+    };
+    let mut laws: Vec<String> = Vec::new();
+    for row in crate::event_store::query_events(journal, &query).unwrap_or_default() {
+        let Ok(fire) = serde_json::from_str::<FireSpan>(&row.line) else {
+            continue;
+        };
+        let fire = fire.data;
+        if fire.span_kind != "rule"
+            || !matches!(fire.event.as_str(), "prompt" | "skill")
+            || fire.trace.actor_session.as_deref() != Some(ctx.session_id.as_str())
+        {
+            continue;
+        }
+        if let Some(law) = fire.law {
+            if !laws.iter().any(|held| held == &law) {
+                laws.push(law);
+            }
+        }
+    }
+    laws
+}
+
+/// The engine's own state folder beside the journal: the per-session
+/// cursors and the judge rows. Beside a state root (it holds `db/`) the
+/// layout table places the folder, so it never lands at the root's top.
+fn state_dir(journal: &Path) -> PathBuf {
+    let parent = journal
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    if parent.join("db").is_dir() {
+        return crate::state_layout::place(&parent, "event-rules");
+    }
+    parent.join("event-rules")
+}
+
+/// The judge rows, oldest first: the rotated copy, then the live file. A
+/// damaged line is skipped.
+pub fn judge_rows(journal: &Path) -> Vec<JudgeRow> {
+    let live = state_dir(journal).join("judge.jsonl");
+    [live.with_extension("jsonl.1"), live]
+        .into_iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .flat_map(|text| text.lines().map(str::to_string).collect::<Vec<_>>())
+        .filter_map(|line| serde_json::from_str::<JudgeRow>(&line).ok())
+        .collect()
+}
+
+/// Append judge rows, oldest last. Past the size bound the live file
+/// rotates first and keeps one older copy.
+pub fn append_judge_rows(journal: &Path, rows: &[Value]) {
+    let live = state_dir(journal).join("judge.jsonl");
+    if let Some(dir) = live.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    if std::fs::metadata(&live).is_ok_and(|m| m.len() > JUDGE_ROTATE_BYTES) {
+        std::fs::rename(&live, live.with_extension("jsonl.1")).ok();
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&live)
+    else {
+        return;
+    };
+    for row in rows {
+        let mut line = row.to_string();
+        line.push('\n');
+        if let Err(e) = std::io::Write::write_all(&mut file, line.as_bytes()) {
+            eprintln!("event_rules: judge row skipped: {e}");
+        }
+    }
+}
+
 // ── the per-session cursor ──────────────────────────────────────────────────
 
 /// Where this session's engine left off: the seq and ts of the newest
@@ -1050,16 +1268,13 @@ fn write_fire_span(
 /// state-root inventory; a missing or malformed cursor reads as a first
 /// fire and the engine starts 30 minutes back.
 fn cursor_path(journal: &Path, session: &str) -> PathBuf {
-    let dir = journal
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let dir = state_dir(journal);
     let key = if session.is_empty() {
         "anon".to_string()
     } else {
         session.to_string()
     };
-    dir.join("event-rules").join(format!("{key}.cursor"))
+    dir.join(format!("{key}.cursor"))
 }
 
 fn read_cursor(journal: &Path, session: &str) -> (i64, Option<i64>) {
@@ -1340,6 +1555,92 @@ mod tests {
         }
     }
 
+    /// The shadow judge's request row: the turn's prompt pick split by tag,
+    /// fnod's state on this machine, and the reply tail only when fnod
+    /// listens. The Stop answer does not change.
+    fn judge_request_leg() {
+        let rig = Rig::new(false);
+        std::fs::create_dir_all(rig.cwd.join(".fno")).unwrap();
+        let fire = |law: &str, event: &str, session: &str| {
+            json!({"ts": crate::events::now_rfc3339(), "type": "decision_span", "source": "test",
+                "data": {"span_kind": "rule", "rule": format!("law-{law}"), "law": law, "event": event,
+                    "trace": {"trace_id": "none", "span_id": crate::decision_trace::new_span_id(),
+                        "actor_session": session}}})
+        };
+        rig.seed(fire("d-behav001", "prompt", SESSION));
+        rig.seed(fire("d-behav001", "skill", SESSION));
+        rig.seed(fire("d-state001", "prompt", SESSION));
+        // Another session's pick, and a pre-tool fire, are not this turn's.
+        rig.seed(fire("d-theirs1", "prompt", "ses_other111"));
+        rig.seed(fire("d-pretool1", "pre-tool", SESSION));
+        let file = rig.cwd.join("judge-tags.toml");
+        std::fs::write(
+            &file,
+            "d-behav001 = \"behavioural\"\nd-state001 = \"state\"\n",
+        )
+        .unwrap();
+        let tags = format!("[fnod.judge]\ntags_file = \"{}\"\n", file.display());
+
+        // fnod listens: the row keeps the tail and the behavioural law once.
+        let (url, _listener) = crate::fnod::tests::serve_once("{}", std::time::Duration::ZERO);
+        std::fs::write(
+            rig.cwd.join(".fno/config.toml"),
+            format!("[fnod]\nurl = \"{url}\"\n{tags}"),
+        )
+        .unwrap();
+        let fires = eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("wave 1 merged clean"),
+        );
+        assert!(fires.is_empty(), "the judge changes no Stop answer");
+        let [row] = <[JudgeRow; 1]>::try_from(judge_rows(&rig.journal)).unwrap();
+        assert_eq!(
+            (row.phase.as_str(), row.fnod.as_deref()),
+            ("request", Some("up"))
+        );
+        assert_eq!(row.rules, vec!["d-behav001"]);
+        assert_eq!((row.judge_state, row.judge_dropped), (1, 0));
+        assert_eq!(row.excerpt.as_deref(), Some("wave 1 merged clean"));
+        assert!(row
+            .matched_event
+            .starts_with(&format!("stop:{}:", rig.session)));
+
+        // fnod is absent: the row says down and keeps no tail.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        std::fs::write(
+            rig.cwd.join(".fno/config.toml"),
+            format!("[fnod]\nurl = \"{url}\"\n{tags}"),
+        )
+        .unwrap();
+        eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("Still working."),
+        );
+        let rows = judge_rows(&rig.journal);
+        let [_, row] = <[JudgeRow; 2]>::try_from(rows).unwrap();
+        assert_eq!(row.fnod.as_deref(), Some("down"));
+        assert!(row.excerpt.is_none(), "{row:?}");
+        assert_eq!(row.rules, vec!["d-behav001"]);
+
+        // fnod is not named: the row says off and keeps no tail.
+        std::fs::write(rig.cwd.join(".fno/config.toml"), &tags).unwrap();
+        eval_stop_in(
+            &rig.cwd,
+            &rig.journal,
+            &rig.home,
+            &rig.payload("Still working."),
+        );
+        let [_, _, row] = <[JudgeRow; 3]>::try_from(judge_rows(&rig.journal)).unwrap();
+        assert_eq!(row.fnod.as_deref(), Some("off"));
+        assert!(row.excerpt.is_none(), "{row:?}");
+    }
+
     fn stop_stamp_binds_the_question_to_the_asking_session_leg() {
         // The caller holds test_env_lock: the lock is a plain std Mutex, so
         // a second acquire here deadlocks the test process (the 30m CI cap
@@ -1450,6 +1751,7 @@ mod tests {
         every_harness_stop_payload_shape_reaches_the_rule_leg();
         r2_and_r3_legs();
         stop_stamp_binds_the_question_to_the_asking_session_leg();
+        judge_request_leg();
         idle_pick_legs();
     }
 

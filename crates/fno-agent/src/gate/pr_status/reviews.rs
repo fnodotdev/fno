@@ -772,11 +772,13 @@ fn finish(data: Option<Value>, note: &str, pin: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 /// Whether review is required for this PR: a configured lane, OR the
-/// self-review floor for a code payload on a stock install. Fail-closed.
-/// `head` keys the payload memo. None accepts a memo kept for any head.
+/// person gate (review.human = always owes an approval whatever else is
+/// configured), OR the self-review floor for a code payload on a stock
+/// install. Fail-closed. `head` keys the payload memo. None accepts a memo
+/// kept for any head.
 pub(crate) fn review_lane(cwd: &Path, pr: u64, head: Option<&str>) -> bool {
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
-    if inputs.lane_configured || inputs.code_review_configured {
+    if inputs.lane_configured || inputs.code_review_configured || inputs.human_required {
         return true;
     }
     let floor_applies = crate::loopcheck::self_review_floor_applies(
@@ -795,7 +797,7 @@ pub(crate) fn lane_answer(cwd: &Path, code_payload: bool) -> bool {
         return review_lane(cwd, 0, None);
     }
     let inputs = resolve_review_inputs(cwd, None, None, None, None, None);
-    if inputs.lane_configured || inputs.code_review_configured {
+    if inputs.lane_configured || inputs.code_review_configured || inputs.human_required {
         return true;
     }
     let floor_applies = crate::loopcheck::self_review_floor_applies(

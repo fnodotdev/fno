@@ -20,11 +20,7 @@ write production code; you retrieve, verify, and store sources.
 fno do research "<topic>" --max-results 10
 ```
 
-This searches via ddgs, self-fetches each result URL, and appends one row per
-source — `url, fetched_at, hash, extract, verified` — to
-`~/.fno/notes/research/<slug>.sources.jsonl`. A row is `verified=true` only
-after a successful fetch produced a content hash; a non-text / 404 / timeout
-source is recorded `verified=false` with a reason and never aborts the round.
+This searches via ddgs, self-fetches each result URL, and appends one row per source (`url, fetched_at, hash, extract, verified`) to `~/.fno/db/notes/research/<slug>.sources.jsonl`. A row is `verified=true` only after a successful fetch produced a content hash. A non-text, 404 or timeout source is recorded `verified=false` with a reason and never aborts the round.
 
 Read the evidence store back with Read/Grep; cite claims against its rows.
 

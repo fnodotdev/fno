@@ -38,3 +38,29 @@ default = true
 events = ["pre-tool"]
 tools = ["Write"]
 paths = ["**/memory/*.md"]
+
+# Two user laws bound at their actions. Each law reached sessions only by
+# prompt retrieval, and neither action's text ranked it: the lead mailed a
+# worker by name and spawned blueprint sessions while both laws were live.
+
+[[rule]]
+id = "registry-mail-by-name"
+law = "d-e952ed19"
+action = "inform"
+what = "you are mailing a session by name"
+why = "the registry key is the harness session id; a name is a mutable alias, and a rename or a fork sends the mail to another session"
+instead = "address the session id or its 8-hex fno id (fno whoami prints yours)"
+[rule.when]
+events = ["door:send"]
+subjects = ["by-name:*"]
+
+[[rule]]
+id = "blueprint-lane-spawn"
+law = "d-801edf1f"
+action = "inform"
+what = "you are spawning a blueprint session"
+why = "a lead runs /fno:blueprint through the fno:architect subagent, not a spawned session"
+instead = "run the blueprint as an fno:architect subagent, or seat the idea directly when it is simple"
+[rule.when]
+events = ["door:spawn"]
+phases = ["blueprint"]

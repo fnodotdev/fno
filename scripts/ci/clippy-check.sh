@@ -42,7 +42,7 @@
 # site for good; the diagnostic and its key disappear together.
 #
 # Usage:
-#   bash scripts/ci/clippy-check.sh [--baseline FILE] [--write-baseline] CRATE_DIR...
+#   bash scripts/ci/clippy-check.sh [--baseline FILE] [--write-baseline] [--features LIST] CRATE_DIR...
 #   bash scripts/ci/clippy-check.sh --extract <clippy.jsonl> <crate>     (print keys)
 #   bash scripts/ci/clippy-check.sh --hits-file <keys.tsv> [--baseline FILE] [--write-baseline] CRATE_DIR...
 #
@@ -60,6 +60,9 @@ WRITE=0
 EXTRACT_SRC=""
 EXTRACT_CRATE=""
 HITS_FILE=""
+# A crate whose code sits behind a feature lints with it on: under default
+# features a gated module never reaches the gate.
+FEATURE_ARGS=()
 CRATES=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -67,6 +70,7 @@ while [[ $# -gt 0 ]]; do
         --write-baseline) WRITE=1; shift ;;
         --extract) EXTRACT_SRC="$2"; EXTRACT_CRATE="$3"; shift 3 ;;
         --hits-file) HITS_FILE="$2"; shift 2 ;;
+        --features) FEATURE_ARGS=(--features "$2"); shift 2 ;;
         -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
         *) CRATES+=("$1"); shift ;;
     esac
@@ -81,6 +85,20 @@ RATCHET_LINTS='["clippy::correctness", "clippy::invalid_regex", "clippy::indexin
 # outside the crate (macro-expanded registry sources, /rustc shims) are not
 # ours to ratchet; deps are cap-linted anyway. Non-clippy diagnostics are
 # rustc's own and stay with the `warnings` job.
+
+# Render the error-level diagnostics a failed pass already captured, so the
+# failure names its error instead of dying with the JSON stream (an earlier
+# compile red cost a full CI cycle because the branch deleted local_tmp).
+render_errors() {
+    local jsonl="$1"
+    jq -r 'select(.reason == "compiler-message")
+        | select(.message.level == "error")
+        | .message.message as $m
+        | ((.message.spans // [] | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
+           | (if $s then ($s.file_name + ":" + ($s.line_start | tostring) + ": ") else "" end) + $m)' \
+        "$jsonl" 2>/dev/null | sort -u | head -20
+}
+
 extract_keys() {
     local jsonl="$1" crate="$2"
     jq -r --arg crate "$crate" --argjson lints "$RATCHET_LINTS" '
@@ -124,11 +142,13 @@ else
         fi
         local_tmp="$(mktemp)"
         err_tmp="$(mktemp)"
-        if ! ( cd "$REPO_ROOT/$crate" && cargo clippy --all-targets --locked --message-format=json -- "${LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
+        if ! ( cd "$REPO_ROOT/$crate" && cargo clippy --all-targets --locked ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --message-format=json -- "${LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
             # A compile error is not a lint verdict: fail loudly with the
             # readable stderr, never a silent pass.
             echo "clippy-check: cargo clippy failed in $crate; stderr tail:" >&2
             tail -30 "$err_tmp" >&2
+            echo "clippy-check: error diagnostics from the JSON stream:" >&2
+            render_errors "$local_tmp" >&2
             rm -f "$local_tmp" "$err_tmp"
             exit 1
         fi
@@ -136,11 +156,13 @@ else
         # Product-only pass: --lib --bins leaves #[cfg(test)] and tests/ out.
         # A crate with neither target (cargo exits non-zero) has no product
         # code to ratchet.
-        if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
+        if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
             extract_keys "$local_tmp" "$crate" >>"$CURRENT"
         elif ! grep -q "no library targets found" "$err_tmp"; then
             echo "clippy-check: cargo clippy (product pass) failed in $crate; stderr tail:" >&2
             tail -30 "$err_tmp" >&2
+            echo "clippy-check: error diagnostics from the JSON stream:" >&2
+            render_errors "$local_tmp" >&2
             rm -f "$local_tmp" "$err_tmp"
             exit 1
         fi

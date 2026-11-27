@@ -353,8 +353,7 @@ pub(crate) fn is_identity_token(v: Option<&str>) -> bool {
 /// registry read until the row was rm'd. This is the full snake_case
 /// AgentStatus vocabulary (mirrors the `status-v1` enum in
 /// `crate::emit_schema_json`); it accepts every valid projected status while
-/// still rejecting genuine garbage. Must stay in lockstep with Python
-/// `registry.py::KNOWN_STATUSES`.
+/// still rejecting genuine garbage.
 const KNOWN_STATUSES: &[&str] = &[
     "spawning",
     "ready",
@@ -1310,8 +1309,26 @@ pub(crate) fn mint_synthesized_entry(
 /// (covers claude too: its uuid syncs there), through [`crate::state::update_registry`].
 pub(crate) fn upsert_synthesized_row(
     registry_path: &Path,
-    entry: crate::state::RegistryEntry,
+    mut entry: crate::state::RegistryEntry,
 ) -> Result<(), crate::state::StateError> {
+    // A claimed launch record names the spawner; it outranks the ambient
+    // adopter edge and the operator guess the mint made.
+    let root = registry_path.parent().unwrap_or(Path::new("."));
+    if let Some(sid) = entry.harness_session_id.clone() {
+        let ambient = (
+            entry.spawned_by_session.take(),
+            entry.spawned_by_harness.take(),
+            entry.spawned_by_cwd.take(),
+        );
+        crate::claude_adopt::apply_launch_edge(root, &sid, &mut entry);
+        if entry.spawned_by_session.is_none() {
+            (
+                entry.spawned_by_session,
+                entry.spawned_by_harness,
+                entry.spawned_by_cwd,
+            ) = ambient;
+        }
+    }
     crate::state::update_registry(registry_path, |reg| {
         let key = entry.harness_session_id.as_deref();
         let idx = key.and_then(|k| {
@@ -1349,6 +1366,20 @@ pub(crate) fn upsert_synthesized_row(
                     merged.node_basis = old.node_basis.clone();
                 }
                 crate::adopt_carry::carry_adopted_team(&mut merged, old);
+                // A recorded launcher outranks the adopter's ambient edge and
+                // its operator guess.
+                if old
+                    .spawned_by_session
+                    .as_deref()
+                    .is_some_and(|s| !s.is_empty())
+                {
+                    merged.spawned_by_session = old.spawned_by_session.clone();
+                    merged.spawned_by_harness = old.spawned_by_harness.clone();
+                    merged.spawned_by_cwd = old.spawned_by_cwd.clone();
+                    if merged.origin.as_deref() == Some("operator") {
+                        merged.origin = old.origin.clone();
+                    }
+                }
                 reg.entries[i] = merged;
             }
             None => reg.entries.push(entry),

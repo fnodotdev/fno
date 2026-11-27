@@ -4,7 +4,8 @@
 //! acts. Characterized by the `stranded_classify_*`, `resolve_node_*`,
 //! `sweep_*` and `apply_*` goldens.
 
-use super::{git_bounded, git_out, sorted_json, OWNERSHIP_LIVE_STATUSES};
+use super::{git_bounded, git_out, sorted_json};
+use crate::AgentStatus;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,7 +70,7 @@ pub fn classify(
         "live".to_string(),
         Value::Bool(
             registry_status
-                .map(|s| OWNERSHIP_LIVE_STATUSES.contains(&s))
+                .map(|s| AgentStatus::LIVE_STATUSES.contains(&s))
                 .unwrap_or(false),
         ),
     );
@@ -134,7 +135,7 @@ fn classify_tiers(
         return row;
     }
     if let Some(status) = registry_status {
-        if OWNERSHIP_LIVE_STATUSES.contains(&status) {
+        if AgentStatus::LIVE_STATUSES.contains(&status) {
             row.klass = LIVE.to_string();
             return row;
         }
@@ -634,15 +635,19 @@ fn bare_hex_tier(q: &str, rows: &[Value]) -> Option<(String, Value)> {
     if !hex_ok {
         return None;
     }
-    let configured = super::policy::node_id_prefix(&std::env::current_dir().unwrap_or_default());
-    let mut prefixes = vec![configured, "ab-".to_string()];
+    let configured =
+        super::policy::node_id_prefix(&std::env::current_dir().unwrap_or_default()).ok();
+    let mut prefixes = vec!["ab".to_string()];
+    if let Some(p) = configured {
+        prefixes.insert(0, p);
+    }
     prefixes.dedup();
     let by_id: std::collections::HashMap<&str, &Value> = rows
         .iter()
         .filter_map(|r| r.get("id").and_then(Value::as_str).map(|i| (i, r)))
         .collect();
     for p in prefixes {
-        let cand = format!("{p}{q}");
+        let cand = format!("{p}-{q}");
         if let Some(row) = by_id.get(cand.as_str()) {
             return Some((cand, (*row).clone()));
         }

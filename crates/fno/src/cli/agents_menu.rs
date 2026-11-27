@@ -266,7 +266,7 @@ const REGISTRY: &[Node] = &[
     command("report", &["report"], "The inside-leg state push the per-turn hook calls."),
     command("whoami", &["whoami"], "This mesh worker's own registered name."),
     command("compaction", &["compaction"], "Compaction stamps."),
-    command("transcript", &["transcript"], "Move a session bundle to another computer."),
+    command("transcript", &["transcript"], "Send or receive a session-transcript bundle between machines."),
     command("subscribe", &["subscribe"], "Stream registry transitions and pane exits as NDJSON."),
 ];
 

@@ -74,12 +74,11 @@ fn main() {
     // the daemon's parent passed no value. Only a footnote-checkout cwd
     // earns the fill; a daemon started from a foreign repo keeps its
     // children's build env untouched (the install path re-resolves its own
-    // value). The server start is best-effort and detached; the watch tick
-    // re-ensures it every 300s, so a boot-time failure costs nothing.
+    // value). The daemon starts no sccache server: the rustc wrapper's own
+    // client does, with the fleet cache env the wrapper exports.
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     fno_agent::cargo_build_dirs::fill_build_dir_env(&cwd);
     fno_agent::cargo_build_dirs::fill_sccache_env(&cwd);
-    fno_agent::cargo_build_dirs::ensure_sccache_server();
 
     // A failed daemon must surface a non-zero exit and a clear stderr line; it
     // must never panic silently (Silent-Failure-Hunter posture).

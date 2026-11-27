@@ -16,6 +16,7 @@
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// One section outcome. `Allow` carries nothing; a block carries the refusal
 /// string the shell guard printed.
@@ -77,18 +78,149 @@ fn norm(s: &str) -> String {
     out.replace("/./", "/")
 }
 
+// Compile-once regexes: the gate runs per tool call on the hot path and
+// hook_latency pins its budget, so every fixed pattern below compiles once.
+// The path-parameterized arms further down stay per-call; they run only when
+// a target was already extracted.
+static HEREDOC_QUOTED: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#)
+        .expect("fixed pattern")
+});
+static SHELL_RUNNER: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)")
+        .expect("fixed pattern")
+});
+static FD_DUP: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"[0-9]*[<>]&([0-9]+|-)").expect("fixed pattern"));
+
+/// The operator families' path token, quoted forms first.
+const OPERATOR_TOK: &str = r#"("[^"]*"|'[^']*'|[^[:space:];|&<>"']+)"#;
+static STRIP_FD_DUPS: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"[0-9]*>&[0-9]+").expect("fixed pattern"));
+static STRIP_REDIRS: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(&format!(
+        r"(^|[[:space:]])(([0-9]*>>?)|&>|>\||>!)[[:space:]]*{OPERATOR_TOK}"
+    ))
+    .expect("fixed pattern")
+});
+static OPERATOR_RAW: LazyLock<Vec<(regex::Regex, usize)>> = LazyLock::new(|| {
+    vec![
+        (
+            regex::Regex::new(&format!(r"[0-9]*(>>|>)[[:space:]]*{OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(r"(&>|>\||>!)[[:space:]]*{OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])tee[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])sponge[[:space:]]+{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            2,
+        ),
+    ]
+});
+static OPERATOR_CLEAN: LazyLock<Vec<(regex::Regex, usize)>> = LazyLock::new(|| {
+    vec![
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(cp|mv|install|truncate)[[:space:]][^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])dd[[:space:]][^;|&]*of={OPERATOR_TOK}"))
+                .expect("fixed pattern"),
+            2,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(sed|perl)[[:space:]][^;|&]*(-[a-zA-Z]*i|--in-place)[^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            4,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])jq[[:space:]][^;|&]*(-i|--in-place)[^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+        (
+            regex::Regex::new(&format!(
+                r"(^|[^[:alnum:]_])(ex|ed)[[:space:]][^;|&]*[[:space:]]{OPERATOR_TOK}"
+            ))
+            .expect("fixed pattern"),
+            3,
+        ),
+    ]
+});
+
+/// The idiom families' path token: quoted literal with an optional
+/// single-letter language prefix, the prefix outside the capture group.
+const IDIOM_TOK: &str = r#"(?:(?:[A-Za-z])?("[^"]*"|'[^']*')|([^[:space:];|&<>"']+))"#;
+const IDIOM_MODE: &str = r#"['"](?:[wax][a-zA-Z0-9+]*|r\+[a-zA-Z0-9+]*)['"]"#;
+static INTERPRETER_CTX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(^|[[:space:];|&(])(python3|python2|python|nodejs|node|deno|bun|ruby|perl)([[:space:]]|$)",
+    )
+    .expect("fixed pattern")
+});
+static IDIOM_FAMILIES: LazyLock<Vec<regex::Regex>> = LazyLock::new(|| {
+    vec![
+        // open(path, ... mode) for the write and append modes, and the 3-arg
+        // form perl and awk use: open(fh, '>', path).
+        regex::Regex::new(&format!(
+            r#"open[[:space:]]*\([[:space:]]*{IDIOM_TOK}[[:space:]]*,[^)]*{IDIOM_MODE}"#
+        ))
+        .expect("fixed pattern"),
+        regex::Regex::new(&format!(
+            r#"open[[:space:]]*\([^,()]+,[[:space:]]*['"]>[>]?['"][[:space:]]*,[[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // Path('p').write_text(..) / .write_bytes(..)
+        regex::Regex::new(&format!(
+            r#"{IDIOM_TOK}[[:space:]]*\)[[:space:]]*\.(?:write_text|write_bytes)[[:space:]]*\("#
+        ))
+        .expect("fixed pattern"),
+        // (fs.)writeFile(Sync) / appendFile(Sync) / copyFileSync /
+        // createWriteStream with the path as the first argument.
+        regex::Regex::new(&format!(
+            r#"(?:^|[[:space:]_.])(?:fs\.)?(?:writeFile(?:Sync)?|appendFile(?:Sync)?|copyFileSync|createWriteStream)[[:space:]]*\([[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // File.write / IO.write with the path as the first argument.
+        regex::Regex::new(&format!(
+            r#"(?:^|[[:space:]_])(?:File|IO)\.(?:write|binwrite|atomic_write)[[:space:]]*\([[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+        // shutil and os movers with the destination as the second argument.
+        regex::Regex::new(&format!(
+            r#"(?:shutil\.(?:copy|copyfile|copy2|move)|os\.(?:rename|replace|renames))[[:space:]]*\([^,()]*,[[:space:]]*{IDIOM_TOK}"#
+        ))
+        .expect("fixed pattern"),
+    ]
+});
+
 /// The part of a Bash command the shell parses as redirects. Two spans are
 /// not: an fd duplication (`2>&1`, `>&-`), whose `1` the relative-path arm
 /// read as the file `<cwd>/1`, and the body of a QUOTED heredoc
 /// (`<<'EOF'`), which is literal data. An unquoted body still expands
 /// `$(...)`, and a body fed to a shell runs, so both stay.
 fn shell_surface(cmd: &str) -> String {
-    let heredoc =
-        regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#).unwrap();
-    let shell = regex::Regex::new(
-        r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)",
-    )
-    .unwrap();
     let mut kept: Vec<&str> = Vec::new();
     let mut close: Vec<(String, bool)> = Vec::new();
     for line in cmd.lines() {
@@ -103,20 +235,19 @@ fn shell_surface(cmd: &str) -> String {
             }
             continue;
         }
-        for caps in heredoc.captures_iter(line) {
+        for caps in HEREDOC_QUOTED.captures_iter(line) {
             // `bash <<'EOF'` runs its body as shell, so that body stays.
             let text = |n: usize| caps.get(n).map_or("", |m| m.as_str());
             let start = caps.get(0).map_or(0, |m| m.start());
             let before = line.get(..start).unwrap_or("");
-            if text(1) == text(3) && !shell.is_match(before) {
+            if text(1) == text(3) && !SHELL_RUNNER.is_match(before) {
                 let dash = text(0).starts_with("<<-");
                 close.push((text(2).to_string(), dash));
             }
         }
         kept.push(line);
     }
-    let fd_dup = regex::Regex::new(r"[0-9]*[<>]&([0-9]+|-)").unwrap();
-    fd_dup.replace_all(&kept.join("\n"), "").into_owned()
+    FD_DUP.replace_all(&kept.join("\n"), "").into_owned()
 }
 
 /// Entry: read the payload once, run the three sections in order, print, and
@@ -699,7 +830,8 @@ fn clutter_note(abs: &Path, roots: &[Root], state: &Root, session_id: &str) -> O
 /// The state-root half of `clutter_note`, so the mkdir family can take the
 /// state-root scoping without the config-dir branch (the mkdir ruling keeps
 /// mkdir lawful in the Claude config dir). A write whose FIRST segment under
-/// the state root names a missing entry gets a note: a folder created in one
+/// the state root has no keep row in the layout table gets a note, unless it
+/// is a legacy name that exists and the mover still owes: a folder created in one
 /// tool call and written in the next does not slip past it, and a standalone
 /// mkdir does not either.
 fn state_root_note(abs: &Path, state: &Root, session_id: &str) -> Option<String> {
@@ -720,10 +852,13 @@ fn state_root_note(abs: &Path, state: &Root, session_id: &str) -> Option<String>
         return None;
     };
     let first = rest.split('/').next().unwrap_or(rest);
-    if !state.physical.join(first).exists() {
+    // A kept name is lawful; a legacy name the mover still owes stays
+    // writable while it exists. Anything else is a new top-level entry.
+    let owed = crate::state_layout::is_carried(first) && state.physical.join(first).exists();
+    if !crate::state_layout::is_kept(first) && !owed {
         let jd = jobdir_for(&ambient_cfg(), session_id);
         return Some(format!(
-            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The top-level set is closed: write under a folder that already exists there, or in this session's job dir: {jd}.",
+            "{phys} would create a new top-level entry ('{first}') in the fno state root ({}). The layout table (docs/state-root-layout.tsv) keeps the top-level set: write under a kept folder, or in this session's job dir: {jd}.",
             state.spelled
         ));
     }
@@ -949,11 +1084,18 @@ fn config_bash_arm(
 /// targets (or the apply_patch header paths). Paths come back as written.
 pub(crate) fn write_targets(file_path: &str, command: &str) -> Vec<String> {
     let mut out = Vec::new();
+    write_targets_into(file_path, command, &mut out);
+    out
+}
+
+/// The same extraction into a caller-owned list, so invoked-script contents
+/// can join the scanned surface without re-deriving the file_path target.
+fn write_targets_into(file_path: &str, command: &str, out: &mut Vec<String>) {
     if !file_path.is_empty() {
         out.push(file_path.to_string());
     }
     if command.is_empty() {
-        return out;
+        return;
     }
     if command.contains("*** Begin Patch") {
         for line in command.lines() {
@@ -974,27 +1116,28 @@ pub(crate) fn write_targets(file_path: &str, command: &str) -> Vec<String> {
         // A patch BODY is file content, not shell: extracting write forms from
         // it would block a legitimate patch whose added text merely mentions a
         // redirect. Only a real Bash command goes through the shell grammar.
-        return out;
+        return;
     }
-    bash_write_targets(command, &mut out);
-    out
+    bash_write_targets(command, out);
 }
 
 fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
+    bash_operator_targets(cmd, out);
+    bash_idiom_targets(cmd, false, out);
+}
+
+/// The shell write-operator families over one command text: redirects on the
+/// raw text, the positional forms on a copy with redirect clauses stripped.
+/// Shared by the command scan and shell-script contents.
+fn bash_operator_targets(cmd: &str, out: &mut Vec<String>) {
     if cmd.is_empty() {
         return;
     }
-    let tok = r#"("[^"]*"|'[^']*'|[^[:space:];|&<>"']+)"#;
     // Redirects read off the raw command; the positional forms read off a copy
     // with redirect clauses stripped, so the last argument of a cp is not a
     // trailing 2>/dev/null.
-    let strip_fd_dups = regex::Regex::new(r"[0-9]*>&[0-9]+").unwrap();
-    let strip_redirs = regex::Regex::new(&format!(
-        r"(^|[[:space:]])(([0-9]*>>?)|&>|>\||>!)[[:space:]]*{tok}"
-    ))
-    .unwrap();
-    let fd_dup_stripped = strip_fd_dups.replace_all(cmd, "");
-    let clean = strip_redirs.replace_all(&fd_dup_stripped, "${1}");
+    let fd_dup_stripped = STRIP_FD_DUPS.replace_all(cmd, "");
+    let clean = STRIP_REDIRS.replace_all(&fd_dup_stripped, "${1}");
     let mut push = |m: Option<regex::Match<'_>>| {
         if let Some(m) = m {
             let mut frag = m.as_str().to_string();
@@ -1010,81 +1153,368 @@ fn bash_write_targets(cmd: &str, out: &mut Vec<String>) {
             }
         }
     };
-    let raw_families: Vec<(regex::Regex, usize)> = vec![
-        (
-            regex::Regex::new(&format!(r"[0-9]*(>>|>)[[:space:]]*{tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(r"(&>|>\||>!)[[:space:]]*{tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])tee[[:space:]]+(-[^[:space:]]+[[:space:]]+)*{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])sponge[[:space:]]+{tok}")).unwrap(),
-            2,
-        ),
-    ];
-    let clean_families: Vec<(regex::Regex, usize)> = vec![
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])(cp|mv|install|truncate)[[:space:]][^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])dd[[:space:]][^;|&]*of={tok}")).unwrap(),
-            2,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])(sed|perl)[[:space:]][^;|&]*(-[a-zA-Z]*i|--in-place)[^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            4,
-        ),
-        (
-            regex::Regex::new(&format!(
-                r"(^|[^[:alnum:]_])jq[[:space:]][^;|&]*(-i|--in-place)[^;|&]*[[:space:]]{tok}"
-            ))
-            .unwrap(),
-            3,
-        ),
-        (
-            regex::Regex::new(&format!(r"(^|[^[:alnum:]_])(ex|ed)[[:space:]][^;|&]*[[:space:]]{tok}"))
-                .unwrap(),
-            3,
-        ),
-    ];
     // Every matching clause reports, not just the leftmost, so a second write
     // in a compound command is still seen.
-    for (re, grp) in &raw_families {
+    for (re, grp) in OPERATOR_RAW.iter() {
         for caps in re.captures_iter(cmd) {
             push(caps.get(*grp));
         }
     }
-    for (re, grp) in &clean_families {
+    for (re, grp) in OPERATOR_CLEAN.iter() {
         for caps in re.captures_iter(&clean) {
             push(caps.get(*grp));
         }
     }
 }
 
+/// The contents of one invoked script join the scanned surface: shell runners
+/// feed only the operator families, code interpreters arm only the write-call
+/// idioms, known from the invocation itself. A script body never takes the
+/// apply-patch branch.
+fn content_targets_into(content: &str, shell: bool, out: &mut Vec<String>) {
+    if shell {
+        bash_operator_targets(content, out);
+    } else {
+        bash_idiom_targets(content, true, out);
+    }
+}
+
+/// Interpreter write calls: each family pairs a call with its path
+/// operand, so a mention or a read never produces a target and the judge
+/// downstream stays the only arbiter. Over a command the families only arm
+/// when the command runs a code interpreter, so text that merely carries a
+/// write-call literal (a search pattern, an echoed example) extracts nothing;
+/// script contents arrive pre-armed, their interpreter named by the command
+/// that invoked them. Literals only; compilation waits on a cheap hint scan.
+fn bash_idiom_targets(cmd: &str, pre_armed: bool, out: &mut Vec<String>) {
+    if cmd.is_empty() {
+        return;
+    }
+    const HINTS: [&str; 12] = [
+        "open(",
+        ".write_text(",
+        ".write_bytes(",
+        "writeFile",
+        "appendFile",
+        "copyFileSync",
+        "createWriteStream",
+        "File.write",
+        "IO.write",
+        "shutil.",
+        "os.rename",
+        "os.replace",
+    ];
+    if !HINTS.iter().any(|h| cmd.contains(h)) {
+        return;
+    }
+    if !pre_armed {
+        // Interpreter context, token-bounded the way shell_surface bounds its
+        // own runner list: a bare substring would read every command carrying
+        // `sh` inside another word, and a shell runner arms nothing on its
+        // own - shell writes present their operators to the families above.
+        if !INTERPRETER_CTX.is_match(cmd) {
+            return;
+        }
+    }
+    // The quoted alternative lands in group 1, the unquoted token in group 2,
+    // so a quoted capture strips to the bare path.
+    for re in IDIOM_FAMILIES.iter() {
+        for caps in re.captures_iter(cmd) {
+            let Some(m) = caps.get(1).or_else(|| caps.get(2)) else {
+                continue;
+            };
+            let mut frag = m.as_str().to_string();
+            let n = frag.len();
+            if n >= 2
+                && ((frag.starts_with('"') && frag.ends_with('"'))
+                    || (frag.starts_with('\'') && frag.ends_with('\'')))
+            {
+                frag = frag[1..n - 1].to_string();
+            }
+            if !frag.is_empty() {
+                out.push(frag);
+            }
+        }
+    }
+}
+
+/// The contents of regular repo files the command invokes as scripts: an
+/// existing file named directly after an interpreter (python3 tools/gen.py,
+/// node x.js, bash hooks/x.sh). Relative tokens resolve against the payload
+/// cwd, the same resolution the targets use. Reads cap at 256 KiB, name
+/// repo files only, and the contents never print or log: they feed the same
+/// extraction as the command text. Each entry carries whether its
+/// interpreter is a shell runner.
+fn invoked_script_contents(cmd: &str, payload_cwd: &str) -> Vec<(String, bool)> {
+    const INTERPRETERS: [&str; 13] = [
+        "python3", "python", "python2", "node", "nodejs", "deno", "bun", "ruby", "perl", "bash",
+        "sh", "zsh", "source",
+    ];
+    const SHELL_RUNNERS: [&str; 5] = ["bash", "sh", "zsh", "dash", "source"];
+    const SANCTIONED_REGEN_SCRIPTS: [&str; 2] = [
+        "scripts/regen-generated-copies.py",
+        "scripts/generate-skill-bundles.sh",
+    ];
+    const CAP: u64 = 256 * 1024;
+    let mut out = Vec::new();
+    let mut prev = String::new();
+    for raw in cmd
+        .split(|c: char| c.is_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')' | '<' | '>'))
+    {
+        let tok = raw.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+        if tok.is_empty() || tok.starts_with('-') || tok.contains('$') || tok.contains('`') {
+            // A flag or an unresolvable token is never a script name, and it
+            // never stands in for the interpreter its successor pairs against
+            // (`python3 -u x.py`).
+            continue;
+        }
+        let names_script =
+            INTERPRETERS.contains(&prev.as_str()) && (tok.contains('/') || tok.contains('.'));
+        let interpreter = prev.clone();
+        prev = tok.to_string();
+        if !names_script {
+            continue;
+        }
+        let abs = if tok.starts_with('/') {
+            PathBuf::from(tok)
+        } else {
+            if payload_cwd.is_empty() {
+                continue;
+            }
+            PathBuf::from(format!("{}/{}", payload_cwd.trim_end_matches('/'), tok))
+        };
+        let abs = physicalize(&abs);
+        if !abs.is_file() {
+            continue;
+        }
+        let Some(root) = git_root_of(&abs) else {
+            continue;
+        };
+        let Some(rel) = abs
+            .strip_prefix(root.as_str())
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            continue;
+        };
+        if rel.is_empty() || SANCTIONED_REGEN_SCRIPTS.contains(&rel.as_str()) {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&abs) else {
+            continue;
+        };
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        if file.take(CAP).read_to_end(&mut buf).is_err() {
+            continue;
+        }
+        let shell = SHELL_RUNNERS.contains(&interpreter.as_str());
+        out.push((String::from_utf8_lossy(&buf).into_owned(), shell));
+    }
+    out
+}
+
+/// The git toplevel of the nearest existing ancestor of `path`, memoized by
+/// that ancestor directory for one gate invocation. Each target keeps the
+/// per-target resolution the judge has always used, so a write into another
+/// worktree is judged against that worktree's manifest.
+fn git_root_of(path: &Path) -> Option<String> {
+    let mut dir = path
+        .parent()
+        .map(|d| d.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    // The memo keys existing directories, so a parent hit is the answer the
+    // walk would have produced for it; skip the walk's stats in that case.
+    if let Some(hit) = TOPLEVEL_MEMO.with(|memo| memo.borrow_mut().get(&dir).cloned()) {
+        return hit;
+    }
+    while !dir.is_dir() {
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    TOPLEVEL_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if let Some(root) = memo.get(&dir) {
+            return root.clone();
+        }
+        let root = std::process::Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+            match &root {
+                None => eprintln!("write-gate: git rev-parse failed in {}", dir.display()),
+                Some(root) => eprintln!("write-gate: root={root}"),
+            }
+        }
+        memo.insert(dir, root.clone());
+        root
+    })
+}
+
+/// One repo's guard inputs, loaded once per root per call: the parsed
+/// generated-artifacts rows and, lazily, the bundle rows. Before this cache
+/// the manifest re-read, its re-parse, the two bundle file stats and the
+/// bundle parser spawn ran once per target; on a 294-target call that was
+/// 294 reads, 294 parses, up to 294 python spawns. Now each runs at most
+/// once per distinct root.
+struct RepoCache {
+    tsv_rows: Option<Vec<(String, String, String, String)>>,
+    bundle_ready: bool,
+    bundle_rows: Option<Vec<String>>,
+}
+
+/// The generated-artifacts.tsv rows as (glob, source, regen). Comment and
+/// malformed rows skip, exactly as the per-target arm skipped them.
+/// The generated-artifacts.tsv rows as (glob, literal prefix, source, regen).
+/// The prefix is the glob's leading literal run, empty when the glob opens
+/// with a wildcard; a row whose prefix a target lacks cannot match, so the
+/// judge skips it before the glob walk. Comment and malformed rows skip,
+/// exactly as the per-target arm skipped them.
+fn parse_tsv_rows(rows: &str) -> Vec<(String, String, String, String)> {
+    let mut parsed = Vec::new();
+    for line in rows.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let Some(glob) = fields.first() else {
+            continue;
+        };
+        if fields.len() < 3 || glob.is_empty() || glob.starts_with('#') {
+            continue;
+        }
+        let (source, regen) = (fields[1], fields[2]);
+        let prefix: String = glob
+            .chars()
+            .take_while(|c| !matches!(c, '*' | '?' | '[' | '\\'))
+            .collect();
+        parsed.push((
+            glob.to_string(),
+            prefix,
+            source.to_string(),
+            regen.to_string(),
+        ));
+    }
+    parsed
+}
+
+impl RepoCache {
+    fn load(root: &str) -> Self {
+        let tsv_rows = {
+            let manifest = Path::new(root).join("generated-artifacts.tsv");
+            if manifest.is_file() {
+                match std::fs::read_to_string(&manifest) {
+                    Ok(rows) => Some(parse_tsv_rows(&rows)),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+        let bundle_ready = Path::new(root).join("skill-bundles.yaml").is_file()
+            && Path::new(root)
+                .join("scripts/lib/parse-bundle-manifest.py")
+                .is_file();
+        Self {
+            tsv_rows,
+            bundle_ready,
+            bundle_rows: None,
+        }
+    }
+}
+
+/// Per-call caches: one canonical ancestor per distinct walk-stop directory,
+/// one repo's guard inputs per root. Cleared per call with the root memo, so
+/// nothing outlives the payload it served.
+#[derive(Default)]
+struct CallCache {
+    repos: std::collections::HashMap<String, RepoCache>,
+    real_dirs: std::collections::HashMap<PathBuf, PathBuf>,
+}
+
+/// The same walk and canonicalization as physicalize, with the canonical
+/// ancestor cached per distinct stop directory: same-folder targets share
+/// one canonicalize syscall instead of one per target.
+fn physicalize_cached(
+    abs: &Path,
+    real_dirs: &mut std::collections::HashMap<PathBuf, PathBuf>,
+) -> PathBuf {
+    // A cached canonical parent answers a non-directory target with the same
+    // path the walk lands on: parent.exists-in-cache means the walk would
+    // have stopped there and joined the bare name. Existing-directory targets
+    // keep the full walk so a symlinked dir resolves exactly as before.
+    if !abs.is_dir() {
+        if let (Some(parent), Some(name)) = (abs.parent(), abs.file_name()) {
+            if let Some(real) = real_dirs.get(parent) {
+                return real.join(name);
+            }
+        }
+    }
+    let mut tail = PathBuf::new();
+    let mut dir = abs.to_path_buf();
+    loop {
+        if dir.is_dir() {
+            break;
+        }
+        match (dir.parent(), dir.file_name()) {
+            (Some(parent), Some(name)) if parent != dir => {
+                // Join onto an empty tail with the bare name: `join("")`
+                // appends a separator, and a trailing slash here would
+                // survive into every comparison downstream (exists(), the
+                // depth checks) and flip them.
+                if tail.as_os_str().is_empty() {
+                    tail = PathBuf::from(name);
+                } else {
+                    tail = Path::new(name).join(tail);
+                }
+                dir = parent.to_path_buf();
+            }
+            _ => break,
+        }
+    }
+    let real = match real_dirs.get(&dir) {
+        Some(r) => r.clone(),
+        None => {
+            let r = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+            real_dirs.insert(dir.clone(), r.clone());
+            r
+        }
+    };
+    // `join("")` appends a trailing separator, which would break every
+    // equality and depth comparison downstream; an empty tail returns the
+    // canonical ancestor as-is.
+    if tail.as_os_str().is_empty() {
+        real
+    } else {
+        real.join(tail)
+    }
+}
+
 fn generated_section(p: &Payload, _cwd: &Path) -> Sec {
-    let targets = write_targets(&p.file_path, &p.command);
-    trace_gen(&format!("targets={targets:?}"));
+    let mut targets = write_targets(&p.file_path, &p.command);
+    // A script's own file I/O never presents a shell write operator; the
+    // contents of script files the command invokes join the scanned surface,
+    // their interpreter known from the invocation: shell runners feed the
+    // operator families, code interpreters arm the write-call idioms. The
+    // memo clears per call, so no root outlives the payload it served.
+    TOPLEVEL_MEMO.with(|memo| memo.borrow_mut().clear());
+    for (content, shell) in invoked_script_contents(&p.command, &p.cwd) {
+        content_targets_into(&content, shell, &mut targets);
+    }
+    targets.sort_unstable();
+    targets.dedup();
+    if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+        trace_gen(&format!("targets={targets:?}"));
+    }
     if targets.is_empty() {
         return Sec::Allow;
     }
+    let mut cache = CallCache::default();
     for t in &targets {
-        if let Some(reason) = generated_target(t, &p.cwd, &p.command) {
+        if let Some(reason) = generated_target(t, &p.cwd, &p.command, &mut cache) {
             return Sec::Block(reason);
         }
     }
@@ -1103,7 +1533,20 @@ fn trace_gen(msg: &str) {
     }
 }
 
-fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String> {
+// The toplevel memo: keyed by a target's nearest existing ancestor
+// directory, cleared at the top of every gate call, so a root never
+// outlives the payload that resolved it.
+thread_local! {
+    static TOPLEVEL_MEMO: std::cell::RefCell<std::collections::HashMap<PathBuf, Option<String>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn generated_target(
+    t: &str,
+    payload_cwd: &str,
+    command: &str,
+    cache: &mut CallCache,
+) -> Option<String> {
     let abs = if t.starts_with('/') {
         PathBuf::from(t)
     } else {
@@ -1112,11 +1555,60 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
         }
         PathBuf::from(format!("{}/{}", payload_cwd.trim_end_matches('/'), t))
     };
-    let abs = physicalize(&abs);
+    let abs = physicalize_cached(&abs, &mut cache.real_dirs);
     let abs_str = abs.to_string_lossy().into_owned();
 
-    // Installed plugin copies: the path under the installed prefix is the
-    // source-checkout path to edit instead.
+    if let Some(reason) = installed_copy_reason(&abs_str) {
+        return Some(reason);
+    }
+
+    // Repo manifests live at the git toplevel the target sits in. The target
+    // is usually a file that does not exist yet, so walk up to the nearest
+    // existing ancestor before asking git, exactly as the shell guard did.
+    let Some(root) = git_root_of(&abs) else {
+        return None;
+    };
+    let Some(rest) = abs_str
+        .strip_prefix(root.as_str())
+        .and_then(|r| r.strip_prefix('/'))
+    else {
+        return None;
+    };
+    let rel = rest;
+    if std::env::var_os("FNO_GUARD_TRACE").is_some() {
+        trace_gen(&format!("root={root} rel={rel}"));
+    }
+    let repo = cache
+        .repos
+        .entry(root.clone())
+        .or_insert_with(|| RepoCache::load(&root));
+    // The manifest arm can outright allow: the row's whole regen command
+    // passed. Encode the three outcomes rather than fold them into the
+    // bundle arm.
+    match manifest_row_reason(&rel, command, repo.tsv_rows.as_deref()) {
+        Some(verdict) => return verdict,
+        None => {}
+    }
+
+    if (rel.starts_with("skills/") || rel.starts_with("agents/"))
+        && repo.bundle_ready
+        && repo.bundle_rows.is_none()
+    {
+        repo.bundle_rows = Some(load_bundle_rows(&root));
+    }
+    if let Some(rows) = &repo.bundle_rows {
+        if let Some(reason) = bundle_row_reason(&rel, rows) {
+            return Some(reason);
+        }
+    }
+    None
+}
+
+/// Installed plugin copies: the path under the installed prefix names the
+/// source-checkout path to edit instead. The marketplace dir is "fno",
+/// "fno-dev" for the local stage, or a "footnote" name on an install made
+/// before the rename.
+fn installed_copy_reason(abs_str: &str) -> Option<String> {
     let plugin_msg = |inner: String| {
         format!(
             "{abs_str} is the installed plugin copy. `fno doctor update` restages it from the footnote source checkout and discards this edit. Edit {inner} in a feature worktree of the source checkout, then run `fno doctor update`."
@@ -1127,8 +1619,6 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
             return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
         }
     }
-    // The marketplace dir is "fno", "fno-dev" for the local stage, or a
-    // "footnote" name on an install made before the rename.
     for prefix in [
         "/plugins/cache/fno/fno/",
         "/plugins/cache/fno-dev/fno/",
@@ -1140,107 +1630,64 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
             return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
         }
     }
+    None
+}
 
-    // Repo manifests live at the git toplevel the target sits in. The target
-    // is usually a file that does not exist yet, so walk up to the nearest
-    // existing ancestor before asking git, exactly as the shell guard did.
-    let mut dir = abs
-        .parent()
-        .map(|d| d.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from("/"));
-    while !dir.is_dir() {
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent.to_path_buf(),
-            _ => break,
+/// One judged target against the parsed manifest rows. None: no row matched,
+/// keep judging. Some(None): the row's whole regen passed, allow outright.
+/// Some(Some(reason)): refuse with the reason.
+fn manifest_row_reason(
+    rel: &str,
+    command: &str,
+    rows: Option<&[(String, String, String, String)]>,
+) -> Option<Option<String>> {
+    let rows = rows?;
+    for (glob, prefix, source, regen) in rows {
+        // A literal leading run the target lacks rules the row out before
+        // the glob walk; a match would have to start with it.
+        if !prefix.is_empty() && !rel.starts_with(prefix.as_str()) {
+            continue;
+        }
+        if bash_glob_match(glob, rel) {
+            if runs_the_regen(command, regen) {
+                return Some(None);
+            }
+            let mut message = format!(
+                "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
+            );
+            // The plain-copy .rs twins, the verbatim .toml mirrors
+            // and the events_schema.json projection also rebuild
+            // without a compile, so a session under a build freeze
+            // can still regen-and-commit a drifted copy.
+            if (rel.ends_with(".rs") || rel.ends_with(".toml") || rel.ends_with(".json"))
+                && regen.contains("cargo build --manifest-path crates/fno-agent")
+            {
+                message.push_str(" Without a build: python3 scripts/regen-generated-copies.py.");
+            }
+            return Some(Some(message));
         }
     }
-    let out = match std::process::Command::new("git")
-        .args(["-C", &dir.to_string_lossy(), "rev-parse", "--show-toplevel"])
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            trace_gen(&format!("git spawn failed for {}: {e}", dir.display()));
-            return None;
-        }
-    };
-    if !out.status.success() {
-        trace_gen(&format!(
-            "git rev-parse failed in {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-        return None;
-    }
-    let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if root.is_empty() {
-        return None;
-    }
-    let prefix = format!("{root}/");
-    if !abs_str.starts_with(&prefix) {
-        return None;
-    }
-    let rel = abs_str[prefix.len()..].to_string();
-    trace_gen(&format!("root={root} rel={rel}"));
+    None
+}
 
-    // generated-artifacts.tsv rows: tab-separated glob, source, regen.
-    let manifest = Path::new(&root).join("generated-artifacts.tsv");
-    if manifest.is_file() {
-        if let Ok(rows) = std::fs::read_to_string(&manifest) {
-            for line in rows.lines() {
-                let fields: Vec<&str> = line.split('\t').collect();
-                if fields.len() < 3 || fields[0].is_empty() || fields[0].starts_with('#') {
-                    continue;
-                }
-                if bash_glob_match(fields[0], &rel) {
-                    let (source, regen) = (fields[1], fields[2]);
-                    if runs_the_regen(command, regen) {
-                        return None;
-                    }
-                    let mut message = format!(
-                        "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
-                    );
-                    // The plain-copy .rs twins, the verbatim .toml mirrors
-                    // and the events_schema.json projection also rebuild
-                    // without a compile, so a session under a build freeze
-                    // can still regen-and-commit a drifted copy.
-                    if (rel.ends_with(".rs") || rel.ends_with(".toml") || rel.ends_with(".json"))
-                        && regen.contains("cargo build --manifest-path crates/fno-agent")
-                    {
-                        message.push_str(
-                            " Without a build: python3 scripts/regen-generated-copies.py.",
-                        );
-                    }
-                    return Some(message);
-                }
-            }
+/// One judged target against the cached bundle rows: a bundled copy keeps
+/// its tail under skills/<name>/.
+fn bundle_row_reason(rel: &str, rows: &[String]) -> Option<String> {
+    for row in rows {
+        let fields: Vec<&str> = row.split('\t').collect();
+        if fields.len() < 4 || fields[0].is_empty() {
+            continue;
         }
-    }
-
-    // Bundle copies: rows from skill-bundles.yaml via the shipped parser.
-    if (rel.starts_with("skills/") || rel.starts_with("agents/"))
-        && Path::new(&root).join("skill-bundles.yaml").is_file()
-        && Path::new(&root)
-            .join("scripts/lib/parse-bundle-manifest.py")
-            .is_file()
-    {
-        let rows = load_bundle_rows(&root);
-        for row in &rows {
-            let fields: Vec<&str> = row.split('\t').collect();
-            if fields.len() < 4 || fields[0].is_empty() {
-                continue;
-            }
-            let out_path = if fields[0].starts_with("pack-") {
-                fields[3].to_string()
-            } else {
-                format!("skills/{}/{}", fields[1], fields[3])
-            };
-            if rel == out_path || rel.starts_with(&format!("{out_path}/")) {
-                let src = format!("{}{}", fields[2], &rel[out_path.len()..]);
-                return Some(format!(
-                    "{rel} is a bundled copy of {src} (skill-bundles.yaml). The next `bash scripts/generate-skill-bundles.sh` run overwrites an edit here. Edit {src}, then run `bash scripts/generate-skill-bundles.sh`."
-                ));
-            }
+        let out_path = if fields[0].starts_with("pack-") {
+            fields[3].to_string()
+        } else {
+            format!("skills/{}/{}", fields[1], fields[3])
+        };
+        if rel == out_path || rel.starts_with(&format!("{out_path}/")) {
+            let src = format!("{}{}", fields[2], &rel[out_path.len()..]);
+            return Some(format!(
+                "{rel} is a bundled copy of {src} (skill-bundles.yaml). The next `bash scripts/generate-skill-bundles.sh` run overwrites an edit here. Edit {src}, then run `bash scripts/generate-skill-bundles.sh`."
+            ));
         }
     }
     None
@@ -1549,8 +1996,164 @@ mod tests {
             .join("fno-state/install/plugin-stage/fno/hooks/stop.sh")
             .to_string_lossy()
             .into_owned();
-        let reason = generated_target(&path, "", "").expect("installed stage edits refuse");
+        let reason = generated_target(&path, "", "", &mut CallCache::default())
+            .expect("installed stage edits refuse");
         assert!(reason.contains("installed plugin copy"), "{reason}");
         assert!(reason.contains("hooks/stop.sh"), "{reason}");
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("crates/fno-agent sits two levels under the repo root")
+            .to_path_buf()
+    }
+
+    fn generated_judge(root: &Path) -> impl Fn(&str) -> Sec + '_ {
+        let root_s = root.to_string_lossy().into_owned();
+        move |cmd: &str| {
+            let p = Payload {
+                raw: String::new(),
+                tool: "Bash".to_string(),
+                file_path: String::new(),
+                command: cmd.to_string(),
+                cwd: root_s.clone(),
+                session_id: String::new(),
+                fp_norm: norm(""),
+                cmd_norm: norm(cmd),
+            };
+            generated_section(&p, root)
+        }
+    }
+
+    fn synthetic_repo() -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "fno-gwg-repo-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("docs")).unwrap();
+        std::fs::write(
+            dir.join("generated-artifacts.tsv"),
+            "docs/gen.md\tdocs/gen.src\tmake gen\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("docs/gen.md"), "original\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["-C", dir.to_string_lossy().as_ref(), "init", "-q"])
+            .status();
+        dir
+    }
+
+    #[test]
+    fn interpreter_write_calls_refuse_and_reads_and_regens_pass() {
+        let root = repo_root();
+        let judge = generated_judge(&root);
+        // Refuse arms: interpreter write calls pair the call with the path
+        // operand, inline and through a heredoc body.
+        for cmd in [
+            "python3 -c \"open('docs/configuration-guide.md','w').write('x')\"",
+            "python3 -c \"from pathlib import Path; Path('docs/configuration-guide.md').write_text('x')\"",
+            "node -e \"require('fs').writeFileSync('docs/configuration-guide.md','x')\"",
+            "python3 -c \"open(f'docs/configuration-guide.md','w').write('x')\"",
+            "python3 - <<'EOF'\nopen('docs/configuration-guide.md','w').write('x')\nEOF",
+        ] {
+            match judge(cmd) {
+                Sec::Block(reason) => {
+                    assert!(
+                        reason.contains("crates/fno/config_schema.json"),
+                        "{cmd}: {reason}"
+                    );
+                    assert!(
+                        reason.contains("fno config schema --markdown --write"),
+                        "{cmd}: {reason}"
+                    );
+                }
+                _ => panic!("must refuse: {cmd}"),
+            }
+        }
+        // Admit arms: a read, a bare mention, command text that merely carries
+        // a write-call literal with no interpreter running, the row regen, and
+        // a regen that redirects into its own target.
+        for cmd in [
+            "python3 -c \"print(open('docs/configuration-guide.md').read())\"",
+            "echo docs/configuration-guide.md",
+            "rg generated docs/configuration-guide.md",
+            "rg \"open('docs/configuration-guide.md', 'w')\" scripts/x.py",
+            "bash -c \"echo open('docs/configuration-guide.md','w')\"",
+            "fno config schema --markdown --write",
+            "cargo run --manifest-path crates/fno-agent/Cargo.toml --bin fno-agent -- loops table --markdown > docs/loops.md",
+        ] {
+            assert!(matches!(judge(cmd), Sec::Allow), "must allow: {cmd}");
+        }
+    }
+
+    #[test]
+    fn invoked_script_contents_join_the_scan_and_chained_regens_refuse() {
+        let repo = synthetic_repo();
+        let judge = generated_judge(&repo);
+        // A repo script whose body writes the copy through open() is judged
+        // on its contents.
+        let tools = repo.join("tools");
+        std::fs::create_dir_all(&tools).unwrap();
+        let script = tools.join("gen.py");
+        std::fs::write(&script, "open('docs/gen.md','w').write('x')\n").unwrap();
+        match judge("python3 tools/gen.py") {
+            Sec::Block(reason) => {
+                assert!(reason.contains("docs/gen.src"), "{reason}");
+                assert!(reason.contains("make gen"), "{reason}");
+            }
+            _ => panic!("script contents must refuse"),
+        }
+        // A read by an inline script and a bare mention stay allowed.
+        assert!(matches!(
+            judge("python3 -c \"print(open('docs/gen.md').read())\""),
+            Sec::Allow
+        ));
+        assert!(matches!(judge("echo docs/gen.md"), Sec::Allow));
+        // The row regen passes; the same regen chained behind a write does
+        // not: runs_the_regen stays whole-command equality.
+        assert!(matches!(judge("make gen"), Sec::Allow));
+        match judge("make gen; echo x > docs/gen.md") {
+            Sec::Block(reason) => assert!(reason.contains("make gen"), "{reason}"),
+            _ => panic!("a chained regen must refuse"),
+        }
+        // An absolute path into a second repo refuses with the payload cwd at
+        // the first repo's root: the toplevel comes from each target.
+        let repo_b = synthetic_repo();
+        let abs_b = repo_b.join("docs/gen.md").to_string_lossy().into_owned();
+        let cross = format!("python3 -c \"open('{abs_b}','w').write('x')\"");
+        match judge(&cross) {
+            Sec::Block(reason) => assert!(reason.contains("docs/gen.src"), "{reason}"),
+            _ => panic!("a cross-repo absolute write must refuse"),
+        }
+        let _ = std::fs::remove_dir_all(&repo_b);
+        // A bundle copy named by absolute path refuses.
+        let bundle = repo_root()
+            .join("skills/blueprint/scripts/validate-plan.sh")
+            .to_string_lossy()
+            .into_owned();
+        let bundled = format!("python3 -c \"open('{bundle}','w').write('x')\"");
+        match judge(&bundled) {
+            Sec::Block(reason) => assert!(reason.contains("bundled copy"), "{reason}"),
+            _ => panic!("an absolute bundle write must refuse"),
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+        // The sanctioned no-build helper is skipped, since writing every row
+        // is its purpose.
+        let root = repo_root();
+        let real = generated_judge(&root);
+        assert!(matches!(
+            real("python3 scripts/regen-generated-copies.py"),
+            Sec::Allow
+        ));
+        // The bundle regen stays lawful.
+        assert!(matches!(
+            real("bash scripts/generate-skill-bundles.sh"),
+            Sec::Allow
+        ));
     }
 }

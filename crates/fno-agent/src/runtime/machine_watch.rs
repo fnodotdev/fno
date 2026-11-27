@@ -873,12 +873,11 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         ) {
             tracing::warn!(%error, "machine process snapshot failed");
         }
-        // One long-lived sccache server per machine: a server that died under
-        // load is revived within a tick, and the pid change feeds the restart
-        // counter the footprint command reads. The sample's own table answers the
-        // probe, so the tick spends no extra process walk.
+        // One long-lived sccache server per machine. The first opted-in
+        // compile starts it, and the wrapper's client hands it the fleet cache
+        // env. The sample's own table reads its pid, and a change feeds the
+        // restart counter the footprint command reads.
         let sccache_pid = crate::cargo_build_dirs::sccache_row_pid(&sample.procs);
-        crate::cargo_build_dirs::ensure_sccache_server_unless(sccache_pid.is_some());
         observe_sccache_pid(sccache_pid);
         let journal = crate::loop_runtime::Journal::new_raw(
             home.events_jsonl(),

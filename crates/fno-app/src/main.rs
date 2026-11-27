@@ -91,6 +91,11 @@ struct Args {
     /// on a first launch, `no-server` is the offer to start the mux.
     #[arg(long = "shot-first-run", value_enum, hide = true)]
     shot_first_run: Option<ShotFirstRun>,
+    /// Let --shot drive the session: its attach births a workspace with a
+    /// shell, and its keystrokes reach it. Only for a world the caller built
+    /// and tears down; any other shot is an observer.
+    #[arg(long = "shot-own-world", hide = true)]
+    shot_own_world: bool,
 }
 
 /// The --shot-first-run values.
@@ -188,6 +193,7 @@ fn main() {
         };
         Some(fno_app::ShotOptions {
             session: args.session.clone(),
+            own_world: args.shot_own_world,
             chat: args.chat.clone(),
             // A shot pins its own face: the shot path reads no config, so
             // the flag (or the default) decides and a run is repeatable.

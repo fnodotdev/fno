@@ -16,6 +16,7 @@ pub mod broad_kill_guard;
 pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
+pub mod front;
 pub mod gate;
 pub mod git_protection;
 pub mod join_partition_guard;
@@ -56,6 +57,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
+        Some("front") => front::run(args.get(1..).unwrap_or(&[])),
         Some("gate") => gate::run(args.get(1..).unwrap_or(&[])),
         Some("git-protection") => git_protection::run(&args[1..]),
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
@@ -80,7 +82,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, sandbox-guest, sandbox-run, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, worktree-relocation-allow, write-gate or stop"
+                "fno-agent hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, front, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, sandbox-guest, sandbox-run, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
@@ -139,6 +141,12 @@ pub(crate) fn captured(stdin: &str, entry: impl FnOnce() -> i32) -> (i32, String
     (code, out)
 }
 
+/// Whether a gate or front is capturing this thread's answer: the caller is
+/// claude's in-process front, so a block rides stdout JSON.
+pub(crate) fn capturing() -> bool {
+    GATE_IO.with(|io| io.borrow().is_some())
+}
+
 /// Print one hook answer line, or hand it to the gate capturing this guard.
 pub(crate) fn emit_line(line: &str) {
     let held = GATE_IO.with(|io| {
@@ -178,12 +186,30 @@ pub(crate) fn emit_guard_decision(cwd: &Path, guard: &str, tool: &str, denied: b
 /// (the harness prompted the person) or `override` (the person approved an
 /// ask and the call ran).
 pub(crate) fn emit_guard_row(cwd: &Path, guard: &str, tool: &str, decision: &str) {
+    emit_guard_row_reason(cwd, guard, tool, decision, "");
+}
+
+/// The row with a decision and the reason a later reader classifies the
+/// call by. An empty reason keeps the old three-key shape, so existing
+/// guards' rows stay byte-identical.
+pub(crate) fn emit_guard_row_reason(
+    cwd: &Path,
+    guard: &str,
+    tool: &str,
+    decision: &str,
+    reason: &str,
+) {
     let path =
         crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
+    let data = if reason.is_empty() {
+        json!({"guard": guard, "decision": decision, "tool": tool})
+    } else {
+        json!({"guard": guard, "decision": decision, "tool": tool, "reason": reason})
+    };
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
         "type": "guard_decision",
-        "data": {"guard": guard, "decision": decision, "tool": tool},
+        "data": data,
         "source": "hook"
     });
     let deferred = GUARD_ROWS.with(|rows| match rows.borrow_mut().as_mut() {

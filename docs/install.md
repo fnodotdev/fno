@@ -46,7 +46,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the Rust binaries: the `fno` front door and the three `fno-agent` binaries. The macOS tarball also carries `fno-app`, so `fno mux app` resolves it on a fresh install. At the end of an install from a real terminal, the setup wizard opens. The installer hands it the terminal through `/dev/tty`, because the script's own stdin is the install pipe. Ctrl-C skips the wizard, and the install still succeeds. The next bare `fno` then offers the wizard again. An agent install (`sh -s -- --yes`, or `FNO_YES`/`FNO_NO_WIRE` set) and CI keep the non-interactive setup. A wizard that already finished or was skipped never runs twice. Its marker at `~/.fno/sidecar/wizard-done` proves it. The first bare `fno` after a Homebrew or `--yes` install is where a person answers the questions. After that, bare `fno` opens the mux straight away. On macOS, `brew install fnodotdev/fno/fno` installs the same tarball. The formula refuses Linux. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It is frozen at 0.4.8: PyPI no longer takes new releases. An update moves the wheel install to the tarball install. The crates `fno`, `fno-agent` and `fno-proto` on crates.io hold only the 0.0.0 name reservation, so `cargo install fno fno-agent` does not install fno yet. To build from source, clone the repo and run `cargo install --path crates/fno` and `cargo install --path crates/fno-agent`. They put the front door and the three `fno-agent` binaries into the cargo bin dir with your Rust toolchain.
+`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the Rust binaries: the `fno` front door and the three `fno-agent` binaries. The macOS tarball also carries `fno-app`, so `fno mux app` resolves it on a fresh install. At the end of an install from a real terminal, the setup wizard opens. The installer hands it the terminal through `/dev/tty`, because the script's own stdin is the install pipe. Ctrl-C skips the wizard, and the install still succeeds. The next bare `fno` then offers the wizard again. An agent install (`sh -s -- --yes`, or `FNO_YES`/`FNO_NO_WIRE` set) and CI keep the non-interactive setup. A wizard that already finished or was skipped never runs twice. Its marker at `~/.fno/db/sidecar/wizard-done` proves it. The first bare `fno` after a Homebrew or `--yes` install is where a person answers the questions. After that, bare `fno` opens the mux straight away. On macOS, `brew install fnodotdev/fno/fno` installs the same tarball. The formula refuses Linux. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It is frozen at 0.4.8: PyPI no longer takes new releases. An update moves the wheel install to the tarball install. The crates `fno` and `fno-agent` are on crates.io, so `cargo install fno fno-agent` installs them. To build from source instead, clone the repo and run `cargo install --path crates/fno` and `cargo install --path crates/fno-agent`. They put the front door and the three `fno-agent` binaries into the cargo bin dir with your Rust toolchain.
 
 ### Local clone
 
@@ -136,7 +136,7 @@ These are real keys in `config.toml`. Run `fno config get <key>` to read any of 
 | `config.review.external_reviewers` | Which reviewer(s) `pr check` waits on (e.g. `gemini`, `codex`) | `[]` |
 | `config.auto_merge.enabled` | Let `target` merge a PR itself once review passes | `false` |
 | `config.target.defaults.max_iterations` | How many times `target` retries before stopping | `40` |
-| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`); unset falls back to `ab-` | none |
+| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`); unset defaults to `x` | `x` |
 | `config.obsidian.enabled` + `.vault` | Store plans and design docs in an Obsidian vault | `false` |
 | `config.project.vision` | One line: what this codebase is and why (project-scoped) | none |
 
@@ -160,7 +160,7 @@ On the new machine, pick the join that fits who is present:
 | A person, in a session | `/fno:setup join fno-profile.toml` |
 | A script, no person | `fno config setup run --yes --only join --join fno-profile.toml` |
 
-The join prints the diff first, then applies. The previous global config is backed up to `~/.fno/sidecar/setup-backup/`. Later, `fno config setup run --check --json` shows how the machine has drifted, each row with its fix.
+The join prints the diff first, then applies. The previous global config is backed up to `~/.fno/db/sidecar/setup-backup/`. Later, `fno config setup run --check --json` shows how the machine has drifted, each row with its fix.
 
 What travels is decided per key, once, by `classify` in `crates/fno/src/setup/setup_profile.rs`:
 

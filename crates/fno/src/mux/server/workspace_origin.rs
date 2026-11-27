@@ -42,6 +42,7 @@ impl Core {
         vp: Rect,
         name: &str,
         origin: Option<String>,
+        project: Option<String>,
     ) -> Flow {
         let name = name.trim();
         if name.is_empty() {
@@ -96,6 +97,11 @@ impl Core {
                 focus: pid,
             },
         );
+        if let Some(sq) = self.session.squad_mut(sid) {
+            sq.project = project
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty());
+        }
         // Track + persist the new (empty-membership) workspace so it restores
         // next session even before any recruit.
         self.squad_members.insert(sid, Vec::new());

@@ -13,9 +13,10 @@ use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 
 /// The commands the native surface serves. The old `fno inbox law` spelling
-/// forwards here instead of holding its own write path.
+/// forwards here instead of holding its own write door.
 pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
     "set", "stage", "match", "retract", "restore", "renew", "history", "recheck", "upkeep",
+    "rescope", "archive",
 ];
 
 /// Classify `fno inbox decisions <action> ...` for the front door:
@@ -80,7 +81,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox decisions set <subject> [decision] --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox decisions stage | fno inbox decisions match (one JSON request on stdin) | fno inbox decisions retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox decisions restore <decision-id> | fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD | fno inbox decisions history <subject-or-id>"
+            "usage: fno inbox decisions set <subject> [decision] --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox decisions stage | fno inbox decisions match (one JSON request on stdin) | fno inbox decisions retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox decisions restore <decision-id> | fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD | fno inbox decisions history <subject-or-id> | fno inbox decisions rescope <subject-or-id> (--global | --project <slug>) | fno inbox decisions archive [--apply]"
         );
         return 0;
     }
@@ -135,40 +136,33 @@ pub fn run(args: &[OsString]) -> i32 {
             }
             law_exec(&buf, Attended::No)
         }
-        "retract" | "restore" | "renew" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            // Attended: the request rides argv and the worker inherits this
-            // terminal as stdin, so the door's operator proof is the real
-            // tty - the one credential a piped lane can never carry.
-            law_exec(&request, Attended::Yes)
-        }
-        "history" | "recheck" | "upkeep" => {
-            let argv: Vec<String> = rest
-                .iter()
-                .filter_map(|a| a.to_str().map(str::to_owned))
-                .collect();
-            let request = serde_json::json!({
-                "mode": sub,
-                "argv": argv,
-            })
-            .to_string();
-            law_exec(&request, Attended::No)
-        }
+        // Attended: the request rides argv and the worker inherits this
+        // terminal as stdin, so the door's operator proof is the real
+        // tty - the one credential a piped lane can never carry.
+        "retract" | "restore" | "renew" | "rescope" => law_exec_argv(sub, rest, Attended::Yes),
+        "history" | "recheck" | "upkeep" | "archive" => law_exec_argv(sub, rest, Attended::No),
         _ => {
             eprintln!(
-                "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck | upkeep)"
+                "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck | upkeep | rescope | archive)"
             );
             2
         }
     }
+}
+
+/// One argv-shaped ride: collect the command line, shape the request and
+/// hand it to the worker lane. The doors that take a plain argv share it.
+fn law_exec_argv(mode: &str, rest: &[OsString], attended: Attended) -> i32 {
+    let argv: Vec<String> = rest
+        .iter()
+        .filter_map(|a| a.to_str().map(str::to_owned))
+        .collect();
+    let request = serde_json::json!({
+        "mode": mode,
+        "argv": argv,
+    })
+    .to_string();
+    law_exec(&request, attended)
 }
 
 /// A `merge-freeze:` law writes no freeze record, so the merge owner read it
@@ -384,6 +378,14 @@ mod tests {
         );
         assert_eq!(
             classify_inbox_law(&mk(&["inbox", "law", "upkeep"])).map(|r| { r.len() }),
+            Some(1)
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "law", "rescope"])).map(|r| { r.len() }),
+            Some(1)
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "decisions", "archive"])).map(|r| { r.len() }),
             Some(1)
         );
         // Unknown subcommands still fall through to the Python group.

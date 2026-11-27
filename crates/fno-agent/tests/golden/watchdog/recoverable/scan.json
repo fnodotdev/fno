@@ -364,7 +364,8 @@
     "moved_counts": {
       "applied": 0,
       "refused": 5,
-      "deferred": 0
+      "deferred": 0,
+      "skipped": 0
     },
     "deferred_apply": [
       {
@@ -396,7 +397,8 @@
     "deferred_counts": {
       "applied": 0,
       "refused": 0,
-      "deferred": 5
+      "deferred": 5,
+      "skipped": 0
     },
     "applied": [
       {

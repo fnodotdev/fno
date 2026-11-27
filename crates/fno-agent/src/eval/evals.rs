@@ -22,7 +22,7 @@ pub mod tests_mint;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
+            "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | connector-gate | events)"
         );
         return 2;
     };
@@ -43,6 +43,7 @@ pub fn run(args: &[String]) -> i32 {
         "candidates" => crate::evals_candidates::run(rest),
         "drafts" => crate::evals_drafts::run(rest),
         "gate-retry" => crate::evals_gate::retry(rest),
+        "connector-gate" => crate::connector_gate::run(rest),
         "events" => {
             if rest.first().is_some_and(|a| a == "--report") {
                 crate::usage_report::command(rest.get(1..).unwrap_or(&[]))
@@ -56,7 +57,7 @@ pub fn run(args: &[String]) -> i32 {
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
+                "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | connector-gate | events)"
             );
             return 2;
         }
@@ -664,6 +665,13 @@ pub(crate) fn flag_lookup(args: &[String], name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The state root's eval folder (`db/evals`), the one root every eval
+/// writer joins under; the legacy `evals/` reads until it folds. A repo's
+/// own `evals/bank` is a different folder.
+pub(crate) fn state_evals_dir(state: &std::path::Path) -> std::path::PathBuf {
+    crate::state_layout::place(state, "evals")
 }
 
 /// The bank dir: explicit --bank, else <canonical-root>/evals/bank.

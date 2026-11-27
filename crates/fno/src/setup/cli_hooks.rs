@@ -26,6 +26,11 @@ use serde_json::{json, Map, Value};
 
 /// Footnote's SessionStart entry script, relative to the plugin root.
 const SESSION_START_SCRIPT: &str = "hooks/session-start.sh";
+/// The per-harness session-report adapters this door installs. Each harness
+/// reads its own config surface, so each carries its own thin sender (see
+/// hooks/cursor-session-report.sh and hooks/grok-session-report.sh).
+const CURSOR_SCRIPT: &str = "hooks/cursor-session-report.sh";
+const GROK_SCRIPT: &str = "hooks/grok-session-report.sh";
 /// The script Claude's WorktreeRemove hook runs, relative to the plugin root.
 const WORKTREE_REMOVE_SCRIPT: &str = "hooks/worktree-remove.sh";
 /// A file only the plugin ships: its presence proves a directory is the root.
@@ -45,8 +50,10 @@ const AUTO_MODE_RULES: [(&str, &str); 3] = [
 ];
 
 const CLI_HOOKS_USAGE: &str = "usage: fno config setup cli-hooks [--codex/--no-codex] \
-[--gemini/--no-gemini] [--claude/--no-claude] [--codex-config PATH] \
-[--gemini-settings PATH] [--claude-settings PATH] [--repair-only]";
+[--gemini/--no-gemini] [--claude/--no-claude] [--cursor/--no-cursor] \
+[--grok/--no-grok] [--codex-config PATH] [--gemini-settings PATH] \
+[--claude-settings PATH] [--cursor-hooks-json PATH] [--grok-hooks-dir PATH] \
+[--repair-only]";
 const CODEX_USAGE: &str = "usage: fno config setup cli-hooks-codex [--codex-config PATH] \
 [--codex-hooks-json PATH] [--migrate-legacy-hooks-json]";
 
@@ -544,6 +551,113 @@ pub fn install_gemini(command: &str, settings: &Path) -> InstallResult {
     }
 }
 
+/// One cursor hook definition, typed for the dedupe read (R1: deserialize at
+/// the boundary instead of string-keying the tree). Unknown fields ride
+/// through untouched because only the write side rebuilds the tree.
+#[derive(serde::Deserialize)]
+struct CursorHookEntry {
+    #[serde(default)]
+    command: Option<String>,
+}
+
+/// Merge footnote's sessionStart hook into a cursor hooks.json.
+///
+/// cursor's schema (cursor.com/docs/hooks): a `hooks` object keyed by
+/// lowercase event names, each mapping to an array of definitions that carry
+/// `command` directly - no nested `hooks` array, no matcher needed for a
+/// session-level event. Merge-with-backup, idempotent on the script token.
+pub fn install_cursor(command: &str, hooks_json: &Path) -> InstallResult {
+    let mut data = match load_settings(hooks_json) {
+        Ok(d) => d,
+        Err(note) => return InstallResult::refused(hooks_json, &note),
+    };
+    let Some(hooks) = data
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+    else {
+        return InstallResult::refused(hooks_json, "`hooks` is not an object; left unchanged");
+    };
+    let Some(session_start) = child_array(hooks, "sessionStart") else {
+        return InstallResult::refused(
+            hooks_json,
+            "`hooks.sessionStart` is not an array; left unchanged",
+        );
+    };
+    let entries: Vec<CursorHookEntry> =
+        serde_json::from_value(Value::Array(session_start.clone())).unwrap_or_default();
+    let present = entries.iter().any(|e| {
+        e.command
+            .as_deref()
+            .is_some_and(|c| c.ends_with(CURSOR_SCRIPT))
+    });
+    if present {
+        return InstallResult {
+            already_present: true,
+            ..InstallResult::at(hooks_json)
+        };
+    }
+    session_start.push(json!({
+        "command": wrapped_command(command, "cursor"),
+    }));
+    match write_json(hooks_json, &Value::Object(data)) {
+        Ok(backup) => InstallResult {
+            changed: true,
+            backup,
+            ..InstallResult::at(hooks_json)
+        },
+        Err(e) => {
+            InstallResult::refused(hooks_json, &format!("write failed ({e}); left unchanged"))
+        }
+    }
+}
+
+/// Write footnote's SessionStart config into grok's per-file hooks directory.
+///
+/// grok reads every `*.json` under `~/.grok/hooks/` with the claude-compatible
+/// nested schema (xai-org/grok-build custom-hooks.md), and each file is one
+/// standalone config - so this writes its own `fno-session.json` instead of
+/// merging a user file. Idempotent: the file is footnote's own output.
+pub fn install_grok(command: &str, hooks_dir: &Path) -> InstallResult {
+    let path = hooks_dir.join("fno-session.json");
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return InstallResult::refused(&path, &format!("mkdir failed ({e}); left unchanged"));
+        }
+    }
+    let data = json!({
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": wrapped_command(command, "grok"),
+                        }
+                    ]
+                }
+            ]
+        }
+    });
+    if std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|existing| existing == data)
+    {
+        return InstallResult {
+            already_present: true,
+            ..InstallResult::at(&path)
+        };
+    }
+    match write_json(&path, &data) {
+        Ok(_) => InstallResult {
+            changed: true,
+            ..InstallResult::at(&path)
+        },
+        Err(e) => InstallResult::refused(&path, &format!("write failed ({e}); left unchanged")),
+    }
+}
+
 /// The worktree-remove script a WorktreeRemove command runs, by token, so a
 /// quoted path or a trailing argument still matches.
 fn worktree_script(command: &str) -> Option<String> {
@@ -896,10 +1010,14 @@ pub struct Opts {
     pub codex: bool,
     pub gemini: bool,
     pub claude: bool,
+    pub cursor: bool,
+    pub grok: bool,
     pub gemini_settings: Option<PathBuf>,
     pub codex_config: Option<PathBuf>,
     pub codex_hooks_json: Option<PathBuf>,
     pub claude_settings: Option<PathBuf>,
+    pub cursor_hooks_json: Option<PathBuf>,
+    pub grok_hooks_dir: Option<PathBuf>,
     pub migrate_legacy_hooks_json: bool,
     pub repair_only: bool,
 }
@@ -911,10 +1029,14 @@ pub fn parse_opts(tail: &[OsString], codex_only: bool) -> Result<Option<Opts>, S
         codex: true,
         gemini: !codex_only,
         claude: !codex_only,
+        cursor: !codex_only,
+        grok: !codex_only,
         gemini_settings: None,
         codex_config: None,
         codex_hooks_json: None,
         claude_settings: None,
+        cursor_hooks_json: None,
+        grok_hooks_dir: None,
         migrate_legacy_hooks_json: false,
         repair_only: false,
     };
@@ -928,7 +1050,12 @@ pub fn parse_opts(tail: &[OsString], codex_only: bool) -> Result<Option<Opts>, S
         // `--codex=false` must refuse, not read as `--codex`.
         let takes_value = matches!(
             flag,
-            "--codex-config" | "--codex-hooks-json" | "--gemini-settings" | "--claude-settings"
+            "--codex-config"
+                | "--codex-hooks-json"
+                | "--gemini-settings"
+                | "--claude-settings"
+                | "--cursor-hooks-json"
+                | "--grok-hooks-dir"
         );
         if inline.is_some() && !takes_value {
             return Err(format!("{flag} takes no value"));
@@ -953,8 +1080,14 @@ pub fn parse_opts(tail: &[OsString], codex_only: bool) -> Result<Option<Opts>, S
             ("--no-gemini", false) => o.gemini = false,
             ("--claude", false) => o.claude = true,
             ("--no-claude", false) => o.claude = false,
+            ("--cursor", false) => o.cursor = true,
+            ("--no-cursor", false) => o.cursor = false,
+            ("--grok", false) => o.grok = true,
+            ("--no-grok", false) => o.grok = false,
             ("--gemini-settings", false) => o.gemini_settings = Some(value()?),
             ("--claude-settings", false) => o.claude_settings = Some(value()?),
+            ("--cursor-hooks-json", false) => o.cursor_hooks_json = Some(value()?),
+            ("--grok-hooks-dir", false) => o.grok_hooks_dir = Some(value()?),
             ("--repair-only", false) => o.repair_only = true,
             _ => return Err(format!("unknown option: {arg}")),
         }
@@ -1043,6 +1176,67 @@ pub fn run_opts(o: &Opts) -> i32 {
                     "codex: wired SessionStart -> {command} ({shown}{})",
                     bak_suffix(&res.backup)
                 );
+            }
+        }
+    }
+
+    if o.cursor && !o.repair_only {
+        let script = plugin_script(CURSOR_SCRIPT);
+        if !script.is_file() {
+            eprintln!(
+                "cursor: error: could not locate cursor-session-report.sh ({})",
+                script.display()
+            );
+            failed = true;
+        } else {
+            let path = o
+                .cursor_hooks_json
+                .as_deref()
+                .map(expand_tilde)
+                .unwrap_or_else(|| home().join(".cursor/hooks.json"));
+            let res = install_cursor(&script.display().to_string(), &path);
+            any_change |= res.changed;
+            let shown = path.display();
+            if let Some(note) = &res.note {
+                eprintln!("cursor: error: {note} ({shown})");
+                failed = true;
+            } else if res.already_present {
+                println!("cursor: already wired ({shown})");
+            } else {
+                println!(
+                    "cursor: wired sessionStart -> {} ({shown}{})",
+                    script.display(),
+                    bak_suffix(&res.backup)
+                );
+            }
+        }
+    }
+
+    if o.grok && !o.repair_only {
+        let script = plugin_script(GROK_SCRIPT);
+        if !script.is_file() {
+            eprintln!(
+                "grok: error: could not locate grok-session-report.sh ({})",
+                script.display()
+            );
+            failed = true;
+        } else {
+            let dir = o
+                .grok_hooks_dir
+                .as_deref()
+                .map(expand_tilde)
+                .unwrap_or_else(|| home().join(".grok/hooks"));
+            let res = install_grok(&script.display().to_string(), &dir);
+            any_change |= res.changed;
+            let shown_path = dir.join("fno-session.json");
+            let shown = shown_path.display();
+            if let Some(note) = &res.note {
+                eprintln!("grok: error: {note} ({shown})");
+                failed = true;
+            } else if res.already_present {
+                println!("grok: already wired ({shown})");
+            } else {
+                println!("grok: wired SessionStart -> {} ({shown})", script.display());
             }
         }
     }

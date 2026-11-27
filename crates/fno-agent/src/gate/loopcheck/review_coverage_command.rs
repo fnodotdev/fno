@@ -359,6 +359,7 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
         pr.as_deref(),
         prefetched_pr_json,
         inputs.settings.github_approval_satisfies.unwrap_or(true),
+        inputs.human_required,
         inputs.settings.max_rounds.unwrap_or(2).max(1),
         carry_interdiff_lines_resolved(&inputs.settings),
         Some(&resolve_posture_config(&inputs.settings)),

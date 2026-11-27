@@ -204,11 +204,10 @@ fn exact_tier(entries: &[Value], query: &str) -> Option<Vec<Value>> {
             .bytes()
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
     if bare_hex {
-        let mut prefixes = vec![super::settings::node_id_prefix()];
-        prefixes.push("ab-".to_string());
+        let mut prefixes = vec![super::settings::node_id_prefix(), "ab".to_string()];
         prefixes.dedup();
         for p in &prefixes {
-            let cand = format!("{p}{query}");
+            let cand = format!("{p}-{query}");
             if let Some(hit) = entries
                 .iter()
                 .find(|e| e.get("id").and_then(Value::as_str) == Some(cand.as_str()))

@@ -36,6 +36,8 @@ pub fn run_ack(args: &[String]) -> i32 {
         eprintln!("ack: a message id is required");
         return 2;
     };
+    let resolved = crate::numbers::mail_hash(msg_id);
+    let msg_id = resolved.as_str();
     let Some(bus) = crate::mail_paths::state_bus_dir_opt() else {
         eprintln!("error: no fno state directory; bus log not found");
         return 2;

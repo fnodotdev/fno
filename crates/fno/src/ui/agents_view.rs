@@ -51,6 +51,9 @@ pub struct RegistryAgent {
     /// the registry wrote without one. The muse restore pass keys on it so
     /// a headless row never rides the host revive.
     pub substrate: Option<String>,
+    /// A person asked to watch this one-shot (`fno agent spawn --mux`): its
+    /// headless row keeps its sideline place.
+    pub watch: bool,
     /// The one-shot end word (`finished` / `failed` / `failed-to-start`)
     /// on a headless row, verbatim from the registry. The view renders it
     /// as the row's state line, so a finished run reads as ended.
@@ -257,7 +260,7 @@ pub enum Liveness {
 /// drives compatible serves to Drive, and `peek --follow` still reaches its
 /// 2.x serve's `/api/event` stream at runtime through the dispatch in
 /// `peek_one`, which never reads this tier.
-const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
+const PEEK_READER_HARNESSES: [&str; 3] = ["claude", "codex", "footnote"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
 ///
@@ -2307,6 +2310,9 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         // naming `harness`: a pre-v10 row carries the HARNESS under `provider`
         // (the review finding), and reading it as a vendor lane would mount
         // the harness name on the route axis.
+        // The harness key, read once: the vendor fallback is shape-gated on
+        // it, and the row carries it.
+        let harness_key = row.get("harness");
         let route = row
             .get("route")
             .and_then(|v| v.as_str())
@@ -2316,7 +2322,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 // pre-v10 shape: provider WAS the harness axis, so a row with
                 // no `harness` key yields no route rather than mounting the
                 // harness name on the route axis.
-                row.get("harness")?;
+                harness_key?;
                 row.get("provider")
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
@@ -2334,8 +2340,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
         out.push(RegistryAgent {
             name: name.to_string(),
             cwd: cwd.to_string(),
-            harness: row
-                .get("harness")
+            harness: harness_key
                 .or_else(|| row.get("provider"))
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
@@ -2345,6 +2350,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
+            watch: row.get("watch").and_then(|v| v.as_bool()).unwrap_or(false),
             result: row_result_word(row),
             model,
             route,
@@ -3000,6 +3006,7 @@ pub use reader_state::{IsolatedRead, ReaderState};
 // shrink-only under the file-budget gate.
 mod hold_marks;
 
+pub(crate) use hold_marks::hold_dir;
 pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
@@ -3756,11 +3763,16 @@ unheard_of_field = true
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert!(
             names.contains(&"eval-once"),
-            "a headless run paints as its own kind, not dropped"
+            "the reader keeps a headless run, though the sideline shows no row for it"
         );
         let done = rows.iter().find(|r| r.name == "eval-done").unwrap();
         assert!(done.exited);
         assert_eq!(done.result.as_deref(), Some("finished"));
+        // The watch mark rides the same read: a key read wrong hides every
+        // run a person asked to watch.
+        let watched = self::reg(r#"{"name":"w","cwd":"/w","substrate":"headless","watch":true}"#);
+        let watched_rows = derive_rows(&watched, NOW).unwrap();
+        assert!(watched_rows.first().is_some_and(|r| r.watch));
     }
     #[test]
     fn reader_roster_only_change_republishes() {
@@ -4403,6 +4415,7 @@ config_dir = "~/.claude-alt"
         // its transcript still reads, so Follow, never Locate.
         assert_eq!(thread_reach(Some("claude"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("codex"), None), Reach::Follow);
+        assert_eq!(thread_reach(Some("footnote"), None), Reach::Follow);
         // opencode stays Locate on purpose: the portal's serve-attach
         // capability drives compatible serves to Drive from the Locate tier
         // (PEEK_READER_HARNESSES doc), and peek --follow reaches the 2.x
@@ -4446,6 +4459,10 @@ config_dir = "~/.claude-alt"
             // portal's serve-attach capability drives it) and its follow
             // dispatches through peek_one's SSE stream at runtime.
             .filter(|arm| arm != "opencode")
+            .chain(
+                body.contains("agent == \"footnote\"")
+                    .then(|| "footnote".to_string()),
+            )
             .collect();
         let mirror: std::collections::BTreeSet<String> = super::PEEK_READER_HARNESSES
             .into_iter()

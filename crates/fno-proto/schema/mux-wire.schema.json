@@ -2770,6 +2770,12 @@
                     "string",
                     "null"
                   ]
+                },
+                "project": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
@@ -7356,6 +7362,12 @@
           "minimum": 0,
           "type": "integer"
         },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tabs": {
           "items": {
             "$ref": "#/$defs/TabMeta"
@@ -7724,7 +7736,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 135,
+  "proto_version": 136,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

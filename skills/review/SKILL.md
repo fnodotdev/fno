@@ -173,7 +173,7 @@ Adversarial sub-mode: an `adversarial` token anywhere in peer's args swaps the b
 
 The peer review is advisory by default.
 With `--attest`, it validates an explicit structured verdict and satisfies the identity-free `config.review.peers` gate at the current HEAD.
-With legacy `--post`, it posts under a configured peer identity and satisfies that GitHub-login gate.
+With legacy `--post`, it posts under a configured peer identity and satisfies that GitHub-login gate. The attested verdict also stamps `reviewer_context=fresh` (the peer runs in its own cross-model session), so a Reviewed peer attestation satisfies the `independent` posture rung, not only the `peer` component.
 
 ## Step 4: research mode (advisory research-verify panel)
 

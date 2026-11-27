@@ -11747,13 +11747,13 @@ fn probe_bottom_rim_band() {
 //   FNO_UX_SHOTS=/tmp/shots cargo test -p fno ux_shot
 // ---------------------------------------------------------------------
 
-/// A squad whose tabs carry real names, so a strip fixture reads like a
-/// working operator's rather than `1 2 3`.
+/// A squad whose tabs carry real names, not `1 2 3`.
 pub(super) fn named_meta(id: u64, name: &str, tabs: &[&str], active_tab: usize) -> SquadMeta {
     SquadMeta {
         id,
         name: name.into(),
         canonical_cwd: format!("/code/{name}"),
+        project: None,
         tabs: tabs
             .iter()
             .enumerate()

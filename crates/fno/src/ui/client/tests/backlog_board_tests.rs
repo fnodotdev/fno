@@ -664,6 +664,7 @@ fn sideline_backlog_view() -> View {
                 id: 1,
                 name: "main".into(),
                 canonical_cwd: "/code/main".into(),
+                project: None,
                 tabs: vec![TabMeta {
                     id: 0,
                     name: "0".into(),

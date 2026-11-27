@@ -315,7 +315,7 @@ use settings::{
     PeerEntry,
 };
 pub(crate) use settings::{
-    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, ReviewHuman, Settings,
 };
 #[cfg(test)]
 use settings::{MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
@@ -1664,8 +1664,15 @@ pub(crate) fn decide_with_payload(
         // (gemini/agy) stays unfloored: the floor would demand an attestation no
         // command there produces, wedging the loop; route 3 (a spawned reviewer) is
         // those harnesses' path and is deferred.
-        let floor_applies =
-            self_review_floor_applies(author_harness.as_deref(), inputs.author_harness_pinned_none);
+        // A sandbox has no attest op, so a floor there would wedge the loop;
+        // its review comes from outside, and `review_required` below stays
+        // true so a green PR ends DoneUnreviewed, never DonePRGreen.
+        let sandboxed = crate::sandbox::origin().is_some();
+        let floor_applies = !sandboxed
+            && self_review_floor_applies(
+                author_harness.as_deref(),
+                inputs.author_harness_pinned_none,
+            );
         // The manifest node's own PR pins the terminal read (merged, deleted
         // and detached heads stay readable); an absent node or PR keeps the
         // branch-resolved read exactly as before. The chosen row's url also
@@ -1694,7 +1701,7 @@ pub(crate) fn decide_with_payload(
         // install that opts out (self_review_required=false AND no lane, or a
         // harness with no self-review command) has zero coverage as its configured
         // state, not a defect - those green PRs still reach DonePRGreen.
-        let review_required = lane_configured || self_review_floor.is_some();
+        let review_required = lane_configured || self_review_floor.is_some() || sandboxed;
 
         // Run done() for code units
         let done_gh_bin = if intent == Intent::Promise {
@@ -1723,6 +1730,7 @@ pub(crate) fn decide_with_payload(
             &repo_slug,
             manifest.harness_session_id.as_deref(),
             settings.github_approval_satisfies.unwrap_or(true),
+            ReviewHuman::owed(settings.human),
             settings.max_rounds.unwrap_or(2).max(1),
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
@@ -2983,6 +2991,10 @@ fn run_done(
     repo_slug: &str,
     author_session: Option<&str>,
     github_approval_satisfies: bool,
+    // config.review.human = always: a person's GitHub approval is owed at the
+    // head, so the loop's reviewed conjunct ANDs the satisfier and the
+    // external review read stays on even with no login lane configured.
+    human_required: bool,
     max_rounds: i64,
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
@@ -3022,6 +3034,7 @@ fn run_done(
             selector,
             None,
             github_approval_satisfies,
+            human_required,
             max_rounds,
             carry_interdiff_lines,
             posture,

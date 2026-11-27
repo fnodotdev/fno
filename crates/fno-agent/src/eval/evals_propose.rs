@@ -751,9 +751,11 @@ pub(crate) fn tick(
 pub(crate) type Opener<'a> =
     &'a dyn Fn(&str, &str, &str, &[(std::path::PathBuf, Vec<u8>)]) -> Result<String, ProposeError>;
 
-/// The state-side ledger path: `<state>/evals/propose/ledger.jsonl`.
+/// The state-side ledger path: `<state>/db/evals/propose/ledger.jsonl`.
 pub(crate) fn ledger_path(state: &std::path::Path) -> std::path::PathBuf {
-    state.join("evals").join("propose").join("ledger.jsonl")
+    crate::evals::state_evals_dir(state)
+        .join("propose")
+        .join("ledger.jsonl")
 }
 
 /// One ledger row per cluster, shipped or not (change 4). Appends one

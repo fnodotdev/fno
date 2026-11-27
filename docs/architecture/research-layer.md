@@ -25,7 +25,7 @@ Because the backbone **self-fetches**, provenance is clean from round one: the a
 
 ## The evidence store: `sources.jsonl`
 
-One JSON line per source at `~/.fno/notes/research/<slug>.sources.jsonl`. The schema is the Group-2 eval's contract:
+One JSON line per source at `~/.fno/db/notes/research/<slug>.sources.jsonl`. The schema is the Group-2 eval's contract:
 
 ```json
 {"url": "...", "fetched_at": "ISO-8601", "hash": "sha256", "extract": "text...", "verified": true, "reason": ""}
@@ -59,7 +59,7 @@ Group 1 leaves a cache `sources.jsonl`. Group 2 turns it into a *deliverable* an
 By default `fno do research "X"` now ships, after retrieval, a `doc`:
 
 ```
-~/.fno/notes/research/<slug>.sources.jsonl   (cache, Group 1)
+~/.fno/db/notes/research/<slug>.sources.jsonl   (cache, Group 1)
         │  ship step (crates/fno-agent/src/eval/research/deliverable.rs)
         ▼
 <output_dir>/<slug>.md               (the brief)

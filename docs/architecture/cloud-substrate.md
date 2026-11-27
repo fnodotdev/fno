@@ -20,7 +20,7 @@ Attach is teleport: `fno agent attach <name>` on a cloud row measures the pre-ch
 
 - **GitHub-only push-back.** The cloud session pushes work as git branches on the repo's GitHub remote; other remotes are the session's own problem, not a lane feature.
 - **No state-root access.** The worker has no access to fno's state root; `state_root_grant.cloud = "remote-unreachable"` is the contract's stamp, and spawn-time state-root questions refuse.
-- **No loop participation.** A cloud row never enters the target loop: its stop hook does not exist locally, so `loop-check` never reads it.
+- **No loop participation.** A cloud row never enters the target loop. Its stop hook does not exist locally, so `loop-check` never reads it. To run a target worker on a machine you control, set `sandbox.host` ([sandbox host](sandbox-host.md#your-own-vm)). That sandboxed worker joins the loop.
 - **Plan-limit drain.** Each parallel cloud session drains the account's plan usage independently of local seats; the create form carries the description only, so model, effort and permission axes refuse by name.
 - **Teleport needs a pushed branch and a clean tree.** Both are pre-checked or left to the CLI's own refusal, which the attach command surfaces.
 

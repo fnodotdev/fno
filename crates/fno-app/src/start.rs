@@ -470,6 +470,7 @@ mod tests {
             id,
             name: base_name(cwd),
             canonical_cwd: cwd.to_string(),
+            project: None,
             tabs: Vec::new(),
             active_tab: 0,
             panes: 0,

@@ -103,10 +103,12 @@ pub(crate) fn prepare_mint(
     if native && retired_session(home, harness, session_id, record) {
         return None;
     }
-    // A hand session gets a row only once it joined fno (its first fno skill
-    // or command), unless `agents.auto_register_sessions` opts every session in.
+    // A hand session gets a row only when its join cause is a law trigger
+    // (user law D2402: a /fno: skill other than using-fno, a prompt naming
+    // one, /fno:fno-me, or spawn birth), unless `agents.auto_register_sessions`
+    // opts every session in.
     if !native
-        && !crate::join_marker::is_joined(home.root(), harness, session_id)
+        && crate::join_marker::adoption_trigger(home.root(), harness, session_id).is_none()
         && !auto_register_sessions(report_cwd)
     {
         return None;
@@ -290,10 +292,10 @@ pub(crate) fn bind_fork_child(
         e.session_id = Some(child.to_string());
     }
     e.short_id = crate::client_commands::derived_short_id(child);
-    if pid.is_some() {
-        e.pid = pid;
-        e.pid_start_time = None;
-    }
+    // The parent's pid names the process this row replaces: a child with no
+    // known pid leaves none rather than a dead one.
+    e.pid = pid;
+    e.pid_start_time = None;
     Some(i)
 }
 
@@ -336,6 +338,7 @@ mod tests {
         worker.name = "fno-books-eval5".into();
         worker.harness = Some("claude".into());
         worker.node = Some("fb-e47c".into());
+        worker.role_scope = Some("fnh".into());
         worker.short_id = "3feca5b6".into();
         worker.claude_session_uuid = Some(PARENT.into());
         let mut entries = vec![worker];
@@ -353,15 +356,92 @@ mod tests {
         assert_eq!(row.short_id, "8789fe29");
         assert_eq!(row.pid, Some(1600));
         assert_eq!(row.predecessor_session_ids, vec![PARENT.to_string()]);
+        assert_eq!(row.role_scope.as_deref(), Some("fnh"));
         assert!(crate::session_report::find_row(&entries, "claude", CHILD, None).is_some());
         assert!(crate::session_report::find_row(&entries, "claude", PARENT, None).is_none());
         assert!(superseded(&entries, PARENT));
         assert!(!superseded(&entries, CHILD));
 
         // A fork of a session no row holds binds nothing: the caller mints.
+        // A launch record's resume link binds the same way with no pid, and
+        // a row in the same cwd that does not hold the named id stays put.
         assert_eq!(
             bind_fork_child(&mut entries, "unheld-parent", "c-2", None),
             None
         );
+        assert_eq!(bind_fork_child(&mut entries, CHILD, "c-3", None), Some(0));
+        let moved = entries.first().expect("one row");
+        assert_eq!(moved.role_scope.as_deref(), Some("fnh"));
+        assert_eq!(moved.harness_session_id.as_deref(), Some("c-3"));
+    }
+
+    /// A report no launch record names carries its own substrate word, and
+    /// keeps only the one-shot word: a print run typed by hand reports
+    /// headless, and any other word would relabel an interactive session.
+    #[test]
+    fn a_record_less_report_keeps_only_the_headless_word() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path());
+        crate::state::update_registry(&home.registry_json(), |_| {}).unwrap();
+        crate::join_marker::write_marker(home.root(), "claude", CHILD, "skill:review").unwrap();
+        let minted = |word: Option<&str>| {
+            prepare_mint(
+                &home,
+                "claude",
+                CHILD,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("/w"),
+                word,
+            )
+            .map(|mint| (mint.native, mint.entry.substrate, mint.entry.origin))
+        };
+
+        let operator = Some("operator".to_string());
+        assert_eq!(
+            minted(Some("headless")),
+            Some((false, Some("headless".to_string()), operator.clone()))
+        );
+        for other in [None, Some("thread")] {
+            assert_eq!(
+                minted(other),
+                Some((false, None, operator.clone())),
+                "{other:?}"
+            );
+        }
+    }
+
+    /// A report mint for a hand session needs a law trigger (user law D2402):
+    /// no marker and a bare `command` marker both refuse; a skill marker
+    /// mints with origin operator.
+    #[test]
+    fn a_report_mint_adopts_only_on_a_law_trigger() {
+        let _root = crate::paths::DeclaredRoot::declare("native-adopt-law");
+        let home = crate::paths::AgentsHome::from_env();
+        std::fs::create_dir_all(home.root()).unwrap();
+        crate::state::update_registry(&home.registry_json(), |registry| {
+            registry.entries.clear();
+        })
+        .unwrap();
+        let sid = "d4e5f6a7-1111-2222-3333-444455556666";
+        let mint_call = |sid: &str| {
+            prepare_mint(
+                &home, "claude", sid, None, None, None, None, None, None, None,
+            )
+        };
+
+        // Refuse arms: no marker, then a bare `command` marker.
+        assert!(mint_call(sid).is_none(), "no marker refuses");
+        crate::join_marker::write_marker(home.root(), "claude", sid, "command").unwrap();
+        assert!(mint_call(sid).is_none(), "a command marker refuses");
+
+        // Admit arm: a skill trigger mints with origin operator.
+        crate::join_marker::write_marker(home.root(), "claude", sid, "skill:review").unwrap();
+        let mint = mint_call(sid).expect("a law trigger mints");
+        assert!(!mint.native);
+        assert_eq!(mint.entry.origin.as_deref(), Some("operator"));
     }
 }
