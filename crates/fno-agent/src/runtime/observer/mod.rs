@@ -14,7 +14,7 @@ mod digest;
 mod fold;
 mod isolation;
 
-pub(crate) use fold::SKILL_USE_MARKER;
+pub(crate) use fold::{default_read_transcript, extract_skill_runs};
 
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
