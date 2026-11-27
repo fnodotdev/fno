@@ -20,10 +20,11 @@ use std::time::{Duration, Instant};
 use gpui::{px, Bounds, ListAlignment, ListState, Pixels};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
-use super::window::Root;
+use super::link::Layout;
+use super::window::{MainView, Root};
 use fno::chat_events::{tail_sync, ChatReadError, ChatTail};
 use fno::proto::chat_event::{ChatEvent, SessionKey};
-use fno::proto::ProtoError;
+use fno::proto::{AgentRow, ProtoError};
 pub use model::Conversation;
 pub(super) use view::render;
 
@@ -103,6 +104,28 @@ pub fn open(
             let _ = tx.send(Msg::Ended);
         })?;
     Ok((Stream { closer }, rx))
+}
+
+/// The agent row the window is about. Chat names the row whose session
+/// `chat` streams, which a pin can set apart from the focused pane; Chat
+/// with no stream and Terminal name the focused pane's row; other views
+/// name none.
+pub fn focused_agent<'a>(
+    layout: &'a Layout,
+    view: MainView,
+    chat: Option<&str>,
+) -> Option<&'a AgentRow> {
+    match (view, chat) {
+        (MainView::Chat, Some(sid)) => layout
+            .agents
+            .iter()
+            .find(|a| a.harness_session_id.as_deref() == Some(sid)),
+        (MainView::Chat | MainView::Terminal, _) => layout
+            .agents
+            .iter()
+            .find(|a| a.pane_id == Some(layout.focus)),
+        _ => None,
+    }
 }
 
 /// The session chat mode shows: the pinned one, else the focused pane's.

@@ -80,6 +80,8 @@ pub enum Shortcut {
     FindStep {
         older: bool,
     },
+    /// ⌥⌘b: show or hide the session panel.
+    TogglePanel,
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
@@ -95,6 +97,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
     // draft movement); ctrl+arrows stay terminal input, word jumps in a shell.
     if k.cmd && k.alt {
         let dir = match k.key {
+            "b" => return Some(Shortcut::TogglePanel),
             "left" => Dir::Left,
             "right" => Dir::Right,
             "up" => Dir::Up,
@@ -156,6 +159,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘f", "find in the pane or chat"),
             ("⌘q", "detach and quit"),
             ("⌘,", "settings"),
+            ("⌥⌘b", "show or hide the session panel"),
         ],
     ),
     (
@@ -470,6 +474,7 @@ mod tests {
         assert_eq!(shortcut(&cmd("1")), Some(Shortcut::Pick(1)));
         assert_eq!(shortcut(&cmd("9")), Some(Shortcut::Pick(9)));
         assert_eq!(shortcut(&opt("1")), None);
+        assert_eq!(shortcut(&opt("b")), Some(Shortcut::TogglePanel));
         assert_eq!(shortcut(&cmd("x")), Some(Shortcut::Cut));
         assert_eq!(shortcut(&cmd("a")), Some(Shortcut::SelectAll));
         assert_eq!(shortcut(&cmd("f")), Some(Shortcut::Find));

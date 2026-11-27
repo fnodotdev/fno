@@ -75,6 +75,10 @@ pub struct AppState {
     /// The Workspaces section's grouping; the default opens nested.
     #[serde(default)]
     pub group_by: GroupBy,
+    /// The session panel: open, its card order and folded cards. A file
+    /// from before the panel opens it with the default cards.
+    #[serde(default)]
+    pub right: crate::right_pane::Saved,
 }
 
 /// The ways a save can fail. Best-effort callers drop the error.
@@ -151,6 +155,11 @@ mod tests {
             }),
             folds: HashSet::new(),
             group_by: GroupBy::default(),
+            // A folded panel, so the round trip proves the fold survives.
+            right: crate::right_pane::Saved {
+                open: false,
+                ..crate::right_pane::Saved::default()
+            },
         }
     }
 
@@ -193,8 +202,11 @@ mod tests {
             STATE_VERSION
         );
         std::fs::write(&path, text).unwrap();
-        let state = load(&path);
-        assert_eq!(state.map(|s| s.folds), Some(HashSet::new()));
+        let state = load(&path).expect("a pre-folds file loads");
+        assert_eq!(state.folds, HashSet::new());
+        // Nor does it carry the session panel: it opens with the default cards.
+        assert_eq!(state.right, crate::right_pane::Saved::default());
+        assert!(state.right.open);
         let _ = std::fs::remove_file(&path);
     }
 

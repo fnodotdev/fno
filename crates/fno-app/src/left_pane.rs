@@ -829,13 +829,40 @@ fn grouping_button(mode: GroupBy, p: &Palette, cx: &mut Context<Root>) -> Div {
     )
 }
 
-/// The Workspaces header's right side: the circled + names a new workspace
+/// The long thin plus mark: two 10px arms, one hairline thick, drawn
+/// so the paint box is exact where a glyph's ink is not.
+fn plus_mark(p: &Palette) -> Div {
+    div()
+        .relative()
+        .flex_none()
+        .size(px(10.0))
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(4.5))
+                .h(px(1.0))
+                .bg(rgb(p.faint)),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(4.5))
+                .w(px(1.0))
+                .bg(rgb(p.faint)),
+        )
+}
+
+/// The Workspaces header's right side: the plus names a new workspace
 /// inline, under the header.
 fn workspaces_header_plus(p: &Palette, cx: &mut Context<Root>) -> Div {
     div().child(
         ui::clickable(div().id("workspaces-plus").px_1(), p)
             .on_click(cx.listener(|root, _, _, cx| root.act(Action::NewWorkspace, cx)))
-            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+            .child(plus_mark(p)),
     )
 }
 
@@ -875,7 +902,7 @@ fn header_marks(
                 cx.stop_propagation();
                 root.act(Action::OpenAddMenu(squad), cx);
             }))
-            .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+            .child(plus_mark(p)),
         );
     }
     match fold {
@@ -1487,6 +1514,7 @@ pub(super) fn render(
         .border_color(rgb(p.border))
         .font_family(ui::MONO)
         .child(pane)
+        .child(super::left_footer::render(&p))
 }
 
 #[cfg(test)]

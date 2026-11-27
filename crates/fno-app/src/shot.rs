@@ -31,6 +31,17 @@ const SETTLE_POLL: Duration = Duration::from_millis(150);
 /// it gives up.
 const PREWARM: Duration = Duration::from_secs(5);
 
+/// How long the capture phase waits for the window server to list the
+/// shot window at full alpha.
+const RAISE_BUDGET: Duration = Duration::from_millis(400);
+
+/// The poll cadence while the raise lands.
+const RAISE_POLL: Duration = Duration::from_millis(16);
+
+/// How long frames present at full alpha before the capture. The tile's
+/// color precision re-arms on a present.
+const RAISE_SETTLE: Duration = Duration::from_millis(50);
+
 pub fn run(opts: ShotOptions) -> i32 {
     let hold = opts.hold;
     // The pin resolves before the theme pin chdirs: the newest lookup
@@ -92,6 +103,7 @@ pub fn run(opts: ShotOptions) -> i32 {
                 font_size,
                 find,
                 opts.settings,
+                opts.hosts,
                 opts.update,
                 empty_chat,
                 cmd,
@@ -173,25 +185,9 @@ pub fn run(opts: ShotOptions) -> i32 {
                 0
             } else {
                 // The capture phase: the run's one full-alpha present.
-                // The server's composited tile re-composites only when a
-                // frame presents, and its color precision keys to the
-                // alpha at composite time (measured: 40-43 distinct
-                // colors captured at one-percent alpha, 244k at full
-                // alpha), so raise alpha, present one fresh frame,
-                // capture, restore. No PRESENT wait: the capture tool's
-                // own spawn latency covers the composite (measured: full
-                // precision with the capture fired right after the
-                // refresh). This instant is the shot's only visible
-                // window, about the capture tool's runtime; the recorded
-                // worker decision for this node keeps it, with the
-                // refusal branch as the recorded reversal.
-                // SAFETY: setter on the window this process owns.
-                let _: () = unsafe { msg_send![w, setAlphaValue: 1.0f64] };
-                handle.update(cx, |_, window, _| window.refresh()).ok();
-                let code = capture_to_png(&out);
-                // SAFETY: symmetric restore of the raise above.
-                let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
-                code
+                // This instant is the shot's only visible window, a few
+                // frames longer than the capture tool's runtime.
+                capture_raised(cx, &handle, w, &out).await
             };
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
@@ -546,6 +542,77 @@ fn log_window_live(window_id: u32, when: &str) -> bool {
         unsafe { CFRelease(only) };
     }
     found
+}
+
+/// The alpha the window server lists for `window_id`. `None` when the
+/// list is unreadable or the window is absent.
+fn server_alpha(window_id: u32) -> Option<f64> {
+    // SAFETY: the list is a Copy-rule result released below; the value
+    // read out of it is consumed before the release.
+    let list = unsafe { CGWindowListCopyWindowInfo(0, 0) };
+    if list.is_null() {
+        return None;
+    }
+    // SAFETY: indices stay inside 0..count of the live list, and the
+    // value read out of it is consumed before the release below.
+    let alpha = unsafe {
+        let mut alpha = None;
+        for i in 0..CFArrayGetCount(list) {
+            let dict = CFArrayGetValueAtIndex(list, i);
+            if cf_i64(dict, kCGWindowNumber) == Some(window_id as i64) {
+                alpha = cf_f64(dict, kCGWindowAlpha);
+                break;
+            }
+        }
+        alpha
+    };
+    // SAFETY: releases the Copy-rule list read above; nothing borrows it.
+    unsafe { CFRelease(list) };
+    alpha
+}
+
+/// The capture phase: the run's one full-alpha present. Raise, wait for
+/// the window server to list the raise, present one fresh frame, capture,
+/// restore. The code is the capture's, or 1 when the raise never reaches
+/// the server: that capture reads one-percent precision, which crushes
+/// color, so the shot refuses instead of handing the frame off as a look.
+async fn capture_raised(
+    cx: &mut gpui::AsyncApp,
+    handle: &gpui::WindowHandle<crate::window::Root>,
+    w: *mut objc::runtime::Object,
+    out: &std::path::Path,
+) -> i32 {
+    // SAFETY: setter on the window this process owns.
+    let _: () = unsafe { msg_send![w, setAlphaValue: 1.0f64] };
+    handle.update(cx, |_, window, _| window.refresh()).ok();
+    // The server's composited tile re-composites only when a frame
+    // presents, and its color precision keys to the alpha at composite
+    // time. The raise reaches the server when the run loop turns, and the
+    // capture blocks this thread from its first read to its last. So the
+    // turn comes first: with no yield the server read alpha 0.01 before
+    // and after 4 of 4 captures, and each frame held 10 distinct colors.
+    // SAFETY: plain read of the window's own number.
+    let window_id: i64 = unsafe { msg_send![w, windowNumber] };
+    let deadline = std::time::Instant::now() + RAISE_BUDGET;
+    while server_alpha(window_id as u32).is_some_and(|a| a < 0.999) {
+        if std::time::Instant::now() >= deadline {
+            // SAFETY: plain read of the window's own alpha claim.
+            let claimed: f64 = unsafe { msg_send![w, alphaValue] };
+            eprintln!(
+                "fno-app --shot: the window server still lists the shot window below full alpha after {RAISE_BUDGET:?}, while the window claims {claimed}; that capture crushes color, so the shot refuses"
+            );
+            // SAFETY: symmetric restore of the raise above.
+            let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
+            return 1;
+        }
+        cx.background_executor().timer(RAISE_POLL).await;
+    }
+    handle.update(cx, |_, window, _| window.refresh()).ok();
+    cx.background_executor().timer(RAISE_SETTLE).await;
+    let code = capture_to_png(out);
+    // SAFETY: symmetric restore of the raise above.
+    let _: () = unsafe { msg_send![w, setAlphaValue: 0.01f64] };
+    code
 }
 
 /// Capture the app's window buffer at one-percent alpha. The window

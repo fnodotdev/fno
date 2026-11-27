@@ -57,7 +57,21 @@ The app never reads that version to judge compatibility. It reads the wire versi
 
 The left pane has three sections, one line per row. Workspaces are the mux squads. Each workspace shows its header row, then its agents, then its shell panes. A click on the header switches to the workspace. The agents come in the order the TUI sideline uses, and a workspace with no agents and no shells says so. The caret on a header folds or opens that workspace, the fold persists across launches, and nothing folds on its own. An agent that runs outside every workspace lands in a trailing Elsewhere group. A folded workspace still shows a blocked agent, because its header counts the agents per state. Each agent row leads with its harness mark, with a small state glyph on the mark's corner. Then come its name and its facts in fixed columns. The columns are the model, the context percent, the token count, the session age, and the node and PR. Rows show no cost. How long ago it last acted sits at the right edge. The columns line up down the list, and a column no agent fills takes no room. If the pane is too narrow for every column, whole columns drop from the right. A fact shows whole or not at all. If no column fits beside the name, the name cuts. The app reads the facts through the same formatters as the mux card. A click focuses the agent's pane, or opens a paneless agent in portal 0. A shell row shows the pane label and its working directory, and a click focuses the pane. The circled plus on the Workspaces header opens an inline field that names a new workspace. The circled plus on a workspace header opens New worker (the composer starts in that workspace) or New shell. A right-click on a workspace header opens New Tab, Rename Workspace, Move Up, Move Down and Close. Close asks first and names the pane count. The group button on the Workspaces header cycles the view between workspaces, agent state (Needs input, Working, Done) and machine. One row counts the open questions that wait on you. A click opens HQ, where the list itself lives. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
+A footer is pinned to the foot of the left pane, and it never scrolls away. On the left it shows your macOS full name. If the app cannot read one, it shows "You". On the right, the globe icon opens Connect a host, where a fleet host picks through or a new machine joins by the copy line. The gear opens Settings, as cmd-, does.
+
 The title bar has a fixed height that no `--font-size` changes. On the left it names where you are: the session, the view and, in Chat and Terminal, the focused agent. In Terminal, the session's tabs follow. A tab without a chosen name shows its pane's title, and a click selects it. On the right, Chat, HQ, Mods and Terminal switch the main view, each with its cmd key. The chrome uses SF Mono for rows, ids and numbers. Chat turns and mod descriptions use the system font.
+
+## The session panel
+
+In Chat and Terminal, a panel at the right edge shows the session you are on. Option-cmd-B (⌥⌘B) shows or hides it, and the app keeps that choice across restarts. The panel names the agent, then its repo, branch and machine. A list of cards follows. Each card shows its title, a count, a chevron that folds it and a × that removes it.
+
+- Pull request (`fno.pr`) shows the session's PR number, and a click opens the PR. With no PR it reads "no PR yet".
+- Changes (`fno.changes`) counts the lines added and removed since the branch's merge base, working tree included. It also lists the three biggest files. The app reads the diff in the pane's own directory every 10 seconds while the panel is open.
+- Context (`fno.context`) shows the context percent and the token count, with a bar. A session with no measurement reads "not measured".
+- Outputs (`fno.outputs`) lists the files a claude session wrote with its Write tool outside its working directory, newest first. A click opens the file. It reads the chat you have open, so it lists nothing for a session whose chat is not open.
+- Questions (`fno.questions`) lists the newest open questions from every session. A click opens the answer sheet.
+
+The last row, "+ panel", lists the cards you removed and your installed view mods. A click adds that card to the end of the list. A session on another machine shows "on <host>, not read from here" in Changes and Outputs. A Terminal pane with no agent shows "no agent in this pane". In Terminal, the grid narrows to make room for the panel.
 
 ## Chat mode
 
@@ -107,6 +121,7 @@ In the terminal view, other keys go to the focused pane as a terminal sends them
 | cmd-k | Open or close the go-to palette |
 | cmd-/ | Open or close the key sheet |
 | cmd-, | Open or close Settings |
+| option-cmd-b | Show or hide the session panel |
 | cmd-q | Detach and quit |
 
 Cmd-f opens the find bar over the focused view. Typing edits the query. Enter searches in the terminal. The chat scan runs live. Up steps toward the older match. Down steps toward the newer match. The chords ⌘G and ⇧⌘G step to the newer and older match, as in other Mac find bars. Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.

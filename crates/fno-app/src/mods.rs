@@ -13,7 +13,7 @@
 //! so the consent card and its prompt stay the CLI's: the app never installs
 //! on its own.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 
@@ -205,6 +205,9 @@ pub(super) struct Page {
     pending: HashSet<String>,
     watch: Watch,
     asks: Option<Sender<Ask>>,
+    /// The session panel's view mod cards, by view path: `None` while the
+    /// read is out.
+    panel: HashMap<String, Option<Result<View, ReadFailed>>>,
 }
 
 /// The install pane, followed so the list re-reads when it closes.
@@ -270,6 +273,55 @@ impl Page {
         self.asks.as_ref().is_some_and(|a| a.send(ask).is_ok())
     }
 
+    /// Installed, enabled view mods as `(target, title)`: what the session
+    /// panel's "+ panel" row offers.
+    pub(super) fn view_mods(&self) -> Vec<(String, String)> {
+        self.rows
+            .iter()
+            .filter(|(_, c)| c.enabled && c.view.as_deref().is_some_and(|v| !v.is_empty()))
+            .map(|(p, c)| (target(p, c), c.title.clone()))
+            .collect()
+    }
+
+    /// Ask once for the view a panel card shows, reading the installed
+    /// rows first when no read has landed.
+    pub(super) fn want_panel_view(&mut self, want: &str) {
+        if !self.read {
+            self.read();
+            return;
+        }
+        let path = self
+            .rows
+            .iter()
+            .find(|(p, c)| target(p, c) == want)
+            .and_then(|(_, c)| c.view.clone())
+            .filter(|v| !v.is_empty());
+        let Some(path) = path else { return };
+        if !self.panel.contains_key(&path) && self.ask(Ask::View(path.clone())) {
+            self.panel.insert(path, None);
+        }
+    }
+
+    /// A panel card's title and view; no view while its read is out.
+    pub(super) fn panel_view(
+        &self,
+        want: &str,
+    ) -> (Option<String>, Option<Result<&View, ReadFailed>>) {
+        let Some((_, c)) = self.rows.iter().find(|(p, c)| target(p, c) == want) else {
+            let gone = self
+                .read
+                .then(|| Err(ReadFailed("not installed".to_string())));
+            return (None, gone);
+        };
+        let view = c
+            .view
+            .as_ref()
+            .and_then(|path| self.panel.get(path))
+            .and_then(Option::as_ref)
+            .map(|r| r.as_ref().map_err(Clone::clone));
+        (Some(c.title.clone()), view)
+    }
+
     /// Read the installed rows, unless a read is already out.
     pub(super) fn read(&mut self) {
         if !self.reading && self.ask(Ask::Installed) {
@@ -301,6 +353,9 @@ impl Page {
                 }
             }
             Reply::View(path, view) => {
+                if let Some(slot) = self.panel.get_mut(&path) {
+                    *slot = Some(view.clone());
+                }
                 // Same drop rule as the recipe: a reply for a row the user
                 // already left is dropped.
                 if self
@@ -1111,7 +1166,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
 }
 
 /// One declared block, drawn with the recipe prose's own font and sizes.
-fn view_block(block: &DeclaredBlock, p: &Palette) -> Div {
+pub(super) fn view_block(block: &DeclaredBlock, p: &Palette) -> Div {
     let prose = |line: String| {
         ui::text(line, Role::Body, p)
             .font_family(ui::PROSE)

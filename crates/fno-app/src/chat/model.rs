@@ -286,6 +286,18 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    /// The path of every Write call, oldest first: the session panel's
+    /// Outputs card reads it.
+    pub fn written(&self) -> Vec<&str> {
+        self.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Tool { name, summary, .. } if name == "Write" => Some(summary.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The newest question still waiting on its answer, with its row.
     pub fn open_question(&self) -> Option<(usize, &Ask)> {
         self.items

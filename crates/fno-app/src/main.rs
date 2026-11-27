@@ -72,6 +72,13 @@ struct Args {
     /// Open the answer sheet on the newest question: the sheet proof.
     #[arg(long = "shot-sheet", hide = true)]
     shot_sheet: bool,
+    /// Open the connect-a-host step: the hosts proof.
+    #[arg(long = "shot-hosts", hide = true)]
+    shot_hosts: bool,
+    /// Draw the footer's computer mark instead of the globe: the icon
+    /// variant shot. Shot-only.
+    #[arg(long = "shot-host-icon-computer", hide = true)]
+    shot_host_icon_computer: bool,
     /// The chat pane keeps its empty start view for the frame, whatever
     /// the world's focus carries. Shot-only.
     #[arg(long = "shot-empty-chat", hide = true)]
@@ -184,6 +191,9 @@ enum ShotSettings {
 
 fn main() {
     let args = Args::parse();
+    if args.shot_host_icon_computer {
+        fno_app::set_computer_icon();
+    }
     let shot = if args.shot {
         let Some(out) = args.shot_out else {
             eprintln!("fno-app: --shot needs --shot-out <png path>");
@@ -222,6 +232,7 @@ fn main() {
             }),
             hold: args.shot_hold,
             sheet: args.shot_sheet,
+            hosts: args.shot_hosts,
             empty_chat: args.shot_empty_chat,
             cmd: args.shot_cmd,
             draft: args.shot_draft,

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
-    Bounds, ClipboardEntry, ClipboardItem, Context, ElementInputHandler, Entity,
+    Bounds, ClipboardEntry, ClipboardItem, Context, Div, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Global, InputHandler, KeyBinding, KeyDownEvent, Menu,
     MenuItem, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection,
@@ -39,13 +39,13 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::mux_modes::{self, MenuAct, MenuKey, Step};
 use super::palette::Palette;
-use super::{find, left_pane, mods, orchestration, settings, sheet, tabs, ui};
+use super::{find, hosts, left_pane, mods, orchestration, right_pane, settings, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
-actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings]);
+actions!(fno_app, [KeyboardShortcuts, GoTo, OpenSettings, ShowHosts]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
@@ -359,8 +359,12 @@ pub struct Root {
     /// The launch composer: retained state, open flag, id mint, and the
     /// row the last launch named. Esc closes and keeps the draft.
     pub(super) launch: launch::Panel,
+    /// The session panel at the right edge (⌥⌘B).
+    pub(super) right: right_pane::Panel,
+    _right: Option<Task<()>>,
     /// The Settings panel (cmd-,): rows, query, page; None while closed.
     pub(super) settings: Option<settings::SettingsState>,
+    pub(super) hosts: Option<hosts::HostsState>,
     /// The font face and size the terminal metrics should carry: the
     /// launch values, then a Settings write. Render moves the real
     /// `metrics` onto it, where the text system can measure.
@@ -415,9 +419,9 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
     }));
 }
 
-fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
+fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>, right: Pixels) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
-    let width = viewport.width - px(left_pane::WIDTH);
+    let width = viewport.width - px(left_pane::WIDTH) - right;
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
     (
@@ -457,7 +461,8 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> Self {
         Self::write_pid_file(&session);
-        let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        // The panel's column joins at the first paint, which resends the size.
+        let sent_size = grid_size(window.viewport_size(), metrics.cell, px(0.0));
         let light = super::palette::appearance_is_light(window.appearance());
         let font_want = (
             metrics.font.family.to_string(),
@@ -472,7 +477,59 @@ impl Root {
         let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
         fno::ui::keys::install(keymap);
         let key_warning = key_warnings.first().map(|w| w.0.clone());
-        let mut root = Root {
+        let mut root = Self::new_root(
+            main,
+            pinned,
+            folds,
+            group_by,
+            metrics,
+            palette,
+            key_warning.or(theme_warning),
+            light,
+            theme_cwd,
+            session.clone(),
+            font_want,
+            sent_size,
+            window,
+            cx,
+        );
+        wire_window(&mut root, window, cx);
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        root._right = Some(right_pane::start(cx));
+        super::left_footer::prime();
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The window's fresh state: every field at its launch value, built
+    /// away from `new_with_link` so the constructor stays readable.
+    #[allow(clippy::too_many_arguments)]
+    fn new_root(
+        main: MainView,
+        pinned: Option<SessionKey>,
+        folds: HashSet<String>,
+        group_by: GroupBy,
+        metrics: Metrics,
+        palette: super::palette::Palette,
+        notice: Option<String>,
+        light: bool,
+        theme_cwd: PathBuf,
+        session: String,
+        font_want: (String, f32),
+        sent_size: (u16, u16),
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Root {
+        Root {
             main,
             link: None,
             layout: Layout::default(),
@@ -480,7 +537,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice,
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -507,9 +564,10 @@ impl Root {
             squad_field: None,
             workspace_menu: None,
             workspace_confirm: None,
+            hosts: None,
             light,
-            theme_cwd: theme_cwd.clone(),
-            session: session.clone(),
+            theme_cwd,
+            session,
             ext: mods::Page::default(),
             adv: px(ui::BODY * 0.6),
             width: px(1360.0),
@@ -533,6 +591,8 @@ impl Root {
             row_menu: None,
             peek: None,
             launch: launch::Panel::default(),
+            right: right_pane::Panel::default(),
+            _right: None,
             settings: None,
             font_want,
             preedit: None,
@@ -553,20 +613,7 @@ impl Root {
             // app; the activation observer only reports changes, so the
             // first read happens here.
             window_active: window.is_window_active(),
-        };
-        wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
-        root.wire_alerts(cx);
-        root.start_board_poll(cx);
-        root.start_plugins(cx);
-        // The control channel: the drain loop applies rows through the
-        // same paths clicks ride (focus, view switch, quit).
-        crate::control::spawn_poll(session.clone(), cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
         }
-        root
     }
 
     /// The drive surface finds the live app through this pid file (the
@@ -1204,6 +1251,15 @@ impl Root {
             },
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
         }
+        cx.notify();
+    }
+
+    /// A session panel click, or ⌥⌘B. Kept out of `act` so every panel
+    /// action persists the window state in one place.
+    pub(super) fn act_panel(&mut self, act: right_pane::PanelAct, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", act.click_id());
+        right_pane::act(self, act);
+        record_ui_state(self, cx);
         cx.notify();
     }
 
@@ -3029,6 +3085,62 @@ impl Root {
         self.open_settings_with(fonts, cx);
     }
 
+    /// The footer's host button: open the connect-a-host step, or close
+    /// it. The connect work itself runs in the mux; this step picks a
+    /// known host or names the join line a new machine runs.
+    fn show_hosts(&mut self, _: &ShowHosts, _: &mut Window, cx: &mut Context<Self>) {
+        if self.hosts.take().is_some() {
+            cx.notify();
+            return;
+        }
+        self.open_hosts(cx);
+    }
+
+    /// The open half, shared with the shot path: every other overlay
+    /// closes, one step shows.
+    pub(super) fn open_hosts(&mut self, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", "hosts_open");
+        self.sheet = false;
+        self.goto = None;
+        self.settings = None;
+        self.hosts = Some(hosts::HostsState { note: None });
+        cx.notify();
+    }
+
+    pub(super) fn close_hosts(&mut self, cx: &mut Context<Self>) {
+        self.hosts = None;
+        cx.notify();
+    }
+
+    /// The connect-a-host step's keys: esc closes it; anything else falls
+    /// through to the shortcuts. True consumes the key.
+    fn hosts_key(&mut self, key: &keys::Key, cx: &mut Context<Self>) -> bool {
+        if self.hosts.is_none() || key.key != "escape" {
+            return false;
+        }
+        self.hosts = None;
+        cx.stop_propagation();
+        cx.notify();
+        true
+    }
+
+    /// A picked fleet host: its seats lead the list, grouped by machine.
+    pub(super) fn pick_host(&mut self, name: String, cx: &mut Context<Self>) {
+        self.hosts = None;
+        self.group_by = GroupBy::Machine;
+        self.say(format!("Picked {name}; the list groups by machine"), cx);
+        cx.notify();
+    }
+
+    /// Copy the join line a new machine runs into the clipboard.
+    pub(super) fn copy_join(&mut self, line: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(line));
+        if let Some(st) = self.hosts.as_mut() {
+            st.note = Some("Copied".into());
+        }
+        cx.notify();
+    }
+
     /// The open half: rows from the live config, fleet and the given
     /// faces. The shot path calls it with pre-measured faces.
     pub(super) fn open_settings_with(&mut self, fonts: Vec<String>, cx: &mut Context<Self>) {
@@ -3282,6 +3394,10 @@ impl Root {
             cx.notify();
             return;
         }
+        // The connect-a-host step closes on Esc the same way.
+        if self.hosts_key(&key, cx) {
+            return;
+        }
         // The answer sheet is modal the same way: esc closes, enter
         // submits, the editing keys and text land in its draft. A cmd or
         // ctrl key falls through, so the shortcuts keep running under it.
@@ -3302,16 +3418,7 @@ impl Root {
         if self.find_takes(&key, cx) {
             return;
         }
-        if self.main == MainView::Chat {
-            self.chat_key(&key, window, cx);
-            return;
-        }
-        if self.main == MainView::Orchestration {
-            orchestration::key(self, &key, cx);
-            return;
-        }
-        if self.main == MainView::Mods && mods::key(self, &key, cx) {
-            cx.stop_propagation();
+        if self.view_key(&key, window, cx) {
             return;
         }
         // The board takes no typing, and text keys reach the pane through the
@@ -3328,8 +3435,9 @@ impl Root {
         }
     }
 
-    /// The Settings panel takes every key while it shows; a cmd key closes it
-    /// and runs as today (the key sheet's grammar). True when it took the key.
+    /// The Settings panel's keys while it shows: escape and the panel's
+    /// rows take theirs, a cmd key closes the panel and falls through.
+    /// True when the key was taken.
     fn settings_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
         if self.settings.is_none() {
             return false;
@@ -3337,6 +3445,8 @@ impl Root {
         if key.cmd {
             self.settings = None;
             cx.notify();
+            // The cmd key falls through to the shortcut, as the inline
+            // form did: closing the panel does not take the key.
             return false;
         }
         let ev = self.settings.as_mut().and_then(|st| settings::key(st, key));
@@ -3358,6 +3468,24 @@ impl Root {
             None => {}
         }
         true
+    }
+
+    /// The focused view's typing: chat, the board room, mods. True when
+    /// the view took the key.
+    fn view_key(&mut self, key: &Key, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.main == MainView::Chat {
+            self.chat_key(key, window, cx);
+            return true;
+        }
+        if self.main == MainView::Orchestration {
+            orchestration::key(self, key, cx);
+            return true;
+        }
+        if self.main == MainView::Mods && mods::key(self, key, cx) {
+            cx.stop_propagation();
+            return true;
+        }
+        false
     }
 
     /// One encoded keystroke through the mux scanner: the prefix claims its
@@ -3591,6 +3719,7 @@ impl Root {
             }
             Shortcut::Find => self.find_open(cx),
             Shortcut::FindStep { older } => self.find_step(older, cx),
+            Shortcut::TogglePanel => self.act_panel(right_pane::PanelAct::Toggle, cx),
         }
     }
 
@@ -4275,7 +4404,13 @@ fn mono_view(view: impl IntoElement + Styled) -> gpui::AnyElement {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let size_now = grid_size(window.viewport_size(), self.metrics.cell);
+        // The panel narrows the grid only where it shares the row with it.
+        let right = if right_pane::mounted(self) && self.main == MainView::Terminal {
+            px(right_pane::WIDTH)
+        } else {
+            px(0.0)
+        };
+        let size_now = grid_size(window.viewport_size(), self.metrics.cell, right);
         if size_now != self.sent_size && self.link.is_some() {
             self.sent_size = size_now;
             self.send(ClientMsg::Resize {
@@ -4315,36 +4450,7 @@ impl Render for Root {
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
-        // A closed link and a failed notice use the error color; a notice
-        // is muted and expires. Neither takes a row: the toast floats over the corner.
-        // In chat mode a closed stream's bar already carries the exit
-        // reason, so the corner toast would repeat it - unless a sheet
-        // covers that bar, where the toast is the only visible signal.
-        let bar_shows_reason =
-            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
-        let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
-            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
-            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (_, n) => (n.clone(), self.palette.muted),
-        };
-        let toast = status.map(|text| {
-            div()
-                .absolute()
-                .right(px(12.0))
-                // Stacked above the chat status row (the empty-state line sits
-                // in the bottom 40px); a corner pin cut that line off.
-                .bottom(px(44.0))
-                .max_w(px(520.0))
-                .px_3()
-                .py_1()
-                .rounded(px(4.0))
-                .bg(rgb(self.palette.raised))
-                .text_color(rgb(status_color))
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .child(text)
-        });
+        let toast = self.corner_toast();
         let qtoast = self.question_toast_card(cx);
         let utoast = self.update_card_view(cx);
         let page = div()
@@ -4354,6 +4460,7 @@ impl Render for Root {
             .on_action(cx.listener(Self::toggle_sheet))
             .on_action(cx.listener(Self::toggle_goto))
             .on_action(cx.listener(Self::toggle_settings))
+            .on_action(cx.listener(Self::show_hosts))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -4380,7 +4487,10 @@ impl Render for Root {
                     .children(toast)
                     .children(qtoast)
                     .children(utoast),
-            );
+            )
+            .when(right_pane::mounted(self), |d| {
+                d.child(right_pane::render(self, cx))
+            });
         self.overlays(page, window, cx)
     }
 }
@@ -4424,8 +4534,43 @@ impl Root {
         .when(self.settings.is_some(), |d| {
             d.child(settings::render(self, cx))
         })
+        .when(self.hosts.is_some(), |d| d.child(hosts::render(self, cx)))
         .when(self.workspace_confirm.is_some(), |d| {
             d.child(left_pane::confirm_sheet(self, cx))
+        })
+    }
+
+    /// The corner toast. A closed link and a failed notice use the error
+    /// color; a notice is muted and expires. Neither takes a row: the
+    /// toast floats over the corner. In chat mode a closed stream's bar
+    /// already carries the exit reason, so the corner toast would repeat
+    /// it - unless a sheet covers that bar, where the toast is the only
+    /// visible signal.
+    fn corner_toast(&self) -> Option<Div> {
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
+        };
+        status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
+                .text_color(rgb(status_color))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(text)
         })
     }
 }
@@ -4438,6 +4583,7 @@ struct UiState {
     folds: HashSet<String>,
     group_by: GroupBy,
     chat_key: Option<SessionKey>,
+    right: right_pane::Saved,
     path: Option<PathBuf>,
 }
 
@@ -4457,6 +4603,7 @@ fn record_ui_state(root: &Root, cx: &mut App) {
     ui.folds = root.folds.clone();
     ui.group_by = root.group_by;
     ui.chat_key = root.chat.key.clone();
+    ui.right = root.right.saved.clone();
 }
 
 /// Write the state file from the global plus the window's live frame.
@@ -4486,6 +4633,7 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         pinned: ui.chat_key.clone(),
         folds: ui.folds.clone(),
         group_by: ui.group_by,
+        right: ui.right.clone(),
     };
     if let Err(e) = super::app_state::save(path, &state) {
         eprintln!("fno-app: window state save failed: {e}");
@@ -4563,6 +4711,10 @@ pub fn run(
             .map(|s| s.folds.clone())
             .unwrap_or_default();
         let group_by = restored.as_ref().map(|s| s.group_by).unwrap_or_default();
+        let right = restored
+            .as_ref()
+            .map(|s| s.right.clone())
+            .unwrap_or_default();
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
         let first_run = restored.is_none();
@@ -4607,6 +4759,7 @@ pub fn run(
                         window,
                         cx,
                     );
+                    root.right.saved = right.clone();
                     // The exit paths read this snapshot; the mutation sites
                     // keep it current while the window lives.
                     cx.set_global(UiState {
@@ -4614,6 +4767,7 @@ pub fn run(
                         folds,
                         group_by,
                         chat_key: pinned,
+                        right,
                         path: state_path,
                     });
                     window.on_window_should_close(cx, |window, cx| {
@@ -4651,6 +4805,7 @@ pub(super) fn root_for_shot(
     font_size: f32,
     find: Option<crate::FindShot>,
     settings: Option<crate::SettingsShot>,
+    hosts: bool,
     update: Option<crate::UpdateShot>,
     empty_chat: bool,
     cmd: bool,
@@ -4748,6 +4903,9 @@ pub(super) fn root_for_shot(
                 settings::apply_shot(st, shot);
             }
         });
+    }
+    if hosts {
+        root.update(cx, |root, cx| root.open_hosts(cx));
     }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before

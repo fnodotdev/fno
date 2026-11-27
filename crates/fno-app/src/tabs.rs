@@ -80,17 +80,7 @@ pub fn context(layout: &Layout, view: MainView, chat: Option<&str>) -> Vec<Strin
         .into_iter()
         .collect();
     out.extend(VIEWS.iter().find(|v| v.1 == view).map(|v| v.0.to_string()));
-    let agent = match (view, chat) {
-        (MainView::Chat, Some(sid)) => layout
-            .agents
-            .iter()
-            .find(|a| a.harness_session_id.as_deref() == Some(sid)),
-        (MainView::Chat | MainView::Terminal, _) => layout
-            .agents
-            .iter()
-            .find(|a| a.pane_id == Some(layout.focus)),
-        _ => None,
-    };
+    let agent = super::chat::focused_agent(layout, view, chat);
     out.extend(agent.map(|a| a.name.clone()));
     out
 }
@@ -208,17 +198,33 @@ fn mode(
 /// hairline at its foot.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
-    let mut here = div().flex().flex_row().flex_none().items_center().gap_2();
+    // The breadcrumb yields width first, so a narrow main column (the
+    // session panel open) clips the agent name, never the view switch.
+    let mut here = div()
+        .flex()
+        .flex_row()
+        .min_w_0()
+        .overflow_hidden()
+        .items_center()
+        .gap_2();
     let chat = root.chat.key.as_ref().map(|k| k.session_id.as_str());
-    for (i, part) in context(&root.layout, root.main, chat)
-        .into_iter()
-        .enumerate()
-    {
+    let parts = context(&root.layout, root.main, chat);
+    let last = parts.len().saturating_sub(1);
+    for (i, part) in parts.into_iter().enumerate() {
         if i > 0 {
-            here = here.child(ui::role(div(), Role::Hint, &p).child("/"));
+            here = here.child(ui::role(div(), Role::Hint, &p).flex_none().child("/"));
         }
         let r = if i == 1 { Role::Heading } else { Role::Meta };
-        here = here.child(ui::role(div(), r, &p).whitespace_nowrap().child(part));
+        // Only the agent name gives way, and it ends in an ellipsis: a
+        // one-line clamp, as the tab labels use, since a nowrap truncate
+        // reuses its untruncated layout and clips mid-glyph.
+        let cell = ui::role(div(), r, &p);
+        let cell = if i == last && i > 1 {
+            cell.min_w_0().line_clamp(1).text_ellipsis()
+        } else {
+            cell.flex_none().whitespace_nowrap()
+        };
+        here = here.child(cell.child(part));
     }
     let mut tabs = div().flex().flex_row().h_full().min_w_0().overflow_hidden();
     if root.main == MainView::Terminal {

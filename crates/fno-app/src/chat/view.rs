@@ -17,7 +17,7 @@ use super::{Closed, EMPTY_AFTER};
 use crate::find;
 use crate::palette::Palette;
 use crate::ui::{self, Role};
-use crate::window::{Action, Root};
+use crate::window::{Action, MainView, Root};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::card_facts;
 use fno::app_api::lattice::{lattice_glyph, status_long};
@@ -644,10 +644,7 @@ fn clock(ms: i64) -> Option<String> {
 /// The agent whose conversation shows: the one whose session the chat reads.
 fn agent(root: &Root) -> Option<&AgentRow> {
     let key = root.chat.key.as_ref()?;
-    root.layout
-        .agents
-        .iter()
-        .find(|a| a.harness_session_id.as_deref() == Some(key.session_id.as_str()))
+    super::focused_agent(&root.layout, MainView::Chat, Some(key.session_id.as_str()))
 }
 
 /// One line over the conversation: whose it is, the node, the state and
