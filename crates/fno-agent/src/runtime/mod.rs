@@ -107,6 +107,7 @@ pub mod headless_row;
 pub mod heal;
 pub mod heal_pid;
 pub mod heal_sweep;
+pub mod hold_marker;
 pub mod hook;
 pub mod identity;
 pub mod identity_markers;
