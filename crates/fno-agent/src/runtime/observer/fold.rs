@@ -680,8 +680,10 @@ impl InvocationFold {
     }
 
     /// The `tool_result` blocks of a `user` line close the rows that wait for
-    /// their ids. A launch word on a line with one result says the tool
-    /// returned a running task, so that row has no end yet.
+    /// their ids. A launch word in the line's `toolUseResult` says a tool
+    /// returned a running task, so that row has no end yet. The word is the
+    /// line's and not one block's, so it names one call only when one result
+    /// on the line closes a waiting row.
     fn absorb_results(
         &mut self,
         message: &TranscriptMessage,
@@ -695,11 +697,19 @@ impl InvocationFold {
             .iter()
             .filter(|block| block.kind == Some(BlockKind::ToolResult))
             .collect();
-        let launched = results.len() == 1
-            && matches!(
-                tool_result,
-                Some(AnyToolResult::Launch(LaunchRecord { status: Some(_) }))
-            );
+        let launched = matches!(
+            tool_result,
+            Some(AnyToolResult::Launch(LaunchRecord { status: Some(_) }))
+        ) && results
+            .iter()
+            .filter(|block| {
+                block
+                    .tool_use_id
+                    .as_deref()
+                    .is_some_and(|id| self.waiting.contains_key(id))
+            })
+            .count()
+            == 1;
         for block in results {
             let Some(index) = block
                 .tool_use_id
@@ -2193,9 +2203,22 @@ mod tests {
                 r#"{"isAsync":true,"status":"async_launched"}"#,
                 false,
             ),
+            call_line(
+                "2026-11-23T15:57:40.000Z",
+                "call_bg2",
+                "Agent",
+                r#"{"description":"Index the vault","prompt":"Read only","subagent_type":"Explore"}"#,
+            ),
+            call_line(
+                "2026-11-23T15:57:41.000Z",
+                "call_bash",
+                "Bash",
+                r#"{"command":"ls"}"#,
+            ),
+            r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-23T15:57:42.000Z","toolUseResult":{"isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"call_bash","content":"ok","is_error":false},{"type":"tool_result","tool_use_id":"call_bg2","content":"launched","is_error":false}]}}"#.to_string(),
             result_line("2026-11-23T15:58:00.000Z", "call_sync", r#""plain""#, false),
         ]);
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].kind, InvocationKind::Agent);
         assert_eq!(rows[0].name, "Explore");
         assert_eq!(rows[0].node.as_deref(), Some("x-bbbb"));
@@ -2204,6 +2227,11 @@ mod tests {
         assert_eq!(rows[1].name, "general-purpose");
         assert_eq!(rows[1].end.as_deref(), Some("2026-11-23T15:58:00.000Z"));
         assert_eq!(rows[1].outcome, Some(Outcome::Ok));
+        // Two results share the last line. Its launch word names the one
+        // result that closes a waiting row.
+        assert_eq!(rows[2].name, "Explore");
+        assert_eq!(rows[2].outcome, Some(Outcome::Launched));
+        assert_eq!(rows[2].end, None);
     }
 
     /// A goal is one row across its records, in the order a transcript writes
