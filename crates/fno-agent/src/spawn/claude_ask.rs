@@ -839,6 +839,11 @@ pub struct HarnessFlags<'a> {
     /// An unrouted spawn's own `--settings` file (a sandbox write policy
     /// alone owes one). A route's file wins when both are set.
     pub settings: Option<&'a str>,
+    /// The spawn's `--role`, so the plain lane's command rules consult the
+    /// per-role `[allow_rules]` override. A routed or role-resolved spawn
+    /// resolves its rules at the seam with the role; this is the plain
+    /// unrouted path's carrier.
+    pub role: Option<&'a str>,
 }
 
 /// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
@@ -1738,7 +1743,7 @@ pub fn bg_create(
             }
         }
     }
-    let rules = crate::spawn::auto_approve::command_rules(None);
+    let rules = crate::spawn::auto_approve::command_rules(flags.role);
     if let Some(slot) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
         // the same argv position Python's bg_create puts it. A sandbox file
