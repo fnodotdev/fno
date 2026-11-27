@@ -18,7 +18,7 @@
 //! `control:<form>` cursors and advances nothing the prompt boundary reads.
 
 use serde_json::{json, Value};
-use std::io::Read as _;
+use std::io::{BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 
 pub(crate) use crate::bus_read::{
@@ -188,33 +188,52 @@ pub(crate) fn present_mail_ids(
     session: &str,
 ) -> Option<std::collections::HashSet<String>> {
     let transcript = crate::claude_drive::find_transcript_in(projects_base, session)?;
-    let mut text = String::new();
-    std::fs::File::open(transcript)
-        .ok()?
-        .read_to_string(&mut text)
-        .ok()?;
+    let file = std::fs::File::open(transcript).ok()?;
     let mut out = std::collections::HashSet::new();
-    // A JSONL record holds delivered text inside one JSON string, its
-    // newlines escaped, so a header never starts a physical line: split on
-    // string quotes and escaped newlines to read each logical line.
-    for seg in text.split(['\n', '"']).flat_map(|s| s.split("\\n")) {
-        if let Some(id) = crate::mail_header::delivered_msg_id(seg).or_else(|| rendered_id(seg)) {
-            out.insert(id);
+    // One JSONL record per physical line; the reader streams line by line so
+    // a long-lived session's multi-hundred-MB transcript never materializes
+    // whole. The prompt-boundary leg runs under a 4s budget, and a full
+    // read plus its escaped-quote copy blew it on the largest transcript:
+    // every line without a marker prefix is skipped after one byte scan.
+    let mut reader = std::io::BufReader::new(file);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        let read = reader.read_until(b'\n', &mut bytes).ok()?;
+        if read == 0 {
+            break;
         }
-    }
-    let unescaped = text.replace("\\\"", "\"");
-    let mut rest = unescaped.as_str();
-    while let Some(pos) = rest.find("<fno_mail") {
-        rest = &rest[pos..];
-        let end = rest.find('>').map(|e| e.min(400)).unwrap_or(400);
-        let tag = &rest[..end.min(rest.len())];
-        if let Some(id_pos) = tag.find("id=\"") {
-            let id = &tag[id_pos + 4..];
-            if let Some(close) = id.find('"') {
-                out.insert(id[..close].to_string());
+        let line = String::from_utf8_lossy(&bytes);
+        let tag_line = line.contains("<fno_mail");
+        if !tag_line && !line.contains("--- from ") {
+            continue;
+        }
+        // A JSONL record holds delivered text inside one JSON string, its
+        // newlines escaped, so a header never starts a physical line: split
+        // on string quotes and escaped newlines to read each logical line.
+        for seg in line.split(['\n', '"']).flat_map(|s| s.split("\\n")) {
+            if let Some(id) = crate::mail_header::delivered_msg_id(seg).or_else(|| rendered_id(seg))
+            {
+                out.insert(id);
             }
         }
-        rest = &rest[end.min(rest.len())..];
+        if !tag_line {
+            continue;
+        }
+        let unescaped = line.replace("\\\"", "\"");
+        let mut rest = unescaped.as_str();
+        while let Some(pos) = rest.find("<fno_mail") {
+            rest = &rest[pos..];
+            let end = rest.find('>').map(|e| e.min(400)).unwrap_or(400);
+            let tag = &rest[..end.min(rest.len())];
+            if let Some(id_pos) = tag.find("id=\"") {
+                let id = &tag[id_pos + 4..];
+                if let Some(close) = id.find('"') {
+                    out.insert(id[..close].to_string());
+                }
+            }
+            rest = &rest[end.min(rest.len())..];
+        }
     }
     Some(out)
 }
@@ -404,7 +423,10 @@ pub(crate) fn tool_boundary(
     let control = drain(bus_dir, session);
     let live = ordinary && !notify::held(session);
     let msgs = if live {
-        notify::read_bus(bus_dir)
+        notify::read_drain_bus(
+            bus_dir,
+            &crate::spawn_context::session_identity_key(session),
+        )
     } else {
         Vec::new()
     };
@@ -752,5 +774,30 @@ mod tests {
             assert_eq!(run(&bus, true), "");
             assert!(cursor(&bus).contains(&dup));
         });
+    }
+
+    /// The legacy `<fno_mail id="...">` receipt tags still dedup, raw or
+    /// JSON-escaped; a bare id in prose is no marker and never dedups.
+    #[test]
+    fn legacy_tag_ids_still_dedup() {
+        let session = "ffffabcd-1111-2222-3333-444455556666";
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("p")).unwrap();
+        let raw = "<fno_mail id=\"tag-raw\" from=\"lead\">body</fno_mail>";
+        let escaped = "{\"content\":\"<fno_mail id=\\\"tag-escaped\\\" from=\\\"lead\\\">\"}";
+        std::fs::write(
+            projects.join("p").join(format!("{session}.jsonl")),
+            format!("{raw}\n{escaped}\n"),
+        )
+        .unwrap();
+        let present = present_mail_ids(&projects, session).expect("transcript readable");
+        assert!(present.contains("tag-raw"), "raw tag missed");
+        assert!(present.contains("tag-escaped"), "escaped tag missed");
+        // A transcript that cannot be resolved claims nothing: print-everything.
+        assert_eq!(
+            present_mail_ids(&projects, "0000ffff-1111-2222-3333-444455556666"),
+            None
+        );
     }
 }
