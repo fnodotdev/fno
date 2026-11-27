@@ -436,8 +436,9 @@ jobs:
     # The desktop app builds on macOS only, so no Linux job compiles it. A
     # macOS runner costs ten Linux minutes per minute, so the job checks only
     # when the app's own crate, the fno manifest or a file behind
-    # `fno::app_api` changes.
-    if: github.event_name == 'pull_request'
+    # `fno::app_api` changed, on the PR and again on the main push, so a
+    # cross-PR break turns red on main instead of passing silently.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: macos-15
     timeout-minutes: 40
     permissions:
@@ -451,7 +452,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          else
+            # A push to main walks the pushed range through the compare API,
+            # because the checkout above is shallow and git cannot diff it.
+            # compare caps its file list at 300, and a zero `before` (branch
+            # creation or rewind) names no range: both check everything.
+            if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+              files="crates/fno-app/"
+            else
+              files="$(gh api "repos/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.sha }}" --paginate --jq '.files[].filename')"
+              if [ "$(printf '%s\n' "$files" | grep -c .)" -ge 300 ]; then
+                files="crates/fno-app/"
+              fi
+            fi
+          fi
           if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(ui/(client|lattice|plugins_feed|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_view|tree|theme|link)|serve/(app_api|web_hq|chat_events)|backlog/backlog_model|mux/mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/mux/proto/|^crates/fno-proto/'; then
             echo "check=1" >> "$GITHUB_ENV"
             echo "the desktop surface changed: checking"
