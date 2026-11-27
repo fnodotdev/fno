@@ -541,7 +541,7 @@ enum GoalKind {
 fn goal_status(attachment: Option<AnyAttachment>) -> Option<GoalRecord> {
     match attachment? {
         AnyAttachment::Goal(record) => Some(record),
-        AnyAttachment::Other => None,
+        AnyAttachment::Other(_) => None,
     }
 }
 
@@ -2044,33 +2044,55 @@ mod tests {
 
     const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 
-    /// An `assistant` line with one `tool_use` block.
+    /// An `assistant` line with one `tool_use` block. `input` is the block's
+    /// `input` as JSON.
     fn call_line(ts: &str, id: &str, tool: &str, input: &str) -> String {
-        format!(
-            r#"{{"type":"assistant","sessionId":"{SESSION}","timestamp":"{ts}","message":{{"content":[{{"type":"tool_use","id":"{id}","name":"{tool}","input":{input}}}]}}}}"#
-        )
+        json!({
+            "type": "assistant",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "message": {"content": [
+                {"type": "tool_use", "id": id, "name": tool, "input": input.parse::<Value>().unwrap()}
+            ]},
+        })
+        .to_string()
     }
 
-    /// A `user` line with one `tool_result` block.
+    /// A `user` line with one `tool_result` block. `tool_result` is the line's
+    /// `toolUseResult` as JSON.
     fn result_line(ts: &str, id: &str, tool_result: &str, is_error: bool) -> String {
-        format!(
-            r#"{{"type":"user","sessionId":"{SESSION}","timestamp":"{ts}","toolUseResult":{tool_result},"message":{{"content":[{{"type":"tool_result","tool_use_id":"{id}","content":"done","is_error":{is_error}}}]}}}}"#
-        )
+        json!({
+            "type": "user",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "toolUseResult": tool_result.parse::<Value>().unwrap(),
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": id, "content": "done", "is_error": is_error}
+            ]},
+        })
+        .to_string()
     }
 
-    /// An `attachment` line with a `goal_status` record. `fields` are the
-    /// record's fields between its type and its condition.
-    fn goal_line(ts: &str, fields: &str, condition: &str) -> String {
-        format!(
-            r#"{{"type":"attachment","sessionId":"{SESSION}","timestamp":"{ts}","attachment":{{"type":"goal_status",{fields}"condition":"{condition}"}}}}}"#
-        )
+    /// An `attachment` line whose payload is a `goal_status` record.
+    fn goal_line(ts: &str, record: Value) -> String {
+        json!({
+            "type": "attachment",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "attachment": record,
+        })
+        .to_string()
     }
 
     /// A `user` line whose content is the given string.
     fn user_line(ts: &str, content: &str) -> String {
-        format!(
-            r#"{{"type":"user","sessionId":"{SESSION}","timestamp":"{ts}","message":{{"content":"{content}"}}}}"#
-        )
+        json!({
+            "type": "user",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "message": {"content": content},
+        })
+        .to_string()
     }
 
     fn fold(lines: &[String]) -> Vec<Invocation> {
@@ -2243,8 +2265,7 @@ mod tests {
         let rows = fold(&[
             goal_line(
                 "2026-06-29T06:52:59.630Z",
-                r#""met":false,"sentinel":true,"#,
-                "x-cccc",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "x-cccc"}),
             ),
             user_line(
                 "2026-06-29T06:52:59.630Z",
@@ -2252,13 +2273,18 @@ mod tests {
             ),
             goal_line(
                 "2026-06-29T07:08:34.378Z",
-                r#""met":false,"reason":"PR #85 is open,"#,
-                "x-cccc",
+                json!({"type": "goal_status", "met": false, "reason": "PR #85 is open", "condition": "x-cccc"}),
             ),
             goal_line(
                 "2026-06-29T07:56:13.785Z",
-                r#""met":true,"iterations":69,"durationMs":3794155,"tokens":117513,"#,
-                "x-cccc",
+                json!({
+                    "type": "goal_status",
+                    "met": true,
+                    "iterations": 69,
+                    "durationMs": 3794155,
+                    "tokens": 117513,
+                    "condition": "x-cccc",
+                }),
             ),
         ]);
         assert_eq!(rows.len(), 2);
@@ -2290,28 +2316,23 @@ mod tests {
         let rows = fold(&[
             goal_line(
                 "2026-11-23T10:00:00.000Z",
-                r#""met":false,"sentinel":true,"#,
-                "all tests pass",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "all tests pass"}),
             ),
             goal_line(
                 "2026-11-23T10:05:00.000Z",
-                r#""met":false,"failed":true,"iterations":3,"#,
-                "all tests pass",
+                json!({"type": "goal_status", "met": false, "failed": true, "iterations": 3, "condition": "all tests pass"}),
             ),
             goal_line(
                 "2026-11-23T10:06:00.000Z",
-                r#""met":false,"sentinel":true,"#,
-                "the PR is merged",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "the PR is merged"}),
             ),
             goal_line(
                 "2026-11-23T10:07:00.000Z",
-                r#""met":true,"sentinel":true,"#,
-                "the PR is merged",
+                json!({"type": "goal_status", "met": true, "sentinel": true, "condition": "the PR is merged"}),
             ),
             goal_line(
                 "2026-11-23T10:08:00.000Z",
-                r#""met":true,"#,
-                "a resumed goal",
+                json!({"type": "goal_status", "met": true, "condition": "a resumed goal"}),
             ),
         ]);
         assert_eq!(rows.len(), 3);
