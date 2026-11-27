@@ -749,17 +749,20 @@ mod tests {
         );
 
         // Withhold arm, another session's claim: the holder must name the
-        // asking session.
-        seed_claim(&root, "x-claim", "target-session:s-other", 900_000);
+        // asking session. A fresh node, because the store never overwrites
+        // a live row with a different holder.
+        let other = checkout(&base, &repo, "renamed", "x-other", true);
+        seed_claim(&root, "x-other", "target-session:s-other", 900_000);
         assert_eq!(
-            claims_leg_in("s-claim", &repo, &wt.to_string_lossy(), Some(&root)),
+            claims_leg_in("s-claim", &repo, &other.to_string_lossy(), Some(&root)),
             None
         );
 
         // Withhold arm, expired claim: a stale TTL admits nobody.
-        seed_claim(&root, "x-claim", "target-session:s-claim", -1);
+        let expired = checkout(&base, &repo, "renamed", "x-expired", true);
+        seed_claim(&root, "x-expired", "target-session:s-claim", -1);
         assert_eq!(
-            claims_leg_in("s-claim", &repo, &wt.to_string_lossy(), Some(&root)),
+            claims_leg_in("s-claim", &repo, &expired.to_string_lossy(), Some(&root)),
             None
         );
 
