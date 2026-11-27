@@ -105,7 +105,9 @@ Read one node as JSON. The id is a node id, slug, or bare hex.
 Options:
       --field NAME  Print one field. A missing field prints null.
       --grouped     Group the fields by section.
-      --strict      Read the live graph only, never the archive.
+      --strict      Read the live graph only, never the archive. A four to
+                    eight digit number that only a display number names
+                    refuses and names both readings.
       --trace       Print the node's history as JSON.
   -J, --json        Accepted and unchanged: the output is already JSON.
   -h, --help        Print help.
@@ -220,6 +222,9 @@ pub fn run(tail: &[String]) -> i32 {
         .cloned()
         .collect();
     if let Some(hit) = resolve_tiers(&live, args.id) {
+        if args.render.strict && number_tier_only(hit, args.id) {
+            return refuse_number_collision(hit, args.id);
+        }
         let id = hit
             .get("id")
             .and_then(Value::as_str)
@@ -288,6 +293,35 @@ pub fn run(tail: &[String]) -> i32 {
             "ok": false,
             "error": message,
         }))
+    );
+    1
+}
+
+/// A hash-width token (`x-2844`: four to eight decimal digits) that reached its
+/// node only through the display-number tier. Such a token is also the shape of
+/// an all-digit hash id, so the id tier's miss and the number tier's hit
+/// disagree about what the caller named.
+fn number_tier_only(hit: &Value, query: &str) -> bool {
+    let digits = query.split_once('-').map_or("", |(_, d)| d);
+    let hash_width = (4..=8).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit());
+    let q_lc = query.to_lowercase();
+    hash_width
+        && hit.get("id").and_then(Value::as_str) != Some(query)
+        && hit.get("slug").and_then(Value::as_str) != Some(q_lc.as_str())
+        && !super::node_ref::entry_aliases(hit).contains(&query)
+}
+
+/// The `--strict` refusal for a number-tier-only hit: names both readings and
+/// serves neither.
+fn refuse_number_collision(hit: &Value, query: &str) -> i32 {
+    let node = hit.get("id").and_then(Value::as_str).unwrap_or_default();
+    let message = format!(
+        "No node with id '{query}' in the live graph. '{query}' is also the display number of {node}: \
+         run `fno backlog get {node}` to read that node."
+    );
+    println!(
+        "{}",
+        py_json_compact(&json!({"ok": false, "error": message}))
     );
     1
 }
@@ -587,5 +621,15 @@ mod tests {
         assert!(resolve_tiers(&entries, "aaaaaaaa").is_some());
         assert!(resolve_tiers(&entries, "AAAAAAAA").is_none());
         assert!(resolve_tiers(&entries, "ab-zzzzzzzz").is_none());
+    }
+
+    #[test]
+    fn strict_flags_a_hash_width_token_that_only_the_number_tier_hit() {
+        let row = json!({"id": "x-ea0e", "slug": "alpha-node"});
+        assert!(number_tier_only(&row, "x-2844"));
+        assert!(!number_tier_only(&row, "x-ea0e"));
+        assert!(!number_tier_only(&row, "x-15"));
+        let aliased = json!({"id": "x-ea0e", "aliases": ["x-2844"]});
+        assert!(!number_tier_only(&aliased, "x-2844"));
     }
 }
