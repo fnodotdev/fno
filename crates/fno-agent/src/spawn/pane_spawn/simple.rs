@@ -343,6 +343,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
     Ok(ArmPlan {
         wrapped,
         held_seed: (typed && !seed.is_empty()).then(|| seed.clone()),
+        delivered_seed: (!seed.is_empty()).then(|| seed.clone()),
         preassigned_id: uuid,
     })
 }

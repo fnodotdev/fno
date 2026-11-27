@@ -263,6 +263,10 @@ ntfy shows at most three actions per notification. A question with an `answer_ba
 
 A webhook sink receives the `Delivery` body. The body carries `delivery_id`, `event` (`item.opened` or `item.closed`), `sink`, and the item. A sink with an `answer_base_url` also carries the `answer_url`. The adapter's `external_id` returns on `item.closed`. fno ships no adapter. The contract and the endpoint are the deliverable.
 
+### Where a push stopped
+
+A sink 2xx is a server accept, not a device receipt. The Claude `PushNotification` tool answers "requested" and skips the push while the terminal is active. `hooks/push-receipt.sh` writes each answer to `~/.fno/agents/ask-push/receipts.jsonl`. `scripts/diagnostics/ask-push-delivery.sh <qid>` reads the hook claim, that receipt and the sink delivery row, and prints the first failing hop. No path returns a device receipt, so the device hop reads `unconfirmed`.
+
 ## Chat channels
 
 A chat channel sends each open question to one chat as one message. A reply in that message's thread answers it. The channels are Telegram, Discord, and iMessage through a BlueBubbles server. Each one is off until its row exists in [the trusted file](#the-trusted-file). A project row never names who can answer. Keep the row's secret in `~/.fno/.env`, so the daemon reads it. `fno config setup run --only messaging` walks each channel, writes its row and its secret, and sends one test message. Setup also offers this step, and a skip prints the same command.

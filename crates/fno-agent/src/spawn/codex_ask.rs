@@ -844,6 +844,7 @@ pub fn codex_create(
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
     harness_args: &[String],
+    route: Option<&crate::codex_route::CodexRoute>,
 ) -> Result<CodexResult, CodexAskError> {
     let effective_prompt = render_command_seed(prompt, "codex");
     let full_prompt = inject_from_name(&effective_prompt, from_name);
@@ -869,7 +870,7 @@ pub fn codex_create(
             message,
         });
     }
-    let argv = build_argv_create(
+    let mut argv = build_argv_create(
         cwd,
         &full_prompt,
         eff,
@@ -878,6 +879,10 @@ pub fn codex_create(
         add_dir,
         harness_args,
     );
+    if let Some(route) = route {
+        crate::codex_route::splice_route(&mut argv, route);
+    }
+    let route_env: Vec<(String, String)> = route.map(|r| r.env.clone()).unwrap_or_default();
     run_codex(
         &argv,
         output_path,
@@ -886,7 +891,7 @@ pub fn codex_create(
         None,
         agent_self,
         None,
-        &[],
+        &route_env,
     )
 }
 
@@ -1145,6 +1150,7 @@ pub fn dispatch_codex_once(
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
     harness_args: &[String],
+    route: Option<&crate::codex_route::CodexRoute>,
 ) -> AskOutcome {
     use crate::claude_ask::py_repr;
 
@@ -1214,6 +1220,7 @@ pub fn dispatch_codex_once(
         reasoning_effort,
         add_dir,
         harness_args,
+        route,
     );
     if inner.exit_code != 0 {
         // create failed; dispatch_create only writes the registry post-success,
@@ -1272,6 +1279,7 @@ fn dispatch_create(
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
     harness_args: &[String],
+    route: Option<&crate::codex_route::CodexRoute>,
 ) -> AskOutcome {
     let output_path = derive_log_path(home, name);
     let timeout_sec = timeout.unwrap_or(DEFAULT_FOLLOWUP_TIMEOUT);
@@ -1288,6 +1296,7 @@ fn dispatch_create(
         reasoning_effort,
         add_dir,
         harness_args,
+        route,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -1367,8 +1376,12 @@ fn dispatch_create(
         forked_from_session_id: None,
         // v25: the route axes this lane actually used. Codex's ambient auth
         // is the account it positively pinned nothing past, so "default".
-        route_provider_id: Some("openai".to_string()),
-        model_name: model.filter(|m| !m.is_empty()).map(str::to_string),
+        // A routed row records its route, which a followup re-resolves.
+        route_provider_id: Some(route.map_or("openai", |r| r.provider.as_str()).to_string()),
+        model_name: route
+            .map(|r| r.model.as_str())
+            .or(model.filter(|m| !m.is_empty()))
+            .map(str::to_string),
         account_record_id: Some("default".to_string()),
         cwd: cwd.to_string_lossy().to_string(),
         project_root: String::new(),

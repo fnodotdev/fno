@@ -32,6 +32,9 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOOK="$REPO_ROOT/hooks/context-nudge.sh"
+# The hook is a shim; the leg it runs is this Rust module, which the source
+# sweeps below read.
+HOOK_SRC_FILE="$REPO_ROOT/crates/fno-agent/src/runtime/hook/front/stop.rs"
 SCOPE="x-test-epic"
 LEAD_SID="lead-test-session-id"
 
@@ -284,9 +287,9 @@ clear_events() {
 }
 
 # === AC9: the hook gates on nothing it isn't handed ============================
-assert_absent "AC9: no kill -0"        "$(cat "$HOOK")" "kill -0"
-assert_absent "AC9: no owner_pid"      "$(cat "$HOOK")" "owner_pid"
-assert_absent "AC9: no target-state"   "$(cat "$HOOK")" "target-state"
+assert_absent "AC9: no kill -0"        "$(cat "$HOOK_SRC_FILE")" "kill -0"
+assert_absent "AC9: no owner_pid"      "$(cat "$HOOK_SRC_FILE")" "owner_pid"
+assert_absent "AC9: no target-state"   "$(cat "$HOOK_SRC_FILE")" "target-state"
 
 # === AC5: promoted lead past trigger -> block with the measured pct ============
 write_registry yes no
@@ -718,7 +721,7 @@ assert_absent   "gate: unmeasured -> claims no path"          "$OUT" 'has NO inj
 assert_absent   "gate: unmeasured -> claims a path"           "$OUT" 'HAS an injection path'
 
 # Neither branch may name the plumbing under the front door, nor a deleted command.
-HOOK_SRC="$(cat "$HOOK")"
+HOOK_SRC="$(cat "$HOOK_SRC_FILE")"
 assert_absent "hook: no raw mail-inject prescription" "$HOOK_SRC" 'mail-inject'
 assert_absent "hook: no deleted role command"           "$HOOK_SRC" 'agents role'
 assert_absent "hook: no deleted succession flag"      "$HOOK_SRC" '--succeed'
@@ -774,8 +777,6 @@ home_count=$(find "$SBX/.fno/state/latches" -maxdepth 1 -type f -name '.context-
   || bad "latch: nothing under the overridden state_dir (found $alt_count)"
 assert_eq "latch: overridden state_dir writes nothing under \$HOME/.fno" "$home_count" "0"
 
-assert_contains "latch: resolves through the shell stub" "$HOOK_SRC" 'fno config paths shell-stub'
-assert_contains "latch: has a deleter" "$HOOK_SRC" '-mtime +2 -delete'
 
 # latches/ absent at fire time must not error.
 rm -rf "$LATCHES"

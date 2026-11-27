@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn two_rows_sharing_a_portal_key_resolve_by_the_seat_attach_argv() {
+    let (mut core, pane) = template_core();
+    core.session_name = "sess".into();
+    core.portals.insert(
+        0,
+        Portal {
+            row_key: "lenore".into(),
+            seat: pane,
+            tab: 5,
+        },
+    );
+    let mut first = agent_in("sess", 99, None, false);
+    first.name = "lenore".into();
+    first.mux = None;
+    first.session_id = Some("lenore-a".into());
+    first.attach_id = Some("aaaa1111".into());
+    first.predecessor_session_ids = vec!["lenore".into()];
+    let mut second = first.clone();
+    second.session_id = Some("lenore-b".into());
+    second.attach_id = Some("bbbb2222".into());
+    let rows = vec![first, second];
+    let argv: Vec<String> = ["claude", "attach", "bbbb2222"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_eq!(
+        crate::thread_viewer::identity_for_pane(&core.portals, pane, &rows, None),
+        None
+    );
+    assert_eq!(
+        crate::thread_viewer::identity_for_pane(&core.portals, pane, &rows, Some(&argv)).as_deref(),
+        Some("lenore-b")
+    );
+}
+
+#[test]
 fn pane_send_accepts_the_dedicated_thread_viewer_identity() {
     let (mut core, pane) = template_core();
     core.session_name = "sess".into();

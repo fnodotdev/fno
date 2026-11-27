@@ -31,6 +31,7 @@ A provider may create a harness, may deliver models, or may do both:
 | Google | Gemini CLI / Antigravity | gemini family |
 | zai | - | glm-5.2 |
 | deepseek | - | deepseek models |
+| openrouter | - (a gateway) | other vendors' models, as `openrouter/<vendor>/<model>` |
 
 Every provider that ships a harness shares a colloquial name with it.
 `claude` is a harness whose provider is Anthropic, and "claude" also reads as the vendor in ordinary speech; `codex` and `gemini` are the same, and `gemini` additionally names a model family.

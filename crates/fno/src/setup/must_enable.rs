@@ -23,13 +23,15 @@ const FILTER_A: &[&str] = &[
 ];
 
 /// Commands that launch, merge or rotate. A rule may neither name one nor
-/// sit above one: `fno agent *` would cover `fno agent spawn`.
+/// sit above one: `fno agent *` would cover `fno agent spawn`. `fno do
+/// target` left this list on 2026-11-26 (user ruling D3654: the delivery
+/// loop launches no worker, so its commands ride the allow rules); do not
+/// read its absence as an invitation to widen the rest.
 const NEVER: &[&str] = &[
     "fno agent spawn",
     "fno do pr merge",
     "fno do pr create",
     "fno do pr push",
-    "fno do target",
     "fno config accounts use",
     "fno agent session stop",
     "fno agent session rm",
@@ -747,6 +749,9 @@ mod tests {
         let claude = list.claude();
         let opencode = list.opencode_v1();
         assert!(claude.contains(&"Bash(fno backlog *)".to_string()));
+        // D3654: the delivery loop's own commands ride the allow rules; the
+        // loader accepting this row is the retired never-list bar's proof.
+        assert!(claude.contains(&"Bash(fno do target *)".to_string()));
         let codex = list.codex();
         assert_eq!(codex.matches("prefix_rule(").count(), list.rows.len());
         assert!(

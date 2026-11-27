@@ -5,6 +5,8 @@ name: executor-routing
 # blueprint when think became a research skill. Before this workflow the test
 # had no runner, so it failed for nobody - a guard on zero reachable paths.
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - 'skills/blueprint/references/detect-surface.sh'

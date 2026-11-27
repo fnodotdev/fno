@@ -21,7 +21,7 @@ pub(crate) fn overlay_hold_marks(rows: &mut [RegistryAgent]) {
 /// (`FNO_HOME` > `$HOME/.fno`) so the overlay reads the root the writers
 /// use. A global-config `paths.state_dir` root is not mirrored here; that
 /// install degrades to no mark, never a wrong one.
-fn hold_dir() -> PathBuf {
+pub(crate) fn hold_dir() -> PathBuf {
     let root = match std::env::var_os("FNO_HOME") {
         Some(home) => PathBuf::from(home),
         None => std::env::var_os("HOME")

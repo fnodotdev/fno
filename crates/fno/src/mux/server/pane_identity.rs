@@ -51,11 +51,20 @@ impl Core {
             // `attach <id>` has left its worker; the seat answers no identity,
             // so the `pane ls` / `pane read` joins read null and the callers
             // that join on fno_id refuse with no code of their own.
-            if self.portal_seat_refusal_live(pid, agents).is_none() {
+            let argv = self
+                .panes
+                .get(&pid)
+                .and_then(|e| e.pty.child_pid())
+                .and_then(crate::pane_argv::process_argv);
+            if self
+                .portal_seat_refusal(pid, agents, argv.clone())
+                .is_none()
+            {
                 ids.extend(crate::thread_viewer::identity_for_pane(
                     &self.portals,
                     pid,
                     agents,
+                    argv.as_deref(),
                 ));
             }
         }

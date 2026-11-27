@@ -1650,6 +1650,7 @@ fn client_spawn(
             &harness_args,
             route.as_ref(),
             sandbox_settings.as_deref(),
+            params.pointer("/role").and_then(Value::as_str),
         ),
         output_format: output_format.as_deref(),
     };
@@ -2065,6 +2066,7 @@ fn spawn_claude_flags<'a>(
     harness_args: &'a [String],
     route: Option<&'a fno_agent::spawn_route::Route>,
     settings: Option<&'a str>,
+    role: Option<&'a str>,
 ) -> fno_agent::claude_ask::HarnessFlags<'a> {
     fno_agent::claude_ask::HarnessFlags {
         add_dir: None,
@@ -2079,6 +2081,7 @@ fn spawn_claude_flags<'a>(
             settings: &r.settings,
         }),
         settings,
+        role,
     }
 }
 
@@ -2472,9 +2475,10 @@ fn launch_codex_headless(call: &SpawnCall<'_>) -> Option<i32> {
         false,
         call.timeout,
         None,
-        None,
+        call.route.and_then(|r| r.effort.as_deref()),
         None,
         call.harness_args,
+        call.route.and_then(|r| r.codex.as_ref()),
     );
     if let Some(receipt) = daemon_receipt.as_ref() {
         fno_agent::codex_ask::append_daemon_receipt(&mut outcome, receipt);

@@ -54,6 +54,12 @@ fn main() {
     sync_module_copy("legacy_env");
     sync_module_copy("trusted_config");
     sync_module_copy("spawn/harness");
+    sync_module_copy("eval/proc_table");
+    sync_module_copy("runtime/identity_markers");
+    sync_module_copy("runtime/bus_read");
+    sync_module_copy("runtime/mail_ids");
+    sync_module_copy("runtime/mail_sent_core");
+    sync_module_copy("spawn/self_identity");
     sync_model_reach();
     sync_registry_schema();
     sync_events_limits();
@@ -443,15 +449,13 @@ fn sync_module_copy(src_path: &str) {
         return;
     }
     let marker = "\n#[cfg(test)]\nmod tests {";
-    assert_eq!(
-        text.matches(marker).count(),
-        1,
-        "src/{src_path}.rs must carry exactly one test module; update sync_module_copy"
+    assert!(
+        text.matches(marker).count() <= 1,
+        "src/{src_path}.rs must carry at most one test module; update sync_module_copy"
     );
     let body = text
         .split_once(marker)
-        .expect("matches() above guarantees the marker")
-        .0
+        .map_or(text.as_str(), |(code, _)| code)
         .trim_end_matches('\n');
     let body = if name == "otel_read" {
         println!("cargo:rerun-if-changed=src/otel_schema.sql");

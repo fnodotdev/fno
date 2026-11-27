@@ -1,13 +1,17 @@
-//! The `fno` crate's copy of the state-root layout resolver: the same table
+//! The `fno` crate's leg of the state-root layout resolver: the same table
 //! (`docs/state-root-layout.tsv`, read at build time) and the same `place`
 //! semantics as `fno-agent/src/runtime/state_layout.rs` - the dual-implementation
-//! inventory pattern. No migration lives here; the daemon crate owns it.
+//! inventory pattern. No migration lives here; the daemon crate owns it. The
+//! class homes (cache, logs) are not a copy: both binaries resolve them
+//! through `fno_homes`, the one resolver.
 //!
 //! A destination that starts with `cache/` or `logs/` names a class home on
 //! the default root ([`home_of`]); every other root keeps both inside itself.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+use fno_homes::ClassHome;
 
 pub const LAYOUT_TSV: &str = include_str!("../state-root-layout.tsv");
 
@@ -134,61 +138,30 @@ fn is_default_root(root: &Path) -> bool {
         || matches!((root.canonicalize(), default.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
-/// One class home: the env carrier, then `[paths]` config, then the platform
-/// default. Mirrors `paths_cli::class_home` in fno-agent, without a spawn: a
-/// pin expands `~` and resolves links, a config value also expands variables,
-/// and a config value with a glob or a template is no answer.
-fn class_home(env_key: &str, config_key: &str, default: fn(&Path) -> PathBuf) -> PathBuf {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let user = std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    if let Some(pin) = crate::digest_overlay::non_empty_env_os(env_key) {
-        let pin = crate::config_doctor::expanduser(&pin.to_string_lossy());
-        return crate::config_doctor::resolve(Path::new(&pin));
-    }
-    let configured = crate::digest_overlay::config_str(&cwd, "paths", config_key)
-        .filter(|raw| !raw.contains(['*', '?', '[']))
-        .map(|raw| crate::config_doctor::expandvars(raw.trim_end_matches('/')))
-        .filter(|path| crate::config_cli::model::template_vars(path).is_empty());
-    match configured {
-        Some(path) => cwd.join(crate::config_doctor::expanduser(&path)),
-        None => default(&user),
-    }
-}
-
-fn default_cache_home(user: &Path) -> PathBuf {
-    if cfg!(windows) {
-        return crate::digest_overlay::non_empty_env_os("LOCALAPPDATA")
-            .map_or_else(|| user.to_path_buf(), PathBuf::from)
-            .join("fno")
-            .join("cache");
-    }
-    if cfg!(target_os = "macos") {
-        return user.join("Library").join("Caches").join("fno");
-    }
-    crate::digest_overlay::non_empty_env_os("XDG_CACHE_HOME")
-        .map_or_else(|| user.join(".cache"), PathBuf::from)
-        .join("fno")
-}
-
-fn default_state_home(user: &Path) -> PathBuf {
-    crate::digest_overlay::non_empty_env_os("XDG_STATE_HOME")
-        .map_or_else(|| user.join(".local").join("state"), PathBuf::from)
-        .join("fno")
-}
-
 /// A root-relative table destination as a path. Only a class name reads the
-/// environment or config.
+/// environment or config, through `fno_homes`, the one resolver both
+/// binaries share.
 pub fn home_of(root: &Path, rel: &str) -> PathBuf {
     let (head, rest) = rel.split_once('/').unwrap_or((rel, ""));
     if !matches!(head, "cache" | "logs") || !is_default_root(root) {
         return root.join(rel);
     }
-    let base = if head == "cache" {
-        class_home("FNO_CACHE_HOME", "cache_dir", default_cache_home)
-    } else {
-        class_home("FNO_STATE_HOME", "state_dir_local", default_state_home).join("logs")
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let base = match head {
+        "cache" => fno_homes::class_home(
+            &cwd,
+            "FNO_CACHE_HOME",
+            crate::digest_overlay::config_str_any_format(&cwd, "paths", "cache_dir").as_deref(),
+            ClassHome::Cache,
+        ),
+        _ => fno_homes::class_home(
+            &cwd,
+            "FNO_STATE_HOME",
+            crate::digest_overlay::config_str_any_format(&cwd, "paths", "state_dir_local")
+                .as_deref(),
+            ClassHome::State,
+        )
+        .join("logs"),
     };
     if rest.is_empty() {
         base
@@ -561,6 +534,38 @@ mod tests {
         );
         std::fs::remove_dir_all(&root).ok();
         std::fs::remove_dir_all(&fresh).ok();
+    }
+
+    /// The class-home read answers a legacy `settings.yaml` pin through the
+    /// format-agnostic reader, closing the gap the copied resolver carried.
+    #[test]
+    fn home_of_reads_a_yaml_pin() {
+        let _lock = crate::model_catalog::state_env_lock();
+        let base = std::env::temp_dir().join(format!("fno-yaml-home-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let home = base.join("home");
+        let root = home.join(".fno");
+        std::fs::create_dir_all(&root).unwrap();
+        let cache = base.join("yaml-cache");
+        let yaml = base.join("settings.yaml");
+        std::fs::write(&yaml, format!("paths:\n  cache_dir: {}\n", cache.display())).unwrap();
+        let saved: Vec<(&'static str, Option<std::ffi::OsString>)> =
+            ["HOME", "FNO_CONFIG", "FNO_CACHE_HOME"]
+                .map(|k| (k, std::env::var_os(k)))
+                .into_iter()
+                .collect();
+        std::env::set_var("HOME", &home);
+        std::env::set_var("FNO_CONFIG", &yaml);
+        std::env::remove_var("FNO_CACHE_HOME");
+        let got = home_of(&root, "cache/pages");
+        for (key, value) in &saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(got, cache.join("pages"));
     }
 
     fn touch_mtime(p: &Path, t: std::time::SystemTime) {

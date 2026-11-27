@@ -549,28 +549,6 @@ fn is_yaml(path: &Path) -> bool {
     )
 }
 
-/// The setting that gives the two crates two answers for a class home: the
-/// front door's copy reads no YAML pin and fills no template. A `${VAR}` is
-/// no template, so variables expand before the look.
-pub(crate) fn unroutable_class_setting(cwd: &Path) -> Option<(&'static str, &'static str)> {
-    if std::env::var_os("FNO_CONFIG").is_some_and(|v| is_yaml(Path::new(&v))) {
-        return Some(("FNO_CONFIG", "names a YAML file, so use a TOML file"));
-    }
-    [
-        ("FNO_CACHE_HOME", "cache_dir", "paths.cache_dir"),
-        ("FNO_STATE_HOME", "state_dir_local", "paths.state_dir_local"),
-    ]
-    .into_iter()
-    .find(|&(env_key, config_key, _)| {
-        std::env::var_os(env_key)
-            .filter(|v| !v.is_empty())
-            .is_none()
-            && cfg_str(cwd, &["paths", config_key])
-                .is_some_and(|raw| has_template(&expandvars(&raw)))
-    })
-    .map(|(_, _, key)| (key, "holds a template, so write the path out"))
-}
-
 pub(crate) fn cfg_str(cwd: &Path, keys: &[&str]) -> Option<String> {
     live_lookup(cwd, keys)
         .and_then(|r| r.ok())
@@ -633,112 +611,51 @@ pub(crate) fn state_dir_absolute(cwd: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// The class homes: where each CLASS of file lives outside the state root.
-/// The state root keeps config and irreplaceable data; rebuildable caches go
-/// to the OS cache dir, binaries to the OS data dir, logs to the OS state
-/// dir. One resolver per class, one precedence each: the env carrier (test
-/// and CI pins; the `FNO_STATE_DIR` precedent), then the `config.paths`
-/// override, then the platform default.
+/// The class homes resolve through `fno_homes`, the one resolver both
+/// binaries share (precedence, value treatment and the platform table).
+/// The env carrier is the test and CI pin (the `FNO_STATE_DIR` precedent),
+/// then the `config.paths` override through this crate's YAML-capable
+/// [`live_lookup`], then the platform default.
 ///
-/// The defaults follow the `dirs` crate conventions in plain `std::env` code
-/// (the crate is not a dependency), with two deliberate divergences:
-/// data home is `~/.local/share/fno` on macOS too (the CLI
-/// convention, not Application Support), and state home is
-/// `~/.local/state/fno` on every platform (macOS `dirs` answers None there,
-/// but the logs family needs a real answer). Cache is `~/Library/Caches/fno`
-/// on macOS, `$XDG_CACHE_HOME/fno` else `~/.cache/fno` elsewhere,
-/// `%LOCALAPPDATA%\fno\cache` on Windows (written, untested: no CI host).
-fn class_home(cwd: &Path, env_key: &str, config_key: &str, default: fn() -> PathBuf) -> PathBuf {
-    if let Some(carrier) = std::env::var_os(env_key).filter(|v| !v.is_empty()) {
-        let p = crate::paths::resolve_loose(&expanduser(&carrier.to_string_lossy()));
-        return anchor_at(cwd, p);
-    }
-    if let Some(raw) = cfg_str(cwd, &["paths", config_key]) {
-        if let Ok(p) = resolve_override_path(&raw) {
-            return anchor_at(cwd, p);
-        }
-    }
-    default()
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
-}
-
-fn default_cache_home() -> PathBuf {
-    if cfg!(windows) {
-        return std::env::var_os("LOCALAPPDATA")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(home_dir)
-            .join("fno")
-            .join("cache");
-    }
-    if cfg!(target_os = "macos") {
-        return home_dir().join("Library").join("Caches").join("fno");
-    }
-    if let Some(x) = std::env::var_os("XDG_CACHE_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(x).join("fno");
-    }
-    home_dir().join(".cache").join("fno")
-}
-
-fn default_data_home() -> PathBuf {
-    if cfg!(windows) {
-        return std::env::var_os("LOCALAPPDATA")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(home_dir)
-            .join("fno");
-    }
-    if let Some(x) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(x).join("fno");
-    }
-    home_dir().join(".local").join("share").join("fno")
-}
-
-fn default_state_home() -> PathBuf {
-    if let Some(x) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(x).join("fno");
-    }
-    home_dir().join(".local").join("state").join("fno")
-}
-
-/// Rebuildable caches (cargo build base, gh-facts, pr-status, pages, hook
-/// budgets). Env `FNO_CACHE_HOME`, then `config.paths.cache_dir`, then the
-/// platform cache dir.
+/// Rebuildable caches (`cache_home`): cargo build base, gh-facts, pr-status,
+/// pages, hook budgets. Binaries (`data_home`): the install payload. Logs
+/// (`state_home`): the logs family outside the config home.
+///
+/// [`live_lookup`]: paths_cli::live_lookup
 pub(crate) fn cache_home(cwd: &Path) -> PathBuf {
-    class_home(cwd, "FNO_CACHE_HOME", "cache_dir", default_cache_home)
+    fno_homes::class_home(
+        cwd,
+        "FNO_CACHE_HOME",
+        cfg_str(cwd, &["paths", "cache_dir"]).as_deref(),
+        fno_homes::ClassHome::Cache,
+    )
 }
 
 /// [`cache_home`] without the config read, for a PreToolUse path: env, then
 /// the platform default. The twin of `fno_cache_home_fast` in
 /// `scripts/lib/class-home.sh`.
 pub(crate) fn cache_home_fast(cwd: &Path) -> PathBuf {
-    match std::env::var_os("FNO_CACHE_HOME").filter(|v| !v.is_empty()) {
-        Some(carrier) => anchor_at(
-            cwd,
-            crate::paths::resolve_loose(&expanduser(&carrier.to_string_lossy())),
-        ),
-        None => default_cache_home(),
-    }
+    fno_homes::class_home_fast(cwd, "FNO_CACHE_HOME", fno_homes::ClassHome::Cache)
 }
 
-/// Binaries and installed release payloads. Env `FNO_DATA_HOME`, then
-/// `config.paths.data_dir`, then `~/.local/share/fno` (`$XDG_DATA_HOME/fno`
-/// when set on the XDG platforms).
+/// Binaries and installed release payloads.
 pub(crate) fn data_home(cwd: &Path) -> PathBuf {
-    class_home(cwd, "FNO_DATA_HOME", "data_dir", default_data_home)
+    fno_homes::class_home(
+        cwd,
+        "FNO_DATA_HOME",
+        cfg_str(cwd, &["paths", "data_dir"]).as_deref(),
+        fno_homes::ClassHome::Data,
+    )
 }
 
-/// Logs and the other state files that belong outside the config home. Env
-/// `FNO_STATE_HOME`, then `config.paths.state_dir_local`, then
-/// `~/.local/state/fno`.
+/// Logs and the other state files that belong outside the config home.
 pub(crate) fn state_home(cwd: &Path) -> PathBuf {
-    class_home(cwd, "FNO_STATE_HOME", "state_dir_local", default_state_home)
+    fno_homes::class_home(
+        cwd,
+        "FNO_STATE_HOME",
+        cfg_str(cwd, &["paths", "state_dir_local"]).as_deref(),
+        fno_homes::ClassHome::State,
+    )
 }
 
 /// Python `paths.global_events_json()`: the machine journal at the pinned
@@ -1637,5 +1554,46 @@ mod tests {
         assert_eq!(cache_home(&fx.root), PathBuf::from("/tmp/fno-x-cfg-cache"));
         assert_eq!(data_home(&fx.root), PathBuf::from("/tmp/fno-x-cfg-data"));
         assert_eq!(state_home(&fx.root), PathBuf::from("/tmp/fno-x-cfg-state"));
+    }
+
+    /// A `{template}` value is no answer on this side either: the shared
+    /// resolver falls to the platform default instead of resolving a
+    /// machine-wide home per project.
+    #[test]
+    fn class_home_template_config_answers_the_platform_default() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::temp_dir().join(format!("fno-class-tmpl-{}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        let (fx, _env) = class_home_fx("chtmpl", &home);
+        let tmpl = LiveFx::new("chtmpl-cfg", "[paths]\ncache_dir = '~/{project}/cache'\n");
+        let _tmpl_env = EnvGuard::new(&[("FNO_CONFIG", tmpl.config.display().to_string())]);
+        let expected = if cfg!(target_os = "macos") {
+            home.join("Library").join("Caches").join("fno")
+        } else {
+            home.join(".cache").join("fno")
+        };
+        assert_eq!(cache_home(&fx.root), expected);
+        // A $VAR no environment answers is no answer either: both binaries
+        // fall to the platform default instead of a literal $-named path.
+        let unset = LiveFx::new(
+            "chtmpl-unset",
+            "[paths]\ncache_dir = '$FNO_NO_SUCH_VAR_HOME/cache'\n",
+        );
+        let _unset_env = EnvGuard::new(&[("FNO_CONFIG", unset.config.display().to_string())]);
+        assert_eq!(cache_home(&fx.root), expected);
+    }
+
+    /// A legacy `settings.yaml` pin answers the class-home keys, the gap
+    /// the front-door copy carried.
+    #[test]
+    fn class_home_reads_a_yaml_pin() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::temp_dir().join(format!("fno-class-yaml-{}", std::process::id()));
+        fs::create_dir_all(&home).unwrap();
+        let (fx, _env) = class_home_fx("chyaml", &home);
+        let yaml = fx.base.join("settings.yaml");
+        fs::write(&yaml, "paths:\n  cache_dir: /tmp/fno-yaml-cache\n").unwrap();
+        let _yaml_env = EnvGuard::new(&[("FNO_CONFIG", yaml.display().to_string())]);
+        assert_eq!(cache_home(&fx.root), PathBuf::from("/tmp/fno-yaml-cache"));
     }
 }

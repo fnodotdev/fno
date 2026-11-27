@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use gpui::{
     fill, point, px, relative, rgba, size, App, Bounds, Element, ElementId, Font, GlobalElementId,
-    Hsla, IntoElement, LayoutId, Pixels, Point, ScrollHandle, SharedString, Style, TextRun,
-    UnderlineStyle, Window, WrappedLine,
+    Hsla, LayoutId, Pixels, Point, ScrollHandle, SharedString, Style, TextRun, UnderlineStyle,
+    Window, WrappedLine,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -265,13 +265,6 @@ impl Field {
         .into_iter()
         .filter(|r| r.len > 0)
         .collect()
-    }
-}
-
-impl IntoElement for Field {
-    type Element = Self;
-    fn into_element(self) -> Self {
-        self
     }
 }
 

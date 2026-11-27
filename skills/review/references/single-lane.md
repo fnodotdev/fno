@@ -14,7 +14,7 @@ When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs
 
 ## Phase 0 - gather the diff
 
-Run `git diff @{upstream}...HEAD` (or `git diff main...HEAD` / `git diff HEAD~1` if there's no upstream) to get the unified diff under review. If there are uncommitted changes, or the range diff is empty, also run `git diff HEAD` and include the working-tree changes in scope - the review often runs before the commit. If a PR number, branch name, or file path was passed as an argument, review that target instead. Treat this diff as the review scope.
+Run `fno do review read`. It prints the whole diff this round must read, scoped by git and the attestation journals, and records a receipt for this session and head. Read all of its output: the clean attestation needs the receipt, and a slice, count or filter of the output leaves the review unread. The receipt proves the diff was served, not that it was read. With uncommitted changes, or an empty range diff, also run `git diff HEAD`. Include the working-tree changes in scope, because the review often runs before the commit. If a PR number, branch name, or file path was passed as an argument, review that target instead. Treat this diff as the review scope.
 
 Pin the reviewed head now: `REVIEWED_HEAD=$(git rev-parse HEAD)`. Do not resolve it again after the pass runs.
 

@@ -44,6 +44,8 @@ name: guards
 # a structural guard, and stays its own workflow.
 
 on:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
   # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
   # it passes in is workflow_dispatch, so the PR-only jobs skip.
@@ -699,6 +701,13 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_check_value_reads.sh
+
+      # The mux client and the fno-agent feed reader share one search
+      # grammar in fno-proto; a second copy fails here.
+      - name: One search grammar
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-one-grammar.sh
 
       # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
       # included. The fno-agent binary's action list may only shrink; the

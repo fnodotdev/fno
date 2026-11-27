@@ -1102,6 +1102,12 @@ async fn daemon_lifecycle_doors(command: &str, args: &[String]) -> Option<i32> {
                 return Some(2);
             }
         };
+        if let Some(reason) = parsed.hold.as_deref() {
+            return Some(fno_agent::restart_run::run_hold(reason, parsed.json.json).await);
+        }
+        if parsed.release {
+            return Some(fno_agent::restart_run::run_release(parsed.json.json).await);
+        }
         if parsed.keepers_only {
             return Some(fno_agent::restart_run::run_keepers_only(parsed.json.json).await);
         }

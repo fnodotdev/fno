@@ -64,6 +64,8 @@ name: review-coverage-gate
 # a local publisher path, not accepted skew for this workflow to preserve.
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:

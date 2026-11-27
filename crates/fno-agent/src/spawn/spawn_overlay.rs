@@ -531,6 +531,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         None,
         &cwd,
         payload.pointer("/node").and_then(Value::as_str),
+        payload.pointer("/role").and_then(Value::as_str),
     )?;
     let template = crate::spawn_compose::resolve_template(
         harness,

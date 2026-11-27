@@ -208,13 +208,35 @@ fn parse_done_probes(content: &str) -> ProbeDecl {
 /// gate) share one parser so the two gates cannot drift on what counts as a
 /// declared probe list. Anything else declared under `key` is `Unparseable`.
 fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
+    let front = scan_probes(content, key);
+    if !crate::plan_doc::records::GATE_KEYS.contains(&key) {
+        return front.unwrap_or(ProbeDecl::None);
+    }
+    // The body form: the same line scan over the `## Gate records` fence, so
+    // every fail-closed arm holds there too. A defective fence, or the key in
+    // both places, is a declaration nobody can read: it fails closed.
+    match crate::plan_doc::records::body_records(content) {
+        Err(_) => ProbeDecl::Unparseable,
+        Ok(Some(map)) if map.contains_key(key) => {
+            if front.is_some() {
+                return ProbeDecl::Unparseable;
+            }
+            let fence = crate::plan_doc::records::fence_text(content).unwrap_or_default();
+            scan_probes(&format!("---\n{fence}\n---\n"), key).unwrap_or(ProbeDecl::Unparseable)
+        }
+        Ok(_) => front.unwrap_or(ProbeDecl::None),
+    }
+}
+
+/// The line scan over one `---` block: `None` when `key` is not declared.
+fn scan_probes(content: &str, key: &str) -> Option<ProbeDecl> {
     let content = content.trim_start();
     if !content.starts_with("---") {
-        return ProbeDecl::None;
+        return None;
     }
     let after_first = &content[3..];
     let Some(end) = after_first.find("\n---") else {
-        return ProbeDecl::None;
+        return None;
     };
 
     let key_prefix = format!("{key}:");
@@ -230,24 +252,24 @@ fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
             declared = true;
             let rest = rest.trim();
             if rest == "[]" {
-                return ProbeDecl::None;
+                return Some(ProbeDecl::None);
             }
             if let Some(inner) = rest.strip_prefix('[') {
                 // strip_suffix, not trim_end_matches: the latter eats EVERY
                 // trailing ']' (mangling a command that ends in one) and would
                 // silently accept an unterminated list.
                 let Some(inner) = inner.strip_suffix(']') else {
-                    return ProbeDecl::Unparseable;
+                    return Some(ProbeDecl::Unparseable);
                 };
                 let items = split_inline_list(inner);
                 // An empty result means a multi-line inline list (items live on
                 // following lines) - unrecoverable here, so refuse rather than
                 // report the declaration as absent.
-                return if items.is_empty() {
+                return Some(if items.is_empty() {
                     ProbeDecl::Unparseable
                 } else {
                     ProbeDecl::Probes(items)
-                };
+                });
             }
             // A plain scalar (`close_probes: cmd`) is ONE probe. The plan
             // schema advertises `str | list`, so refusing the scalar here made
@@ -256,14 +278,14 @@ fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
             // the value on the following lines and is still unreadable here.
             if !rest.is_empty() {
                 if rest.starts_with('|') || rest.starts_with('>') {
-                    return ProbeDecl::Unparseable;
+                    return Some(ProbeDecl::Unparseable);
                 }
                 let item = unquote_scalar(rest);
-                return if item.is_empty() {
+                return Some(if item.is_empty() {
                     ProbeDecl::Unparseable
                 } else {
                     ProbeDecl::Probes(vec![item])
-                };
+                });
             }
             in_block = true;
             continue;
@@ -283,9 +305,9 @@ fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
     }
 
     match (declared, out.is_empty()) {
-        (false, _) => ProbeDecl::None,
-        (true, true) => ProbeDecl::Unparseable,
-        (true, false) => ProbeDecl::Probes(out),
+        (false, _) => None,
+        (true, true) => Some(ProbeDecl::Unparseable),
+        (true, false) => Some(ProbeDecl::Probes(out)),
     }
 }
 
@@ -1343,6 +1365,11 @@ mod done_probe_tests {
         format!("---\ntitle: t\n{body}\n---\n\n# doc\n")
     }
 
+    /// The body form: the keys sit in the `## Gate records` fence.
+    fn body(records: &str) -> String {
+        format!("---\ntitle: t\n---\n\n# doc\n\n## Gate records\n\n```yaml\n{records}\n```\n")
+    }
+
     fn probes_of(doc: &str) -> Vec<String> {
         match parse_done_probes(doc) {
             ProbeDecl::Probes(p) => p,
@@ -1360,6 +1387,12 @@ mod done_probe_tests {
                 "echo ok".to_string()
             ]
         );
+        // AC2-HP: the body form yields the same two probes.
+        let doc = body(
+            "done_probes:\n  - \"fno agent mail list --since 24h | grep -q groom\"\n  - 'echo ok'",
+        );
+        assert_eq!(probes_of(&doc).len(), 2);
+        assert_eq!(probes_of(&doc).last().map(String::as_str), Some("echo ok"));
     }
 
     #[test]
@@ -1390,6 +1423,22 @@ mod done_probe_tests {
             ProbeDecl::Unparseable,
             "a declared-but-empty block must refuse, not pass"
         );
+        // AC2-ERR: the body form keeps the same refusals, and a list held in
+        // both places or a broken fence is never no gate.
+        assert_eq!(
+            parse_done_probes(&body("done_probes: [\n  \"echo a\",\n  \"echo b\"\n]")),
+            ProbeDecl::Unparseable
+        );
+        let twice = fm("done_probes: [\"echo a\"]").replace(
+            "# doc\n",
+            "# doc\n\n## Gate records\n\n```yaml\ndone_probes: [\"echo a\"]\n```\n",
+        );
+        assert_eq!(parse_done_probes(&twice), ProbeDecl::Unparseable);
+        assert_eq!(
+            parse_done_probes(&body("waves: [1]")),
+            ProbeDecl::Unparseable
+        );
+        assert_eq!(parse_done_probes(&body("done_probes: []")), ProbeDecl::None);
     }
 
     #[test]

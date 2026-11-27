@@ -259,7 +259,8 @@ cargo-rustc-wrapper.sh
 class-home.sh
 
 # The foreign-rooted-writers predicate for the flush nudge. Sourced by
-# hooks/context-nudge.sh's flush branch; exposes foreign_rooted_writers, which
+# the context-nudge Stop leg's flush branch, as a bash child of
+# crates/fno-agent/src/runtime/hook/front/stop.rs; exposes foreign_rooted_writers, which
 # reuses _wt_pids from scripts/lib/worktree-lifecycle.sh and joins the agents
 # registry - the wrapped entry point for that population is
 # `fno agent internal registry-json`, so a wrapper here would be a second path around

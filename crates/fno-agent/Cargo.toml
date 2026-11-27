@@ -43,6 +43,11 @@ path = "src/bin/worker.rs"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 serde_json = { version = "1", features = ["preserve_order"] }
+# The one class-home resolver: cache/data/state precedence and the platform
+# table, shared with the front door. Production dep (not dev): the daemon's
+# cache_home/data_home/state_home resolve through it, the same leg the front
+# door reads. A caret range: the crate versions on its own.
+fno-homes = { path = "../fno-homes", version = "0.1" }
 # The mail protocol core. A caret range: fno-mail versions on its own, and
 # under 0.x a breaking change bumps the minor, which this range refuses.
 fno-mail = { path = "../fno-mail", version = "0.1" }
@@ -50,7 +55,7 @@ fno-mail = { path = "../fno-mail", version = "0.1" }
 # digest input and the published pack-UI schema regenerates from them, so
 # both spellings must stay one crate. No features: the schema derivation
 # stays behind the published crate's own `schema` feature.
-fno-proto = { path = "../fno-proto", version = "0.2", features = ["vt"] }
+fno-proto = { path = "../fno-proto", version = "0.2.4", features = ["vt", "feed"] }
 thiserror = "2"
 # Cross-process region-text fingerprint for the answer queue: the
 # daemon extractor hashes the blocked prompt's region text and the mux server

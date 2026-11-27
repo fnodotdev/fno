@@ -27,5 +27,7 @@ pub(crate) mod refusal_surface_core;
 #[cfg(feature = "app")]
 pub mod review_prior_head;
 #[cfg(feature = "app")]
+pub mod review_read;
+#[cfg(feature = "app")]
 pub mod search_query;
 pub mod store_client;

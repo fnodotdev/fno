@@ -141,7 +141,11 @@ case "$event" in
     #    {"forkedSkill":true,"skillName":"code-review"}. The forkedSkill flag
     #    is the part a plain spawned task cannot carry, so it gates the match.
     #    Nothing the review prints can dodge it, and no unrelated subagent
-    #    can forge it.
+    #    can forge it. The `fresh` stamp this marker earns is measured, not
+    #    assumed: the canary probe at
+    #    skills/review/scripts/probe-skill-fork-context.sh (first run
+    #    2026-11-26) found the Skill fork starts empty. Re-run it if the
+    #    harness's Skill-fork mechanics change.
     #
     #    Fail direction is unchanged: a missing or renamed sidecar leaves this
     #    signal at 0 and the gate holds, rather than attesting on a guess.
@@ -412,7 +416,8 @@ else
 fi
 
 if bash "$script_dir/../skills/review/scripts/emit-attestation.sh" code-review "$verdict" \
-  "$reviewer_context" "$execution_context" "$output_contract" --findings-file "$payload_file"; then
+  "$reviewer_context" "$execution_context" "$output_contract" \
+  --stamp-provenance derived --findings-file "$payload_file"; then
   :
 else
   emit_rc=$?

@@ -12,6 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  merge_group:
+    types: [checks_requested]
   pull_request:
     paths:
       - crates/fno-agent/**
@@ -58,7 +60,7 @@ jobs:
           # first. A version already there is what release will skip, so the
           # dry run verifies against the registry copy: an API change merged
           # without a version bump fails here, not at release.
-          for sib in fno-mail fno-proto; do
+          for sib in fno-mail fno-proto fno-homes; do
             # Patch only what this crate depends on: an unused patch makes
             # cargo rewrite the lockfile, and the dry run refuses a dirty tree.
             grep -qE "^${sib} *=" "${{ matrix.dir }}/Cargo.toml" || continue

@@ -77,12 +77,7 @@ fn mint_unique_fno_id_with(
 /// send can address one handle while its recipient drains another and
 /// silently strands on the bus.
 pub(crate) fn canonical_handle(session_id: &str) -> String {
-    let head: String = session_id.chars().take(8).collect();
-    if session_id.starts_with("ses_") {
-        head
-    } else {
-        head.to_ascii_lowercase()
-    }
+    crate::mail_sent_core::canonical_handle(session_id)
 }
 
 /// The claude session id from the environment, current marker first. Claude

@@ -85,6 +85,41 @@ assert_kill_rejected 'kill reader matches comparison' \
     'fn forbidden(key: &str) -> bool { matches!(key, "status") }'
 cp "$PRISTINE_KILL_READER" "$KILL_READER"
 
+# The fold reader holds one carve-out: the transcript's launch word, a
+# #[cfg(test)] fixture. Both arms are pinned. The word passes, and any other
+# "status" read in the same file still fails and names the file.
+FOLD_READER="$FIXTURE_ROOT/crates/fno-agent/src/runtime/observer/fold.rs"
+PRISTINE_FOLD_READER="$TMP_ROOT/fold.rs"
+cp "$FOLD_READER" "$PRISTINE_FOLD_READER"
+printf '\n%s\n' \
+    'fn fixture_launch_word() -> String { r#"{"status":"async_launched"}"#.to_string() }' \
+    >> "$FOLD_READER"
+output=""
+actual_exit=0
+output="$(bash "$FIXTURE_ROOT/scripts/ci/check-plan-rung-authority.sh" 2>&1)" \
+    || actual_exit=$?
+if [[ "$actual_exit" -ne 0 ]]; then
+    echo 'FAIL: the launch-word fixture failed the authority guard' >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+fi
+printf '\n%s\n' \
+    'fn forbidden(mapping: &serde_json::Value) { let _ = mapping.get("status"); }' \
+    >> "$FOLD_READER"
+output=""
+actual_exit=0
+output="$(bash "$FIXTURE_ROOT/scripts/ci/check-plan-rung-authority.sh" 2>&1)" \
+    || actual_exit=$?
+if [[ "$actual_exit" -eq 0 ]]; then
+    echo 'FAIL: a status read in the fold reader passed the authority guard' >&2
+    exit 1
+fi
+if ! grep -q 'observer/fold.rs' <<<"$output"; then
+    echo 'FAIL: the fold-reader violation did not name the fold reader' >&2
+    exit 1
+fi
+cp "$PRISTINE_FOLD_READER" "$FOLD_READER"
+
 ROGUE_READER="$FIXTURE_ROOT/crates/fno-agent/src/rogue_reader.rs"
 cat > "$ROGUE_READER" <<'EOF'
 fn forbidden(path: &std::path::Path) {

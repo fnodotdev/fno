@@ -185,7 +185,7 @@ fn process_environment(pid: u32) -> Option<Vec<u8>> {
 
 /// The environment strings of a `KERN_PROCARGS2` buffer: an `i32` argc, the
 /// exec path, NUL padding, argc argv strings, then the environment to the end
-/// of the buffer. Mirrors `census::parse_procargs2`, which stops at argv.
+/// of the buffer. Mirrors `proc_table::parse_procargs2`, which stops at argv.
 #[cfg(target_os = "macos")]
 fn procargs2_env_region(buf: &[u8]) -> Option<Vec<u8>> {
     if buf.len() < 4 {

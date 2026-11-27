@@ -29,6 +29,16 @@ pub(crate) mod pid {
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Wall-clock budget for a polling wait. Test binaries run in parallel under
+/// cargo and CI shards, so a nominal budget that passes alone starves under
+/// load; every wait helper stretches it by this factor and names the
+/// stretched figure in its panic.
+const LOAD_SLACK: u64 = 2;
+
+fn wait_budget(secs: u64) -> Duration {
+    Duration::from_secs(secs * LOAD_SLACK)
+}
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use fno::proto::{
@@ -475,7 +485,7 @@ impl ClientHarness {
     /// prompt before the client reaches its input select; retrying this
     /// idempotent shell round-trip closes that one-way readiness race.
     pub fn wait_input_ready(&mut self, secs: u64) {
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let deadline = Instant::now() + wait_budget(secs);
         while Instant::now() < deadline {
             self.type_bytes(b"printf 'fno-input-ready\\n'\r");
             let attempt = (Instant::now() + Duration::from_millis(500)).min(deadline);
@@ -511,7 +521,8 @@ impl ClientHarness {
     }
 
     pub fn wait_screen(&mut self, secs: u64, pred: impl Fn(&str) -> bool) -> String {
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let budget = wait_budget(secs);
+        let deadline = Instant::now() + budget;
         loop {
             let screen = self.screen();
             if pred(&screen) {
@@ -519,7 +530,7 @@ impl ClientHarness {
             }
             if Instant::now() >= deadline {
                 panic!(
-                    "screen never matched within {secs}s; last screen:\n{screen}\n{}",
+                    "screen never matched within {budget:?}; last screen:\n{screen}\n{}",
                     self.diagnostics()
                 );
             }
@@ -622,7 +633,8 @@ impl ClientHarness {
                     l.ends_with('$')
                 })
         };
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let budget = wait_budget(secs);
+        let deadline = Instant::now() + budget;
         while Instant::now() < deadline {
             let screen = self.screen();
             if rendered(&screen) {
@@ -641,18 +653,27 @@ impl ClientHarness {
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
-        // Deadline blown: one last look, and the standard panic + diagnostics.
-        self.wait_screen(0, rendered)
+        // Deadline blown: one last look, then a panic that names the budget
+        // actually spent (a zero-second wait_screen reported "within 0s").
+        let screen = self.screen();
+        if rendered(&screen) {
+            return screen;
+        }
+        panic!(
+            "prompt never rendered within {budget:?}; last screen:\n{screen}\n{}",
+            self.diagnostics()
+        );
     }
 
     pub fn wait_exit(&mut self, secs: u64) -> portable_pty::ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let budget = wait_budget(secs);
+        let deadline = Instant::now() + budget;
         let status = loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 break status;
             }
             if Instant::now() >= deadline {
-                panic!("client did not exit within {secs}s");
+                panic!("client did not exit within {budget:?}");
             }
             std::thread::sleep(Duration::from_millis(50));
         };
@@ -1281,14 +1302,15 @@ impl FakeClient {
 
     /// Absorb until `f` yields, or panic with the current state at `secs`.
     pub fn wait<T>(&mut self, secs: u64, what: &str, f: impl Fn(&FakeClient) -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let budget = wait_budget(secs);
+        let deadline = Instant::now() + budget;
         loop {
             if let Some(v) = f(self) {
                 return v;
             }
             if Instant::now() >= deadline {
                 panic!(
-                    "never saw {what} within {secs}s; layout: {:?}; notices: {:?}; pane texts: {:?}",
+                    "never saw {what} within {budget:?}; layout: {:?}; notices: {:?}; pane texts: {:?}",
                     self.layout,
                     self.notices,
                     self.frames

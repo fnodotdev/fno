@@ -12,7 +12,7 @@
 /// list against that set, so a new command cannot land without a `--help` entry
 ///.
 pub const CLIENT_COMMAND_USAGE: &[&str] = &[
-    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--when <time>] [--every <interval>] [--on <command>] [--grace <duration>] [--list-scheduled] [--cancel-scheduled <id>]  # a schedule flag queues the spawn for the daemon to fire through the gate at that time; local, named-zone or UTC time, both shown on every echo [+flag=<value> harness args folded to their -- spelling like the composer's + picker; a +token with a non-flag body stays prompt text; nothing folds after the fence] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
+    "spawn <name> [prompt] [-H <harness>] [--route <provider/model|lane>] [--as pane|thread|headless|cloud] [--machine <host>] [-s <squad>] [-x left|right|up|down] [--cwd <dir>|--fresh|--here] [--force] [--no-wait] [--max <n>] [--when <time>] [--every <interval>] [--on <command>] [--grace <duration>] [--list-scheduled] [--cancel-scheduled <id>] [--runbook <file>] [--rehearse]  # a schedule flag queues the spawn for the daemon to fire through the gate at that time; local, named-zone or UTC time, both shown on every echo; --runbook makes the runbook file the prompt and writes a run file under the agents home, --rehearse skips its irreversible steps [+flag=<value> harness args folded to their -- spelling like the composer's + picker; a +token with a non-flag body stays prompt text; nothing folds after the fence] [--] [everything after the prompt is harness argv, never parsed; a spawn-owned flag there refuses with the corrected line; unowned flags before the prompt pass in the --flag=value form only] | --argv -- <cmd...>",
     "ask <name> <message> [--cwd <dir>|--fresh|--here] [--answer allow_once|deny]",
     "list [--all] [--status <writing|quiet|parked|orphaned|refused|unknown|signed_out|harness_error>] [--progress <advancing|awaiting-operator|parked|refused|unknown>]",
     "status",
@@ -47,7 +47,7 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "subscribe [--agent <name>] [--kinds state,exit] [--json]",
     "digest --session <s> [--since <ts> | --since-epoch <secs>] [--json]",
     "needs [--since-epoch <secs>] [--fires-floor <n>] [--json]",
-    "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp]",
+    "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp] [--serve]",
     // `review-coverage` deliberately has NO entry here: the per-command --help
     // intercept would print a one-line usage and shadow the command's own
     // --help, which states the load-bearing contract (no way to assert

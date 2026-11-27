@@ -1210,6 +1210,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "fno-homes",
  "fno-mail",
  "fno-proto",
  "futures-util",
@@ -1229,7 +1230,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "shlex",
- "strsim",
  "tempfile",
  "thiserror 2.0.18",
  "throbber-widgets-tui",
@@ -1240,8 +1240,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "fno-mail"
+name = "fno-homes"
 version = "0.1.0"
+
+[[package]]
+name = "fno-mail"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",
@@ -1250,11 +1254,13 @@ dependencies = [
 
 [[package]]
 name = "fno-proto"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
+ "chrono",
  "rio-vt",
  "serde",
  "serde_json",
+ "strsim",
  "tokio",
 ]
 

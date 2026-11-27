@@ -10,6 +10,8 @@ pub mod gh_proxy;
 #[path = "gh_proxy_tests.rs"]
 mod gh_proxy_tests;
 #[cfg(feature = "app")]
+pub mod github_app_flow;
+#[cfg(feature = "app")]
 pub mod must_enable;
 #[cfg(feature = "app")]
 pub mod setup_attention_remote;

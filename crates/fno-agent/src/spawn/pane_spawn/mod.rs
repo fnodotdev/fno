@@ -272,6 +272,10 @@ pub struct ArmPlan {
     /// The seed held OUT of the argv for a post-bind turn/start (codex).
     /// `None` delivers the message inside the argv like every thread spawn.
     pub held_seed: Option<String>,
+    /// The exact first-turn text the arm delivers. The row records it as the
+    /// spawn payload so the attended guard's exact match holds; `None`
+    /// records the raw message.
+    pub delivered_seed: Option<String>,
     /// A `preassigned` binding harness starts with the id it minted, so the
     /// pane is addressable before its row exists: the id rides `--fno-id`.
     pub preassigned_id: Option<String>,
@@ -422,6 +426,14 @@ pub fn run_pane_spawn(home: &AgentsHome, params: &Value, name: &str, _args: &[St
             return EXIT_REFUSAL;
         }
     };
+    // The pane door answers every harness arm itself, before the seed
+    // path's first sandbox leg ever runs: judge the launch dir's policy
+    // here. A required provider sandboxes only --as headless, so a pane
+    // on one refuses instead of opening.
+    if let Err((code, reason)) = crate::sandbox_launch::check(&ctx.cwd, &ctx.provider, "pane") {
+        eprintln!("fno-agent spawn: {reason}");
+        return code;
+    }
     if let Some(line) = pane_refusal_for(&ctx.provider) {
         eprintln!("{line}");
         return EXIT_REFUSAL;
@@ -646,7 +658,16 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
         Err(refusal) => return refuse(&refusal),
     };
 
-    if let Err(exc) = write_pane_row(home, name, ctx, &pane, &bind, replacing, &spawn_trigger) {
+    if let Err(exc) = write_pane_row(
+        home,
+        name,
+        ctx,
+        &pane,
+        &bind,
+        replacing,
+        &spawn_trigger,
+        plan.delivered_seed.as_deref(),
+    ) {
         return refuse(&PaneRefusal {
             line: format!("registry row write failed: {exc}"),
             exit_code: 12,
@@ -1222,6 +1243,7 @@ pub fn write_pane_row(
     bind: &ArmBind,
     replacing: bool,
     spawn_trigger: &Option<String>,
+    delivered_seed: Option<&str>,
 ) -> Result<(), String> {
     let (status, session_id) = match bind {
         ArmBind::Bound { session_id } => (AgentStatus::Live, Some(session_id.clone())),
@@ -1248,7 +1270,10 @@ pub fn write_pane_row(
         requested_permission_mode: (ctx.provider.as_harness() == Harness::Claude)
             .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
             .flatten(),
-        spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
+        spawn_payload: delivered_seed
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| (!ctx.message.is_empty()).then(|| ctx.message.clone())),
         cwd: ctx.cwd.to_string_lossy().into_owned(),
         log_path: entry_log_path,
         status,
@@ -1289,7 +1314,15 @@ fn resolvable_handle_log_fallback(
     if leg1 || leg3 {
         return None;
     }
-    let log_path = home.root().join("logs").join(format!("{name}.log"));
+    // No session id exists yet, so a mint stamp keys the file: a reused
+    // name never reopens an earlier agent's log.
+    let minted = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let log_path = home
+        .root()
+        .join("logs")
+        .join(format!("{name}-{minted}.log"));
     let mut open = std::fs::OpenOptions::new();
     std::fs::create_dir_all(log_path.parent()?).ok()?;
     open.write(true).create(true).open(&log_path).ok()?;

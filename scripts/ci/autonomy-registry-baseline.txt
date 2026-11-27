@@ -12,7 +12,6 @@
 #
 # Forgetting a gate is refused at runtime by config.autonomy.enabled.
 # Forgetting to REGISTER a new spawner is refused here, at CI.
-hooks/context-nudge.sh::  # NOT a call site: quotes `fno agent spawn` inside an operator-facing nudge message
 hooks/helpers/init-target-state.sh::  # NOT a call site: a comment naming `fno agent spawn --node` as the OTHER end of the claim handover this script's acquire inherits from. init spawns nothing.
 scripts/run-target-loop.sh::  # NOT a call site: comment only; the real dispatch is the Rust `fno-agent loop run --driver target` binary, out of this script's scan
 skills/agent/scripts/normalize.sh::  # NOT a call site: comment/variable-name references only

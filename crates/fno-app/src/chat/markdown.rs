@@ -1,5 +1,5 @@
 //! Markdown to the blocks the chat view draws: text runs with styled byte
-//! ranges, code, tables and images. gpui 0.2.2 ships no markdown element.
+//! ranges, code, tables and images. gpui ships no markdown element.
 
 use std::ops::Range;
 

@@ -434,6 +434,7 @@ pub(crate) fn make_claude_plan(ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal
     Ok(ArmPlan {
         wrapped,
         held_seed: None,
+        delivered_seed: (!seed.is_empty()).then(|| seed.clone()),
         preassigned_id: uuid,
     })
 }
@@ -534,5 +535,38 @@ mod happy_rules_tests {
         );
         assert_eq!(drop_rules_only_settings(argv(&route)), argv(&route));
         assert_eq!(drop_rules_only_settings(vec!["claude".into()]), ["claude"]);
+    }
+}
+
+#[cfg(test)]
+mod delivered_seed_tests {
+    use super::*;
+
+    #[test]
+    fn the_row_records_the_seed_it_delivers_and_that_seed_is_not_attended() {
+        let ctx = PaneContext::from_params(&serde_json::json!({
+            "provider": "claude",
+            "message": "/fno:target fn-1 redesign the prompt",
+            "cwd": "/tmp",
+            "name": "w",
+        }))
+        .expect("pane params");
+        let plan = make_claude_plan(&ctx).expect("claude plan");
+        let delivered = plan.delivered_seed.expect("the plan names its seed");
+        assert_eq!(delivered, seed_text(&ctx));
+        assert_ne!(
+            delivered, ctx.message,
+            "the delivered seed carries the brevity trailer the raw message lacks"
+        );
+        let (command, rest) = delivered.split_once(char::is_whitespace).unwrap();
+        let turn = format!(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:{}</command-name>\n<command-args>{}</command-args>",
+            command.trim_start_matches('/'),
+            rest.trim()
+        );
+        assert!(
+            crate::attended::is_spawn_seed_turn(&turn, &delivered),
+            "claude's rendering of the delivered seed is the machine's turn"
+        );
     }
 }

@@ -278,6 +278,49 @@ fn rename_agent_refuses_duplicate_and_unknown_and_grammar() {
 }
 
 #[test]
+fn restoring_a_displacing_rename_puts_the_displaced_and_source_rows_back() {
+    let dir = tmpdir("rename-restore");
+    let path = dir.join("registry.json");
+    update_registry(&path, |registry| {
+        let mut source = sample_entry("worker-a");
+        source.harness_session_id = Some("aaaaaaaa-0000-0000-0000-111111111111".into());
+        let mut gone = sample_entry("taken");
+        gone.status = AgentStatus::Exited;
+        gone.aliases = vec!["spare".into()];
+        gone.harness_session_id = Some("bbbbbbbb-0000-0000-0000-222222222222".into());
+        registry.entries.push(source);
+        registry.entries.push(gone);
+    })
+    .unwrap();
+
+    let (_, _, priors) = rename_agent_displacing(&path, "worker-a", "taken", None, |row, _| {
+        row_is_terminal(row)
+    })
+    .unwrap();
+    assert_eq!(
+        load_registry(&path)
+            .unwrap()
+            .find("taken")
+            .unwrap()
+            .short_id,
+        "worker-a-id"
+    );
+
+    restore_registry_rows(&path, &priors).unwrap();
+    let reg = load_registry(&path).unwrap();
+    let source = reg
+        .find("worker-a")
+        .expect("source row under its old label");
+    assert!(source.aliases.is_empty(), "{:?}", source.aliases);
+    let displaced = reg
+        .find("taken")
+        .expect("displaced row holds its label again");
+    assert_eq!(displaced.short_id, "taken-id");
+    assert_eq!(displaced.aliases, vec!["spare".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn update_registry_refuses_to_wipe_a_corrupt_registry() {
     // The data-loss path Gemini flagged: update_registry reads, mutates,
     // writes. If the read silently defaulted on a corrupt file, the write

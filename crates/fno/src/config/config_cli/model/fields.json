@@ -84,6 +84,13 @@
      }
     },
     {
+     "name": "allow_rules",
+     "default": {
+      "default": true,
+      "roles": {}
+     }
+    },
+    {
      "name": "sandbox",
      "default": {
       "on_unavailable": "refuse"
@@ -982,6 +989,19 @@
     }
    ]
   },
+  "AllowRulesBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "default",
+     "default": true
+    },
+    {
+     "name": "roles",
+     "default": {}
+    }
+   ]
+  },
   "UserBlock": {
    "extra": "ignore",
    "fields": [
@@ -1364,6 +1384,10 @@
     },
     {
      "name": "invocations",
+     "default": null
+    },
+    {
+     "name": "context",
      "default": null
     }
    ]
@@ -3581,6 +3605,8 @@
   "user.timezone",
   "user.working_hours",
   "user.auto_approve_routine",
+  "allow_rules.default",
+  "allow_rules.roles",
   "join.sandbox",
   "sandbox.on_unavailable",
   "sandbox.provider",

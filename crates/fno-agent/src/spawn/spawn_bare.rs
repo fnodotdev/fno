@@ -57,6 +57,7 @@ pub const SCALAR_OWNED_FLAGS: &[&str] = &[
     "--in-place",
     "--bounded-placement",
     "--list-scheduled",
+    "--rehearse",
 ];
 
 /// Whether a post-prompt `token` is spawn-owned: a flag whose job is spawn
@@ -839,6 +840,7 @@ pub fn pre_gate(
         None,
         cwd,
         None,
+        params.pointer("/role").and_then(Value::as_str),
     )
     .map_err(|e| {
         eprintln!("fno agent spawn: {e}");

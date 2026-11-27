@@ -18,19 +18,12 @@
 //! `control:<form>` cursors and advances nothing the prompt boundary reads.
 
 use serde_json::{json, Value};
-use std::io::Read as _;
+use std::io::BufRead as _;
 use std::path::{Path, PathBuf};
 
-/// The bus kinds that are bookkeeping about other messages, never inbox
-/// content (`bus.log.CONTROL_KINDS`).
-pub(crate) const WITHDRAW_KIND: &str = "withdraw";
-const LANDED_KIND: &str = "landed";
-/// Delivery states meaning the bytes already reached the recipient
-/// (`bus.log.HOSTED_DELIVERY` / `TYPED_DELIVERY`); draining one would hand
-/// the recipient a second copy. `cross-session` is the historical backfill
-/// shape: the receiver transcript named in its provenance is the proof the
-/// bytes landed, so it is archive, never pending mail.
-const AUDIT_ONLY_DELIVERIES: &[&str] = &["hosted", "typed", "cross-session"];
+pub(crate) use crate::bus_read::{
+    deliverable, landed_ids, read_cursor_file, withdrawn_ids, WITHDRAW_KIND,
+};
 
 pub struct DrainArgs {
     pub bus_dir: PathBuf,
@@ -186,121 +179,6 @@ pub(crate) fn is_control(body: &str) -> bool {
         .is_some_and(|first| first.to_lowercase().starts_with("control:"))
 }
 
-pub(crate) fn deliverable(m: &Value) -> bool {
-    let kind = m.get("kind").and_then(Value::as_str).unwrap_or("");
-    if kind == WITHDRAW_KIND || kind == LANDED_KIND || kind == fno_mail::state::STATE_KIND {
-        return false;
-    }
-    let delivery = m.get("delivery").and_then(Value::as_str).unwrap_or("");
-    !AUDIT_ONLY_DELIVERIES.contains(&delivery)
-}
-
-/// Ids retracted by a tombstone, plus the tombstones themselves; a tombstone
-/// counts only against a message from the same sender to the same address.
-pub(crate) fn withdrawn_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
-    let by_id: std::collections::HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = std::collections::HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(WITHDRAW_KIND) {
-            continue;
-        }
-        if let Some(id) = m.get("id").and_then(Value::as_str) {
-            out.insert(id.to_string());
-        }
-        let target_id = m
-            .get("meta")
-            .and_then(|meta| meta.get("withdraws"))
-            .and_then(Value::as_str);
-        let matches = target_id.and_then(|t| by_id.get(t)).is_some_and(|target| {
-            target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-                && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        });
-        if let (Some(t), true) = (target_id, matches) {
-            out.insert(t.to_string());
-        }
-    }
-    out
-}
-
-/// Ids proven landed by a same-sender/recipient `landed` control row
-/// (`bus.log.landed_ids`): the target must exist, match on both addresses,
-/// and the acknowledging row's own id never joins.
-pub(crate) fn landed_ids(msgs: &[Value]) -> std::collections::HashSet<String> {
-    let by_id: std::collections::HashMap<&str, &Value> = msgs
-        .iter()
-        .filter_map(|m| m.get("id").and_then(Value::as_str).map(|id| (id, m)))
-        .collect();
-    let mut out = std::collections::HashSet::new();
-    for m in msgs {
-        if m.get("kind").and_then(Value::as_str) != Some(LANDED_KIND) {
-            continue;
-        }
-        let target = m
-            .get("meta")
-            .and_then(|meta| meta.get("landed"))
-            .and_then(Value::as_str)
-            .and_then(|t| by_id.get(t));
-        let Some(target) = target else { continue };
-        if target.get("from").and_then(Value::as_str) == m.get("from").and_then(Value::as_str)
-            && target.get("to").and_then(Value::as_str) == m.get("to").and_then(Value::as_str)
-        {
-            if let Some(t) = target.get("id").and_then(Value::as_str) {
-                out.insert(t.to_string());
-            }
-        }
-    }
-    out
-}
-
-/// A consumer's cursor file read with the oracle's warnings: absent file is a
-/// silent `None` (full rescan); unreadable or unparseable returns `None` plus
-/// the stderr warning naming the Python exception class. A non-object cursor
-/// reads as no cursor, and the truthiness gate mirrors the oracle: empty
-/// string and numeric zero advance nothing.
-pub(crate) fn read_cursor_file(path: &std::path::Path) -> (Option<String>, Vec<String>) {
-    let file_name = path
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or_default()
-        .to_string();
-    if !path.exists() {
-        return (None, Vec::new());
-    }
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (OSError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let parsed: Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => {
-            return (
-                None,
-                vec![format!(
-                    "bus cursor: ignoring corrupt cursor {file_name} (JSONDecodeError); rescanning retained segments"
-                )],
-            )
-        }
-    };
-    let cursor = match parsed.get("last_seen_id") {
-        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
-        Some(Value::Number(n)) if n.as_f64().map(|f| f != 0.0).unwrap_or(false) => {
-            Some(n.to_string())
-        }
-        _ => None,
-    };
-    (cursor, Vec::new())
-}
-
 /// Every delivered-mail id in the session's own transcript - the middle
 /// token of a header line, or the `id` of an old `<fno_mail id="...">` tag -
 /// or None when the transcript cannot be resolved or read (print-everything
@@ -310,33 +188,55 @@ pub(crate) fn present_mail_ids(
     session: &str,
 ) -> Option<std::collections::HashSet<String>> {
     let transcript = crate::claude_drive::find_transcript_in(projects_base, session)?;
-    let mut text = String::new();
-    std::fs::File::open(transcript)
-        .ok()?
-        .read_to_string(&mut text)
-        .ok()?;
+    let file = std::fs::File::open(transcript).ok()?;
     let mut out = std::collections::HashSet::new();
-    // A JSONL record holds delivered text inside one JSON string, its
-    // newlines escaped, so a header never starts a physical line: split on
-    // string quotes and escaped newlines to read each logical line.
-    for seg in text.split(['\n', '"']).flat_map(|s| s.split("\\n")) {
-        if let Some(id) = crate::mail_header::delivered_msg_id(seg).or_else(|| rendered_id(seg)) {
-            out.insert(id);
+    // One JSONL record per physical line; the reader streams line by line so
+    // a long-lived session's multi-hundred-MB transcript never materializes
+    // whole. The prompt-boundary leg runs under a 4s budget, and a full
+    // read plus its escaped-quote copy blew it on the largest transcript:
+    // every line without a marker prefix is skipped after one byte scan.
+    let mut reader = std::io::BufReader::new(file);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        let read = reader.read_until(b'\n', &mut bytes).ok()?;
+        if read == 0 {
+            break;
         }
-    }
-    let unescaped = text.replace("\\\"", "\"");
-    let mut rest = unescaped.as_str();
-    while let Some(pos) = rest.find("<fno_mail") {
-        rest = &rest[pos..];
-        let end = rest.find('>').map(|e| e.min(400)).unwrap_or(400);
-        let tag = &rest[..end.min(rest.len())];
-        if let Some(id_pos) = tag.find("id=\"") {
-            let id = &tag[id_pos + 4..];
-            if let Some(close) = id.find('"') {
-                out.insert(id[..close].to_string());
+        let line = String::from_utf8_lossy(&bytes);
+        let tag_line = line.contains("<fno_mail");
+        // Three delivered shapes: the rendered `--- from ... id: ... ---`
+        // header, the legacy open tag, and the typed law header
+        // `` `@sender · id` `` a live lane lays down with the body.
+        if !tag_line && !line.contains("--- from ") && !line.contains(" · ") {
+            continue;
+        }
+        // A JSONL record holds delivered text inside one JSON string, its
+        // newlines escaped, so a header never starts a physical line: split
+        // on string quotes and escaped newlines to read each logical line.
+        for seg in line.split(['\n', '"']).flat_map(|s| s.split("\\n")) {
+            if let Some(id) = crate::mail_header::delivered_msg_id(seg).or_else(|| rendered_id(seg))
+            {
+                out.insert(id);
             }
         }
-        rest = &rest[end.min(rest.len())..];
+        if !tag_line {
+            continue;
+        }
+        let unescaped = line.replace("\\\"", "\"");
+        let mut rest = unescaped.as_str();
+        while let Some(pos) = rest.find("<fno_mail") {
+            rest = &rest[pos..];
+            let end = rest.find('>').map(|e| e.min(400)).unwrap_or(400);
+            let tag = &rest[..end.min(rest.len())];
+            if let Some(id_pos) = tag.find("id=\"") {
+                let id = &tag[id_pos + 4..];
+                if let Some(close) = id.find('"') {
+                    out.insert(id[..close].to_string());
+                }
+            }
+            rest = &rest[end.min(rest.len())..];
+        }
     }
     Some(out)
 }
@@ -526,7 +426,10 @@ pub(crate) fn tool_boundary(
     let control = drain(bus_dir, session);
     let live = ordinary && !notify::held(session);
     let msgs = if live {
-        notify::read_bus(bus_dir)
+        notify::read_drain_bus(
+            bus_dir,
+            &crate::spawn_context::session_identity_key(session),
+        )
     } else {
         Vec::new()
     };
@@ -723,6 +626,8 @@ mod tests {
         cursor_position_contract();
         tombstone_contract();
         defang_contract();
+        legacy_tag_ids_still_dedup();
+        typed_header_ids_still_dedup();
         let (_d, bus) = bus_fixture("ordinary");
         let name = "t-x-1-glm";
         let msgs = vec![
@@ -874,5 +779,47 @@ mod tests {
             assert_eq!(run(&bus, true), "");
             assert!(cursor(&bus).contains(&dup));
         });
+    }
+
+    /// The legacy `<fno_mail id="...">` receipt tags still dedup, raw or
+    /// JSON-escaped; a bare id in prose is no marker and never dedups.
+    fn legacy_tag_ids_still_dedup() {
+        let session = "ffffabcd-1111-2222-3333-444455556666";
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("p")).unwrap();
+        let raw = "<fno_mail id=\"tag-raw\" from=\"lead\">body</fno_mail>";
+        let escaped = "{\"content\":\"<fno_mail id=\\\"tag-escaped\\\" from=\\\"lead\\\">\"}";
+        std::fs::write(
+            projects.join("p").join(format!("{session}.jsonl")),
+            format!("{raw}\n{escaped}\n"),
+        )
+        .unwrap();
+        let present = present_mail_ids(&projects, session).expect("transcript readable");
+        assert!(present.contains("tag-raw"), "raw tag missed");
+        assert!(present.contains("tag-escaped"), "escaped tag missed");
+        // A transcript that cannot be resolved claims nothing: print-everything.
+        assert_eq!(
+            present_mail_ids(&projects, "0000ffff-1111-2222-3333-444455556666"),
+            None
+        );
+    }
+
+    /// A typed law header (`` `@sender · id` ``) inside a JSON-escaped
+    /// transcript record dedups its id: the live lane laid the body down,
+    /// and a staged row without its receipt must not re-render.
+    fn typed_header_ids_still_dedup() {
+        let session = "ffffabcd-1111-2222-3333-444455556666";
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("p")).unwrap();
+        let record = "{\"prompt\":\"`@lead · msg-typed-header`\\nbody the lane typed\"}";
+        std::fs::write(
+            projects.join("p").join(format!("{session}.jsonl")),
+            format!("{record}\n"),
+        )
+        .unwrap();
+        let present = present_mail_ids(&projects, session).expect("transcript readable");
+        assert!(present.contains("msg-typed-header"), "typed header missed");
     }
 }

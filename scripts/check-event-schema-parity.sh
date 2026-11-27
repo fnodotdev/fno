@@ -584,6 +584,14 @@ dual_owner_kinds = {
     # declared kind before an emitter existed, and the scoreboard plus the
     # lead check-in read it.
     "provider_rate_limited",
+    # The context-nudge rows: the Stop front's context-nudge leg
+    # (runtime/hook/front/stop.rs) is the one emitter since its shell script
+    # became a shim; schema.yaml carries them for the event audit.
+    "session_context_nudge",
+    "lead_context_nudge",
+    "lead_orphan_block",
+    "context_flush_nudge",
+    "context_flush_refused",
 }
 collisions -= dual_owner_kinds
 if collisions:

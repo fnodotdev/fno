@@ -1004,7 +1004,7 @@ pub(crate) fn matches_node_id_shape(s: &str) -> bool {
 
 /// `matches_node_id_shape` under an explicit mode: `Some("t")` reads
 /// `t-12`, `None` is hex. The seam the tests drive.
-fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
+pub(crate) fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
     let Some((prefix, suffix)) = s.split_once('-') else {
         return false;
     };
@@ -1409,6 +1409,9 @@ pub(crate) struct RecordDoor {
     raw_paths: Vec<String>,
     quote: Option<String>,
     at_skill: Option<String>,
+    /// Action triggers (`--at-command`, `--at-door`): the law fires at a Bash
+    /// command or a door, not only when the prompt text ranks it.
+    at: crate::law_at::LawAt,
     delivery: Option<String>,
     /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
     audience: Option<String>,
@@ -1445,7 +1448,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--at-skill <skill>] [--delivery store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--at-skill <skill>] [--at-command <glob>]... [--at-door <send|spawn|merge>[:<subject-glob>]] [--delivery store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1521,6 +1524,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         raw_paths: Vec::new(),
         quote: None,
         at_skill: None,
+        at: Default::default(),
         delivery: None,
         audience: None,
         why: None,
@@ -1575,6 +1579,11 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
             "--at-skill" => door.at_skill = Some(take(&mut i)?),
+            "--at-command" => door.at.commands.push(take(&mut i)?),
+            "--at-door" => door
+                .at
+                .set_door(&take(&mut i)?)
+                .map_err(|e| format!("{e}\n{RECORD_USAGE}"))?,
             "--delivery" => door.delivery = Some(take(&mut i)?),
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
@@ -2437,6 +2446,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         if let Some(map) = data.as_object_mut() {
             map.insert("at_skill".into(), json!(skill));
         }
+    }
+    if let Some(map) = data.as_object_mut() {
+        door.at.write(map);
     }
     if let Some(spec) = door.delivery.as_deref() {
         let filtered = !door.filters.is_empty() || !door.not_filters.is_empty();
@@ -3883,6 +3895,7 @@ pub(crate) mod scope_tests {
             raw_paths: Vec::new(),
             quote: None,
             at_skill: None,
+            at: Default::default(),
             delivery: None,
             audience: Some("internal".to_string()),
             why: Some("the operator owns durable policy.".to_string()),

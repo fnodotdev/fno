@@ -1214,9 +1214,11 @@ fn ambient_scrub_names() -> Vec<&'static str> {
 pub(crate) const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
 
 /// The claude spawn default: `auto` rides the classifier, and the
-/// PermissionRequest hook (worktree-relocation-allow) auto-allows
-/// EnterWorktree into the fno worktree base, so an unattended worker takes
-/// its worktree with no prompt and no blanket bypass.
+/// PermissionRequest hook (worktree-relocation-allow) auto-allows the
+/// session's own claimed worktree and denies a target that does not exist,
+/// so an unattended worker takes its worktree with no prompt and no blanket
+/// bypass. Only bypassPermissions skips the relocation ask outright; no
+/// permission rule or add-dir grant suppresses it.
 pub(crate) const SPAWN_PERMISSION_CLAUDE: &str = "auto";
 
 /// The per-harness spawn default: claude rides [`SPAWN_PERMISSION_CLAUDE`],
