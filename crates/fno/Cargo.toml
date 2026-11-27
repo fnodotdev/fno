@@ -202,3 +202,7 @@ tokio = { optional = true, version = "1", features = [
     # bounded, fail-open shell-out to `fno-agent digest` on attach.
     "process",
 ] }
+
+[dev-dependencies]
+# The node vocabulary twin decodes the graph-store goldens fno-agent keeps.
+base64 = "0.22"

@@ -821,7 +821,7 @@ pub(crate) fn bootstrap_status(
     command.status()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "client")))]
 pub(crate) fn bootstrap_exec(command: &mut std::process::Command) -> io::Error {
     command.exec()
 }
