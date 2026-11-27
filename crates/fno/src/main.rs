@@ -1156,6 +1156,17 @@ fn classify_plan_family(
     Some((&["plan-cli"], tail, None))
 }
 
+/// `fno do runbook <anything>`: the whole group rides the runbook-cli door,
+/// the receipt door a runbook spawn's agent runs every step through.
+fn classify_runbook_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    if args.first()?.to_str()? != "do" || args.get(1)?.to_str()? != "runbook" {
+        return None;
+    }
+    Some((&["runbook-cli"], args.get(2..)?.to_vec(), None))
+}
+
 /// `fno do phase <anything>` and the deprecated bare `fno phase <anything>`:
 /// the whole group claims (kill-check is the group's one command, and it
 /// strips its own name from the tail), so the bare spelling's leaf sits one
@@ -1617,6 +1628,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         .or_else(|| classify_state_family(args))
         .or_else(|| classify_phase_family(args))
         .or_else(|| classify_plan_family(args))
+        .or_else(|| classify_runbook_family(args))
         .or_else(|| classify_pr_stub_manifest(args))
         .or_else(|| classify_bare_stub_manifest(args))
     {
@@ -3011,6 +3023,10 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "plan", "validate", "p.md"]), false),
             Role::TargetFamily(&["plan-cli"], os(&["validate", "p.md"]), None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "runbook", "close", "r.jsonl"]), false),
+            Role::TargetFamily(&["runbook-cli"], os(&["close", "r.jsonl"]), None)
         );
         assert!(!matches!(
             decide_role(&os(&["plan", "validate", "p.md"]), false),
