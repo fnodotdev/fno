@@ -98,8 +98,19 @@ pub(crate) fn command_rules(role: Option<&str>) -> Vec<String> {
     if !override_on(default, role_value) {
         return Vec::new();
     }
-    table_allow_rules()
+    let mut rules = table_allow_rules();
+    rules.extend(EXTRA_ALLOW_RULES.iter().map(|r| (*r).to_string()));
+    rules
 }
+
+/// Rules the must-enable table cannot carry, because its loader refuses any
+/// row that names a shell (filter A). The review lane's attestation script
+/// runs as `bash <path>/emit-attestation.sh code-review ...`, and the
+/// auto-mode classifier denied it for a worker that had run the review
+/// itself, so the worker re-sent the same block each stop (ruling D3750).
+/// The path may be relative or absolute, so the pattern leads with a
+/// wildcard.
+const EXTRA_ALLOW_RULES: [&str; 1] = ["Bash(bash */emit-attestation.sh code-review*)"];
 
 /// The vendored byte-copy of crate fno's must-enable table
 /// (`crates/fno/src/setup/must_enable.toml`). This crate links `fno` as a
@@ -292,6 +303,18 @@ fn plan_root_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_command_rules_carry_the_attestation_script_beside_the_table() {
+        let rules = command_rules(None);
+        for rule in EXTRA_ALLOW_RULES {
+            assert!(rules.iter().any(|r| r == rule), "missing {rule}");
+        }
+        assert!(
+            rules.len() > EXTRA_ALLOW_RULES.len(),
+            "the table rows still ride"
+        );
+    }
 
     #[test]
     fn the_rules_gate_on_the_switch_and_a_real_worktree_and_name_the_real_folder() {
