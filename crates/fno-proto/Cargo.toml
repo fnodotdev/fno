@@ -4,7 +4,7 @@ name = "fno-proto"
 # publishes it only when this version is not on crates.io yet; fno takes it
 # by caret range. Raise it in the PR that raises PROTO_VERSION: the bump guard
 # (scripts/ci/check-proto-version-bump.sh) refuses a wire bump without it.
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 rust-version = "1.92"
 description = "The fno mux wire contract: client and server messages, frame and layout types, framing, and a published JSON Schema."

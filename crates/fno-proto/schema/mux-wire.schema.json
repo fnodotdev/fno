@@ -514,6 +514,17 @@
             "null"
           ]
         },
+        "pr_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PrStatusFact"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "(v134) The PR's CI and review fact, composed by the serve's bounded\npr-status sweep from the shared `fno do pr status` door. `None` = no\nfact yet: no PR, a failed read, or gh absent. Never a fabricated\nverdict. `#[serde(default)]` keeps a v133 reader wire-tolerant\n(defaults None, which paints no mark)."
+        },
         "project_root": {
           "description": "(v114) The canonical repo root of the row's cwd (the git common dir's\nparent), which the new-workspace overlay offers as a folder. `None`\nwhen the cwd sits in no git repo or the server has not resolved it yet.",
           "type": [
@@ -5476,6 +5487,117 @@
       ],
       "type": "object"
     },
+    "PrFailingCheck": {
+      "description": "(v134) One failing check the sweep's projection carries. The door's own\nfield names (`check`, `step`, `first_error`), parsed once. `first_error`\nis the log's first error line, already truncated by the door's detail cap.",
+      "properties": {
+        "first_error": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "step",
+        "first_error"
+      ],
+      "type": "object"
+    },
+    "PrStatusFact": {
+      "description": "(v135) One PR's CI and review rollup: the sweep's projection of one\n`fno do pr status` JSON line (the door's own field names, parsed once\nper read). The renderer ages the mark from `measured_at` and never\ninvents a verdict the door did not print. v135 adds the PR title and\nthe review rounds spent, both optional and absent on stale rows.",
+      "properties": {
+        "draft": {
+          "default": false,
+          "type": "boolean"
+        },
+        "fail": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failing": {
+          "description": "The failing checks, loudest first, capped at 3 by the sweep (the\nsheet's cap, not the door's).",
+          "items": {
+            "$ref": "#/$defs/PrFailingCheck"
+          },
+          "type": "array"
+        },
+        "measured_at": {
+          "default": 0,
+          "description": "The read's epoch second; the renderer ages the mark.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mergeable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pass": {
+          "description": "The checks rollup counts; 0 where the door printed none.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pending": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pr_state": {
+          "description": "pr_state / draft / mergeable from the same JSON line.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_rounds": {
+          "description": "The review rounds spent at read time; None when the door printed\nnone (v135).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "review_state": {
+          "description": "The review-coverage word (e.g. \"reviewed\"); None when absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settled": {
+          "default": false,
+          "description": "Whether the verdict was settled at read time.",
+          "type": "boolean"
+        },
+        "title": {
+          "description": "The PR's title from the door's GitHub read; None when absent (v135).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verdict": {
+          "description": "The door's verdict word: green | red | pending | unknown.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "pass",
+        "fail",
+        "pending"
+      ],
+      "type": "object"
+    },
     "Reach": {
       "description": "What the dedicated thread pane can do for a row: `Drive` (an\ninteractive attach form exists; the pane runs it), `Follow` (no attach\nform, but a transcript reader answers; the pane tails it), `Locate`\n(neither; the pane renders the row's facts and the routes that do reach\nit). Computed from harness CAPABILITY, never from a harness name (law\nd-dbf83820: thread is an fno-layer construct over each harness's own\nresume primitive). The tier's authority is the server (the row set lives\nthere); the client field is render-and-gesture only, and a stale client\ndegrades to `Locate` harmlessly - its reach command is tier-blind and the\nserver re-derives. Like [`AgentNoPaneReason`], this enum is NOT\nadditive-tolerant: a new variant later bumps `PROTO_VERSION`.",
       "enum": [
@@ -7614,7 +7736,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 134,
+  "proto_version": 136,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

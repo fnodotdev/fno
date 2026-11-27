@@ -33,6 +33,9 @@ const PREWARM: Duration = Duration::from_secs(5);
 
 pub fn run(opts: ShotOptions) -> i32 {
     let hold = opts.hold;
+    // The PR-row demo stamp: the shot frames paint one agent row's PR
+    // tokens and can open its sheet without a world that has PR rows.
+    crate::pr_sheet::enable_demo();
     // The pin resolves before the theme pin chdirs: the newest lookup
     // reads the cwd's project slug, and the pin dir would slug one dir
     // off the world's seed.

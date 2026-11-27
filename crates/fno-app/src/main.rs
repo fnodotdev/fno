@@ -169,6 +169,8 @@ enum ShotUi {
     TabRename,
     /// The back-to-live pill, as a scrolled-back pane shows it.
     Scrolled,
+    /// The demo row's read-only PR sheet, as an alt-click opens it.
+    PrSheet,
 }
 
 /// The --shot-settings values.
@@ -210,6 +212,7 @@ fn main() {
                 ShotUi::RowMenuNode => fno_app::UiShot::RowMenuNode,
                 ShotUi::TabRename => fno_app::UiShot::TabRename,
                 ShotUi::Scrolled => fno_app::UiShot::Scrolled,
+                ShotUi::PrSheet => fno_app::UiShot::PrSheet,
             }),
             settings: args.shot_settings.map(|s| match s {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,

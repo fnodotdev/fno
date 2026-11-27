@@ -213,6 +213,13 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     // not a merge order. Absent on stale cached rows, which read as today.
     let park = serde_json::from_value::<super::de::StatusParkTail>(inputs.pr_json.clone())
         .unwrap_or_default();
+    // The PR title rides the same read (the pulls body already carries
+    // it); the sheet names the PR beyond its number. Typed through the
+    // park tail, so no new raw .get lands in the file, and absent on rows
+    // whose read printed none, so stale payloads keep their shape.
+    if let Some(title) = park.title {
+        payload.insert("title".into(), json!(title));
+    }
     payload.insert("draft".into(), json!(park.draft.is_some_and(|v| v)));
     payload.insert(
         "mergeable".into(),

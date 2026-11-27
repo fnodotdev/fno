@@ -23,6 +23,7 @@ mod mouse;
 mod mux_modes;
 mod orchestration;
 pub mod palette;
+mod pr_sheet;
 mod settings;
 mod sheet;
 mod shot;
@@ -134,6 +135,8 @@ pub enum UiShot {
     RowMenuNode,
     TabRename,
     Scrolled,
+    /// The demo row's read-only PR sheet, as an alt-click opens it.
+    PrSheet,
 }
 
 /// The --shot-first-run values.

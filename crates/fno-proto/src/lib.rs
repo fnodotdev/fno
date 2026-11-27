@@ -444,7 +444,12 @@ fn default_true() -> bool {
 /// (serde default); floor stays 58.
 /// v134: `Command::NewSquad.project` and `SquadMeta.project` (serde default),
 /// the explicit project id a workspace was made for; floor stays 58.
-pub const PROTO_VERSION: u32 = 134;
+/// v135: `AgentRow.pr_status` (serde default), the serve's bounded pr-status
+/// sweep projection; floor stays 58.
+/// v136: `PrStatusFact` adds `review_rounds` and `title` (serde default), the
+/// review rounds spent and the PR's title, both optional and absent on rows
+/// whose door read printed none; floor stays 58.
+pub const PROTO_VERSION: u32 = 136;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1584,6 +1589,69 @@ pub struct AgentRow {
     /// when the cwd sits in no git repo or the server has not resolved it yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    /// (v134) The PR's CI and review fact, composed by the serve's bounded
+    /// pr-status sweep from the shared `fno do pr status` door. `None` = no
+    /// fact yet: no PR, a failed read, or gh absent. Never a fabricated
+    /// verdict. `#[serde(default)]` keeps a v133 reader wire-tolerant
+    /// (defaults None, which paints no mark).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_status: Option<PrStatusFact>,
+}
+
+/// (v134) One failing check the sweep's projection carries. The door's own
+/// field names (`check`, `step`, `first_error`), parsed once. `first_error`
+/// is the log's first error line, already truncated by the door's detail cap.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PrFailingCheck {
+    pub name: String,
+    pub step: String,
+    pub first_error: String,
+}
+
+/// (v135) One PR's CI and review rollup: the sweep's projection of one
+/// `fno do pr status` JSON line (the door's own field names, parsed once
+/// per read). The renderer ages the mark from `measured_at` and never
+/// invents a verdict the door did not print. v135 adds the PR title and
+/// the review rounds spent, both optional and absent on stale rows.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct PrStatusFact {
+    /// The door's verdict word: green | red | pending | unknown.
+    pub verdict: String,
+    /// The checks rollup counts; 0 where the door printed none.
+    pub pass: u32,
+    pub fail: u32,
+    pub pending: u32,
+    /// The failing checks, loudest first, capped at 3 by the sweep (the
+    /// sheet's cap, not the door's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failing: Vec<PrFailingCheck>,
+    /// The review-coverage word (e.g. "reviewed"); None when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<String>,
+    /// The review rounds spent at read time; None when the door printed
+    /// none (v135).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rounds: Option<u32>,
+    /// The PR's title from the door's GitHub read; None when absent (v135).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Whether the verdict was settled at read time.
+    #[serde(default)]
+    pub settled: bool,
+    /// pr_state / draft / mergeable from the same JSON line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_state: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mergeable: Option<String>,
+    /// The read's epoch second; the renderer ages the mark.
+    #[serde(default)]
+    pub measured_at: u64,
 }
 
 /// (v76, ) One row of the `fno mux rows` receipt: the facts a row-set
@@ -3502,7 +3570,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 134);
+        assert_eq!(PROTO_VERSION, 136);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

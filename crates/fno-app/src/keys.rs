@@ -149,6 +149,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘/", "show this sheet"),
             ("⌘n", "start a session or a lead"),
             ("⌘k", "go to an agent, session, node, question or view"),
+            ("⌥click", "open an agent row's PR sheet"),
             ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
             ("hold ⌘", "show the numbers"),
             ("⌘c", "copy"),

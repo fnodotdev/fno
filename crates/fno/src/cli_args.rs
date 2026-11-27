@@ -481,9 +481,10 @@ pub struct AppShotArgs {
     #[arg(long)]
     pub notice: bool,
     /// Open one overlay through its real code path before the capture:
-    /// the row menu (`row-menu-node` gives the agent a node first),
-    /// the in-tab rename field, or the scrolled-back pill
-    #[arg(long, value_parser = ["row-menu", "row-menu-node", "tab-rename", "scrolled"])]
+    /// the row menu (`row-menu-node` gives the agent a node first), the
+    /// in-tab rename field, the scrolled-back pill, or the demo row's
+    /// read-only PR sheet
+    #[arg(long, value_parser = ["row-menu", "row-menu-node", "tab-rename", "scrolled", "pr-sheet"])]
     pub ui: Option<String>,
 }
 

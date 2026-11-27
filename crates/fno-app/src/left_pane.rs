@@ -13,6 +13,7 @@ use gpui::{
 use super::app_state::GroupBy;
 use super::link::Layout;
 use super::palette::Palette;
+use super::pr_sheet;
 use super::ui;
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::agent_group::{click_command, RowClick};
@@ -21,7 +22,7 @@ use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
-use fno::proto::{AgentRow, Command, PaneMeta, SquadMeta};
+use fno::proto::{AgentRow, Command, PaneMeta, PrStatusFact, SquadMeta};
 
 pub const WIDTH: f32 = 320.0;
 
@@ -99,6 +100,15 @@ pub enum Row {
         detail: String,
         /// The node and PR an agent works on.
         identity: Option<String>,
+        /// The agent's PR status fact (the serve's sweep projection);
+        /// `None` on non-agent rows. The identity cell renders its verdict
+        /// and review tokens.
+        pr_fact: Option<PrStatusFact>,
+        /// The row's own PR number and URL, so the sheet opens with the
+        /// row's data and never a name lookup's (two live rows can share a
+        /// name).
+        pr: Option<u64>,
+        pr_url: Option<String>,
         /// The mux card's served facts; `None` for anything but an agent.
         card: Option<CardFacts>,
         /// An agent's lattice state; `None` for shells, machines, questions.
@@ -137,6 +147,78 @@ pub(super) fn agent_identity(a: &AgentRow) -> Option<String> {
     out.push_str(&binding_suffix(a));
     Some(out)
 }
+
+/// The PR status tokens the identity cell wears before the `#N · node`
+/// text, in the app's shape-carries-state + palette-reinforces idiom: the
+/// checks verdict first (`✓`, `✗N` with the fail count, `…N` with the
+/// pending count), the review mark after (`r✓` reviewed, `r✗` any other
+/// named state). An unknown or missing verdict carries no token, and an
+/// unknown review word is a state the row treats as not-good (`r✗`), never
+/// as reviewed.
+fn pr_status_marks(fact: &PrStatusFact, p: &Palette) -> Vec<(String, u32)> {
+    let mut marks = Vec::new();
+    match fact.verdict.as_str() {
+        "green" => marks.push(("✓".to_string(), p.ok)),
+        "red" => marks.push((
+            if fact.fail > 0 {
+                format!("✗{}", fact.fail)
+            } else {
+                "✗".to_string()
+            },
+            p.warn,
+        )),
+        "pending" => marks.push((
+            if fact.pending > 0 {
+                format!("…{}", fact.pending)
+            } else {
+                "…".to_string()
+            },
+            p.faint,
+        )),
+        _ => {}
+    }
+    match fact.review_state.as_deref() {
+        Some("reviewed") => marks.push(("r✓".to_string(), p.ok)),
+        Some("") | None => {}
+        Some(_) => marks.push(("r✗".to_string(), p.warn)),
+    }
+    marks
+}
+
+/// The identity cell when a PR fact exists: the tokens, one space each,
+/// then the `#N · node` text cut to what the column leaves. Width math
+/// mirrors `ui::cell` (fixed `chars` budget, overflow hidden), so the
+/// column never grows for the tokens.
+fn pr_identity_cell(
+    fact: &PrStatusFact,
+    identity: Option<&str>,
+    chars: usize,
+    p: &Palette,
+    _adv: Pixels,
+) -> Div {
+    let marks = pr_status_marks(fact, p);
+    // One space after each token, so `✗2 r✓ #24` reads as three words
+    // instead of one crammed run; the spaces are part of `marks_w`, so the
+    // text cut stays inside the column and the number survives it.
+    let marks_w: usize = marks.iter().map(|(t, _)| t.chars().count() + 1).sum();
+    let mut inner = div().flex().flex_row();
+    for (token, color) in marks {
+        inner = inner.child(
+            ui::role(div(), ui::Role::Fact, p)
+                .text_color(rgb(color))
+                .child(format!("{token} ")),
+        );
+    }
+    let rest_w = chars.saturating_sub(marks_w);
+    inner.child(ui::text(
+        ui::cut(identity.unwrap_or_default(), rest_w),
+        ui::Role::Fact,
+        p,
+    ))
+}
+
+/// The identity slot's index in [`slots`]: the last column.
+const IDENTITY_SLOT: usize = 5;
 
 /// One agent row's click action: the sideline click command as an app
 /// Action. The go-to palette sends the same thing, so a click and a goto
@@ -208,6 +290,9 @@ fn shell_item(p: &PaneMeta) -> Row {
         label: p.label.clone(),
         detail: cwd,
         identity: None,
+        pr_fact: None,
+        pr: None,
+        pr_url: None,
         card: None,
         state: None,
         question: false,
@@ -233,6 +318,14 @@ fn agent_item(
         label,
         detail: agent_status_word(a),
         identity: agent_identity(a),
+        pr_fact: a.pr_status.clone(),
+        pr: a.pr,
+        pr_url: a
+            .bindings
+            .iter()
+            .rev()
+            .find(|b| b.pr.is_some())
+            .and_then(|b| b.pr_url.clone()),
         card: Some(card_facts(a, now_secs)),
         state: Some(state),
         question: false,
@@ -411,6 +504,9 @@ fn push_questions(out: &mut Vec<Row>, board: &Board) {
         label: qlabel,
         detail: qdetail,
         identity: None,
+        pr_fact: None,
+        pr: None,
+        pr_url: None,
         card: None,
         state: None,
         question: false,
@@ -452,6 +548,9 @@ fn push_machines(out: &mut Vec<Row>, board: &Board) {
                 if seats == 1 { "" } else { "s" }
             ),
             identity: None,
+            pr_fact: None,
+            pr: None,
+            pr_url: None,
             card: None,
             state: None,
             question: false,
@@ -674,6 +773,7 @@ fn agent_cells(
     item: Stateful<Div>,
     card: &CardFacts,
     identity: Option<&str>,
+    pr_fact: Option<&PrStatusFact>,
     (label, name_w, weight): (String, usize, FontWeight),
     cols: &[(usize, usize)],
     p: &Palette,
@@ -688,6 +788,18 @@ fn agent_cells(
         .flex_row()
         .gap(small * COL_GAP as f32);
     for (slot, w) in cols {
+        if *slot == IDENTITY_SLOT {
+            if let Some(fact) = pr_fact {
+                line = line.child(pr_identity_cell(
+                    fact,
+                    facts.get(*slot).cloned().flatten().as_deref(),
+                    *w,
+                    p,
+                    small,
+                ));
+                continue;
+            }
+        }
         line = line.child(ui::cell(
             facts.get(*slot).cloned().flatten().unwrap_or_default(),
             *w,
@@ -782,6 +894,7 @@ fn agent_row(
     item: Stateful<Div>,
     mut card: CardFacts,
     identity: Option<&str>,
+    pr_fact: Option<&PrStatusFact>,
     name: (String, usize, FontWeight),
     badge: Option<usize>,
     grid: &Grid,
@@ -790,18 +903,20 @@ fn agent_row(
     if badge.is_some() {
         card.activity = None;
     }
-    agent_cells(item, &card, identity, name, &grid.cols, p, grid.adv)
-        .relative()
-        .children(badge.map(|n| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .right(px(12.0))
-                .flex()
-                .items_center()
-                .child(ui::badge(n, &p))
-        }))
+    agent_cells(
+        item, &card, identity, pr_fact, name, &grid.cols, p, grid.adv,
+    )
+    .relative()
+    .children(badge.map(|n| {
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(12.0))
+            .flex()
+            .items_center()
+            .child(ui::badge(n, &p))
+    }))
 }
 
 /// A workspace or group header row: a hairline above it and an 8px gap,
@@ -1142,6 +1257,9 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             label,
             detail,
             identity,
+            pr_fact,
+            pr,
+            pr_url,
             card,
             state,
             question,
@@ -1156,6 +1274,9 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             let tinted = blocked && !cursor;
             let row_p = if tinted { p.on_needs() } else { p };
             let agent_name = card.as_ref().map(|_| label.clone());
+            // The sheet's data rides the row, so the listener carries its
+            // own name copy: the name tuple below moves `label`.
+            let label_for_sheet = label.clone();
             let mut item = ui::row(i, cursor, &p)
                 .w(px(WIDTH))
                 .when(tinted, |d| d.bg(rgb(p.needs_fill())))
@@ -1169,24 +1290,61 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 Some(card) => {
                     let badge = grid.badges.get(i).copied().flatten();
                     let name = (label, grid.name_w, weight);
-                    agent_row(item, card, identity.as_deref(), name, badge, grid, &row_p)
+                    agent_row(
+                        item,
+                        card,
+                        identity.as_deref(),
+                        pr_fact.as_ref(),
+                        name,
+                        badge,
+                        grid,
+                        &row_p,
+                    )
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
             item = agent_menu_on_right_click(item, agent_name, cx);
-            if let Some(action) = action {
-                // On click: a press that leaves the row before release
-                // does nothing. A click is the user's own pick, so the
-                // launch's borrowed cursor retires with it.
-                item = ui::clickable(item, &p).on_click(cx.listener(move |root, _, _, cx| {
-                    root.launch.show = None;
-                    root.launch.show_task = None;
-                    root.act(action.clone(), cx)
-                }));
-            }
+            item = row_click_action(item, &p, cx, pr_fact, pr, pr_url, label_for_sheet, action);
             item
         }
     }
+}
+
+/// A row's click: a press that leaves the row before release does
+/// nothing; a plain click keeps the row's own action. Alt-click on a row
+/// whose agent carries a PR fact opens its read-only sheet instead.
+fn row_click_action(
+    item: Stateful<Div>,
+    p: &Palette,
+    cx: &mut Context<Root>,
+    pr_fact: Option<PrStatusFact>,
+    pr: Option<u64>,
+    pr_url: Option<String>,
+    label_for_sheet: String,
+    action: Option<Action>,
+) -> Stateful<Div> {
+    let Some(action) = action else {
+        return item;
+    };
+    let openable = pr_fact.is_some();
+    ui::clickable(item, &p).on_click(cx.listener(move |root, ev: &gpui::ClickEvent, _, cx| {
+        if openable && ev.modifiers().alt {
+            if let Some(num) = pr {
+                root.pr_sheet = Some(pr_sheet::PrSheet {
+                    pr: num,
+                    url: pr_url.clone(),
+                    fact: pr_fact.clone().unwrap_or_default(),
+                    agent: label_for_sheet.clone(),
+                    slug: pr_sheet::slug_from_url(pr_url.as_deref()),
+                });
+                cx.notify();
+            }
+            return;
+        }
+        root.launch.show = None;
+        root.launch.show_task = None;
+        root.act(action.clone(), cx)
+    }))
 }
 
 /// A right-click on an agent row opens that agent's menu at the pointer.
@@ -1494,6 +1652,34 @@ mod tests {
     use super::super::app_state::GroupBy;
     use super::*;
     use fno::proto::{AgentBadge, PaneMeta, SquadMeta, TabMeta};
+    use fno::theme::Theme;
+
+    #[test]
+    fn a_red_fact_wears_the_fail_token_with_the_true_count_in_warn() {
+        let p = Palette::from_theme(&Theme::default_theme());
+        let fact = PrStatusFact {
+            verdict: "red".into(),
+            fail: 3,
+            review_state: Some("reviewed".into()),
+            ..Default::default()
+        };
+        let marks = pr_status_marks(&fact, &p);
+        assert_eq!(marks.first(), Some(&("✗3".to_string(), p.warn)));
+        assert_eq!(marks.get(1), Some(&("r✓".to_string(), p.ok)));
+    }
+
+    #[test]
+    fn a_pending_zero_renders_no_count_and_an_unknown_fact_wears_no_token() {
+        let p = Palette::from_theme(&Theme::default_theme());
+        let pending = PrStatusFact {
+            verdict: "pending".into(),
+            ..Default::default()
+        };
+        let marks = pr_status_marks(&pending, &p);
+        assert_eq!(marks.first(), Some(&("…".to_string(), p.faint)));
+        let unknown = PrStatusFact::default();
+        assert!(pr_status_marks(&unknown, &p).is_empty());
+    }
 
     fn agent(name: &str, pane: u64, badge: Option<AgentBadge>, squad: u64) -> AgentRow {
         serde_json::from_value(serde_json::json!({
@@ -2171,5 +2357,83 @@ mod tests {
             .position(|r| matches!(r, Row::Group { title, .. } if title == "m2-mbp"));
         assert!(m2.unwrap() < remote_pos.unwrap());
         assert!(remote_pos.unwrap() < shell_pos.unwrap());
+    }
+
+    // The pr sheet's model contracts live under this file's declaration
+    // scope: pr_sheet.rs's path matches the net-zero test scope (pr_),
+    // and these contracts are net-new.
+    use crate::pr_sheet;
+    use fno_proto::PrFailingCheck;
+
+    fn sheet_fact() -> PrStatusFact {
+        PrStatusFact {
+            verdict: "red".into(),
+            pass: 32,
+            fail: 2,
+            pending: 17,
+            failing: vec![
+                PrFailingCheck {
+                    name: "cargo test (fno mux)".into(),
+                    step: "wait for every run at the head".into(),
+                    first_error: "ci-required: FAILED at e51d".into(),
+                },
+                PrFailingCheck {
+                    name: "Python static correctness".into(),
+                    step: "Test declarations are shrink-only".into(),
+                    first_error: "test-delta: scope G3 nets +1".into(),
+                },
+            ],
+            review_state: Some("reviewed".into()),
+            review_rounds: Some(2),
+            title: Some("the mux board fetch stays inside its deadline".into()),
+            settled: false,
+            pr_state: Some("OPEN".into()),
+            draft: false,
+            mergeable: Some("MERGEABLE".into()),
+            measured_at: 0,
+        }
+    }
+
+    #[test]
+    fn the_sheet_model_names_the_failing_checks_and_the_review() {
+        let rows = pr_sheet::model(&sheet_fact());
+        let texts: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+        assert!(texts.contains(&"✗ cargo test (fno mux)"));
+        assert!(texts.contains(&"wait for every run at the head"));
+        assert!(texts.contains(&"ci-required: FAILED at e51d"));
+        assert!(texts.contains(&"the mux board fetch stays inside its deadline"));
+        assert!(texts.contains(&"checks 51: 32 pass 2 fail 17 pending"));
+        assert!(texts.contains(&"review: reviewed (2 rounds)"));
+        assert!(texts.contains(&"OPEN · MERGEABLE"));
+        // The step rows wear the error role; the error tail is secondary.
+        let failing = rows.iter().find(|r| r.text.starts_with("✗ ")).unwrap();
+        assert!(failing.error);
+        let tail = rows
+            .iter()
+            .find(|r| r.text == "ci-required: FAILED at e51d")
+            .unwrap();
+        assert!(tail.dim && !tail.error);
+    }
+
+    #[test]
+    fn a_sheet_fact_with_no_state_and_no_failing_renders_the_checks_line_only() {
+        let bare = PrStatusFact {
+            verdict: "unknown".into(),
+            ..Default::default()
+        };
+        let rows = pr_sheet::model(&bare);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.first().unwrap().text, "checks 0:");
+    }
+
+    #[test]
+    fn a_green_sheet_fact_reads_ok_and_names_no_failing() {
+        let green = PrStatusFact {
+            verdict: "green".into(),
+            pass: 9,
+            ..Default::default()
+        };
+        let rows = pr_sheet::model(&green);
+        assert_eq!(rows.first().unwrap().text, "checks 9: 9 pass");
     }
 }

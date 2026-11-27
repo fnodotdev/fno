@@ -4,6 +4,7 @@ import type { AgentBadge } from "./AgentBadge";
 import type { AgentNoPaneReason } from "./AgentNoPaneReason";
 import type { AnswerablePrompt } from "./AnswerablePrompt";
 import type { BuildMark } from "./BuildMark";
+import type { PrStatusFact } from "./PrStatusFact";
 import type { Reach } from "./Reach";
 import type { SessionBinding } from "./SessionBinding";
 import type { ShellActivity } from "./ShellActivity";
@@ -422,4 +423,12 @@ bindings?: Array<SessionBinding>,
  * parent), which the new-workspace overlay offers as a folder. `None`
  * when the cwd sits in no git repo or the server has not resolved it yet.
  */
-project_root?: string | null, };
+project_root?: string | null, 
+/**
+ * (v134) The PR's CI and review fact, composed by the serve's bounded
+ * pr-status sweep from the shared `fno do pr status` door. `None` = no
+ * fact yet: no PR, a failed read, or gh absent. Never a fabricated
+ * verdict. `#[serde(default)]` keeps a v133 reader wire-tolerant
+ * (defaults None, which paints no mark).
+ */
+pr_status?: PrStatusFact | null, };
