@@ -26,7 +26,6 @@ mod validators_fleet;
 mod validators_root;
 
 pub use repr::{py_float, py_repr, py_str};
-pub(crate) use validators_root::template_vars;
 
 use serde_json::{Map, Value};
 use std::collections::HashMap;
