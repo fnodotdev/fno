@@ -4401,6 +4401,7 @@ mod tests {
             passthrough: &[],
             route: None,
             settings: None,
+            role: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),
