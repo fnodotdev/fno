@@ -22,10 +22,11 @@
 //! none of them.
 //!
 //! The fold is the one reader behind the skill read, not the only reader of
-//! these shapes in the crate. Two others read the same shapes by string key
-//! for other outputs, and neither is fed from here: `session_backfill.rs`
-//! stamps a session row's start and end, and `correction_fold.rs` collects
-//! the session facts of a correction ruling.
+//! these shapes in the crate. Three others read the same shapes by string key
+//! for other outputs, and none is fed from here: `session_backfill.rs` stamps
+//! a session row's start and end, `correction_fold.rs` collects the session
+//! facts of a correction ruling, and `skill_drift.rs` lists the skills a lead
+//! session called since its last compaction.
 
 use crate::runtime::attended::xml_block;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
@@ -381,9 +382,11 @@ pub(crate) struct Invocation {
 
 /// Folds one session's transcript lines into the rows of what it invoked, in
 /// transcript order. Four sources feed it: a Skill `tool_use` block, a user
-/// line with a `command-name` tag, an Agent or Task `tool_use` block and its
-/// result, and a `goal_status` attachment. A line that does not parse is
-/// skipped, as it always was.
+/// line that opens with a typed command's envelope, an Agent or Task
+/// `tool_use` block and its result, and a `goal_status` attachment. A line
+/// that does not parse is skipped, as it always was. It reads a whole
+/// transcript: a command row ends at the last activity before the operator's
+/// next turn.
 pub(crate) fn invocations_from_transcript(lines: &[&str]) -> Vec<Invocation> {
     let mut fold = InvocationFold::default();
     for line in lines {
@@ -406,6 +409,8 @@ struct TranscriptLine {
     timestamp: Option<String>,
     #[serde(rename = "isMeta")]
     is_meta: Option<bool>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
     message: Option<TranscriptMessage>,
     attachment: Option<AnyAttachment>,
     #[serde(rename = "toolUseResult")]
@@ -565,10 +570,16 @@ impl InvocationFold {
             session,
             timestamp,
             is_meta,
+            is_sidechain,
             message,
             attachment,
             tool_result,
         } = line;
+        // A subagent's own lines ride in its parent's file on some harness
+        // builds. They are not what the parent session invoked.
+        if is_sidechain == Some(true) {
+            return;
+        }
         if self.session.is_none() {
             self.session = session.filter(|s| !s.is_empty());
         }
@@ -642,9 +653,10 @@ impl InvocationFold {
         self.waiting.insert(id.to_string(), self.rows.len() - 1);
     }
 
-    /// A `user` line. Its `tool_result` blocks close waiting rows. A line that
-    /// opens a turn of its own ends the open command row, and a `command-name`
-    /// tag on it opens a new one.
+    /// A `user` line. Its `tool_result` blocks close waiting rows. A typed
+    /// command ends the open command row and opens a new one. A line that
+    /// opens a turn of the operator's own ends the open command row. Every
+    /// other line is activity inside the turn that is open.
     fn absorb_user_line(
         &mut self,
         message: &TranscriptMessage,
@@ -653,15 +665,17 @@ impl InvocationFold {
         tool_result: Option<AnyToolResult>,
     ) {
         self.absorb_results(message, timestamp.as_deref(), tool_result);
-        if is_meta || !opens_turn(message) {
-            self.last_activity = timestamp;
-            return;
+        if !is_meta {
+            if let Some(text) = command_text(message) {
+                self.close_command();
+                self.open_command_row(text, timestamp);
+                return;
+            }
+            if opens_turn(message) {
+                self.close_command();
+            }
         }
-        self.close_command();
-        match command_text(message) {
-            Some(text) => self.open_command_row(text, timestamp),
-            None => self.last_activity = timestamp,
-        }
+        self.last_activity = timestamp;
     }
 
     /// The `tool_result` blocks of a `user` line close the rows that wait for
@@ -833,11 +847,16 @@ impl InvocationFold {
     }
 }
 
-/// Whether a `user` line opens a turn of its own. A result, a meta line and a
-/// notification all ride inside the turn that is open.
+/// Whether a `user` line opens a turn of the operator's own. A result rides
+/// inside the turn that is open, and so does every harness-injected shape: a
+/// mail, a notification, a compaction summary. The provenance classifier owns
+/// that list.
 fn opens_turn(message: &TranscriptMessage) -> bool {
     match &message.content {
-        Some(MessageContent::Text(text)) => !text.trim_start().starts_with("<task-notification>"),
+        Some(MessageContent::Text(text)) => matches!(
+            crate::provenance::classify_text(text, None),
+            crate::provenance::Verdict::Operator(_)
+        ),
         Some(MessageContent::Blocks(blocks)) => !blocks
             .iter()
             .any(|block| block.kind == Some(BlockKind::ToolResult)),
@@ -845,11 +864,16 @@ fn opens_turn(message: &TranscriptMessage) -> bool {
     }
 }
 
-/// The text of a typed command: a `user` line whose content is a string with
-/// a `command-name` tag.
+/// The text of a typed command: a `user` line whose content opens with the
+/// command envelope. A compaction summary and a local command's output quote
+/// both tags inside their own text, so a tag anywhere else opens no command.
 fn command_text(message: &TranscriptMessage) -> Option<&str> {
     match &message.content {
-        Some(MessageContent::Text(text)) if text.contains("<command-name>") => Some(text),
+        Some(MessageContent::Text(text)) => {
+            let text = text.trim_start();
+            (text.starts_with("<command-message>") || text.starts_with("<command-name>"))
+                .then_some(text)
+        }
         _ => None,
     }
 }
@@ -1810,15 +1834,16 @@ fn fenced_yaml_block(text: &str) -> Option<String> {
 /// Best-effort transcript candidate lines for one session id
 /// (`cost/_session_cost.find_transcript` + read): resolve `<sid>.jsonl`
 /// through [`build_transcript_index`]'s memo, read it, and keep only the
-/// lines that hold a [`TRANSCRIPT_MARKERS`] word (the sole consumer is
-/// [`invocations_from_transcript`]). None when the id is not a UUID, the index
-/// has no entry, or the read fails (GC'd / per-machine).
+/// lines that name [`SKILL_USE_MARKER`] (the skill read is the sole consumer).
+/// None when the id is not a UUID, the index has no entry, or the read fails
+/// (GC'd / per-machine).
 ///
-/// The words cover the four sources: `tool_use` matches a `tool_use` block and
-/// the `tool_use_id` of its result, the tag matches a typed command, and
-/// `goal_status` matches a goal record. Transcripts are the sweep's dominant
-/// input, so the parse only runs on candidate lines.
-const TRANSCRIPT_MARKERS: [&str; 3] = ["tool_use", "<command-name>", "goal_status"];
+/// A transcript line that names no Skill tool_use cannot yield a skill row,
+/// and the word is the line-level pre-filter. Transcripts are the sweep's
+/// dominant input, so the parse only runs on candidate lines. The other
+/// three kinds of row need the whole transcript and do not read through
+/// here: their end is the last activity before the operator's next turn.
+const SKILL_USE_MARKER: &str = "Skill";
 
 pub(crate) fn default_read_transcript(session_id: &str) -> Option<Vec<String>> {
     if !is_uuid(session_id) {
@@ -1845,11 +1870,7 @@ pub(crate) fn default_read_transcript(session_id: &str) -> Option<Vec<String>> {
     }?;
     std::fs::read_to_string(path).ok().map(|text| {
         text.lines()
-            .filter(|line| {
-                TRANSCRIPT_MARKERS
-                    .iter()
-                    .any(|marker| line.contains(*marker))
-            })
+            .filter(|line| line.contains(SKILL_USE_MARKER))
             .map(str::to_string)
             .collect()
     })
@@ -2050,8 +2071,9 @@ mod tests {
     }
 
     /// A Skill call and its result are one row. A copy of the call on a line
-    /// with no type adds no row, prose that names Skill adds no row, and a
-    /// malformed line is skipped. The skill read is the kind=skill slice.
+    /// with no type adds no row, a call on a subagent's sidechain line adds no
+    /// row, prose that names Skill adds no row, and a malformed line is
+    /// skipped. The skill read is the kind=skill slice.
     #[test]
     fn skill_fixture_folds_one_row_per_call() {
         let lines = [
@@ -2060,6 +2082,7 @@ mod tests {
             r#"{"message":{"content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#.to_string(),
             "not json at all but says Skill".to_string(),
+            r#"{"type":"assistant","isSidechain":true,"sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T04:12:49.000Z","message":{"content":[{"type":"tool_use","id":"call_side","name":"Skill","input":{"skill":"fno:think"}}]}}"#.to_string(),
             result_line("2026-11-24T04:12:52.568Z", "call_a", r#"{"success":true,"commandName":"fno:blueprint"}"#, false),
             result_line("2026-11-24T04:13:01.000Z", "call_b", r#"{"success":false,"commandName":"fno:review"}"#, true),
         ];
@@ -2088,7 +2111,9 @@ mod tests {
     }
 
     /// A typed command is one row, from its line to the last activity before
-    /// the next turn. A result and a notification stay inside the turn.
+    /// the operator's next turn. A result, a notification, a mail and a
+    /// compaction summary stay inside the turn, and a summary that quotes both
+    /// tags opens no command.
     #[test]
     fn command_fixture_spans_the_turn() {
         let rows = fold(&[
@@ -2112,7 +2137,19 @@ mod tests {
                 "2026-11-24T05:20:23.760Z",
                 r#"<task-notification>\n<tool-use-id>call_none</tool-use-id>\n<status>completed</status>\n</task-notification>"#,
             ),
+            user_line(
+                "2026-11-24T05:30:00.000Z",
+                r#"<fno_mail from="lead" to="worker" id="m1">how is it going</fno_mail>"#,
+            ),
+            user_line(
+                "2026-11-24T05:40:00.000Z",
+                "This session is being continued from a previous conversation. The user ran <command-name>/fno:target</command-name><command-args>x-bbbb</command-args>.",
+            ),
             user_line("2026-11-24T06:00:00.000Z", "how is it going"),
+            user_line(
+                "2026-11-24T06:10:00.000Z",
+                "<local-command-stdout>compacted</local-command-stdout>",
+            ),
         ]);
         assert_eq!(rows.len(), 1);
         let command = &rows[0];
@@ -2120,7 +2157,7 @@ mod tests {
         assert_eq!(command.name, "fno:target");
         assert_eq!(command.node.as_deref(), Some("x-aaaa"));
         assert_eq!(command.start.as_deref(), Some("2026-11-24T04:51:25.957Z"));
-        assert_eq!(command.end.as_deref(), Some("2026-11-24T05:20:23.760Z"));
+        assert_eq!(command.end.as_deref(), Some("2026-11-24T05:40:00.000Z"));
         assert_eq!(command.outcome, None);
     }
 
