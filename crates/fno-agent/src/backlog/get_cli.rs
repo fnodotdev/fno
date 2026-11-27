@@ -297,7 +297,7 @@ pub fn run(tail: &[String]) -> i32 {
     1
 }
 
-/// A hash-width token (`x-2844`: four to eight decimal digits) that reached its
+/// A hash-width token (`ab-2844`: four to eight decimal digits) that reached its
 /// node only through the display-number tier. Such a token is also the shape of
 /// an all-digit hash id, so the id tier's miss and the number tier's hit
 /// disagree about what the caller named.
@@ -620,11 +620,11 @@ mod tests {
 
     #[test]
     fn strict_flags_a_hash_width_token_that_only_the_number_tier_hit() {
-        let row = json!({"id": "x-ea0e"});
-        assert!(number_tier_only(&row, "x-ea0e", "x-2844"));
-        assert!(!number_tier_only(&row, "x-ea0e", "x-ea0e"));
-        assert!(!number_tier_only(&row, "x-ea0e", "x-15"));
-        let aliased = json!({"id": "x-ea0e", "aliases": ["x-2844"]});
-        assert!(!number_tier_only(&aliased, "x-ea0e", "x-2844"));
+        let row = json!({"id": "ab-bbbbbbbb"});
+        assert!(number_tier_only(&row, "ab-bbbbbbbb", "ab-2844"));
+        assert!(!number_tier_only(&row, "ab-bbbbbbbb", "ab-bbbbbbbb"));
+        assert!(!number_tier_only(&row, "ab-bbbbbbbb", "ab-15"));
+        let aliased = json!({"id": "ab-bbbbbbbb", "aliases": ["ab-2844"]});
+        assert!(!number_tier_only(&aliased, "ab-bbbbbbbb", "ab-2844"));
     }
 }
