@@ -718,7 +718,9 @@ impl InvocationFold {
             else {
                 continue;
             };
-            let row = &mut self.rows[index];
+            let Some(row) = self.rows.get_mut(index) else {
+                continue;
+            };
             row.outcome = Some(match (block.is_error == Some(true), launched) {
                 (true, _) => Outcome::Error,
                 (false, true) => Outcome::Launched,
@@ -758,12 +760,13 @@ impl InvocationFold {
             tokens,
         };
         match self.open_goal {
-            Some(index) if self.rows[index].name == condition => {
+            Some(index) if self.goal_is_open(&condition) => {
                 self.open_goal = None;
-                let row = &mut self.rows[index];
-                row.end = timestamp;
-                row.outcome = Some(ended);
-                row.goal = Some(totals);
+                if let Some(row) = self.rows.get_mut(index) {
+                    row.end = timestamp;
+                    row.outcome = Some(ended);
+                    row.goal = Some(totals);
+                }
             }
             _ => self
                 .rows
@@ -771,20 +774,25 @@ impl InvocationFold {
         }
     }
 
+    /// Whether the goal that is open is this one.
+    fn goal_is_open(&self, condition: &str) -> bool {
+        self.open_goal
+            .and_then(|index| self.rows.get(index))
+            .is_some_and(|row| row.name == condition)
+    }
+
     /// A set record, or a not-met record with no open goal. A goal has one
     /// row, so a record for a goal that is already open adds nothing. A set
     /// record for another condition ends the open goal: the harness replaced it.
     fn open_goal(&mut self, condition: String, timestamp: Option<String>) {
-        if self
-            .open_goal
-            .is_some_and(|index| self.rows[index].name == condition)
-        {
+        if self.goal_is_open(&condition) {
             return;
         }
         if let Some(index) = self.open_goal.take() {
-            let row = &mut self.rows[index];
-            row.end = timestamp.clone();
-            row.outcome = Some(Outcome::Cleared);
+            if let Some(row) = self.rows.get_mut(index) {
+                row.end = timestamp.clone();
+                row.outcome = Some(Outcome::Cleared);
+            }
         }
         self.open_goal = Some(self.rows.len());
         self.rows
@@ -834,8 +842,12 @@ impl InvocationFold {
     /// The open command row ends at the last activity before the line being
     /// read. The caller runs this before it records that line.
     fn close_command(&mut self) {
-        if let Some(index) = self.open_command.take() {
-            self.rows[index].end = self.last_activity.take();
+        if let Some(row) = self
+            .open_command
+            .take()
+            .and_then(|index| self.rows.get_mut(index))
+        {
+            row.end = self.last_activity.take();
         }
     }
 
@@ -2104,6 +2116,7 @@ mod tests {
     /// row, prose that names Skill adds no row, and a malformed line is
     /// skipped. The skill read is the kind=skill slice.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn skill_fixture_folds_one_row_per_call() {
         let lines = [
             call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-aaaa"}"#),
@@ -2145,6 +2158,7 @@ mod tests {
     /// tags opens no command. A row with no node of its own takes the node of
     /// the newest typed command.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn command_fixture_spans_the_turn() {
         let rows = fold(&[
             user_line(
@@ -2205,6 +2219,7 @@ mod tests {
     /// call with a plain result reads `ok` with the result's timestamp, also
     /// when the line's `toolUseResult` is a bare string.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn agent_fixture_reads_the_launch() {
         let rows = fold(&[
             call_line(
@@ -2261,6 +2276,7 @@ mod tests {
     /// The not-met record adds nothing, and the met record closes the row with
     /// its totals. The typed command is a command row of its own.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn goal_fixture_folds_one_goal_row() {
         let rows = fold(&[
             goal_line(
@@ -2312,6 +2328,7 @@ mod tests {
     /// A failed record and a cleared record each close the open goal row. A
     /// terminal record with no open goal is a row of its own, with no start.
     #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
     fn goal_fixture_reads_each_ending() {
         let rows = fold(&[
             goal_line(
