@@ -88,14 +88,14 @@ fn file_rules(cwd: &Path, node: Option<&str>) -> Rules {
 pub(crate) fn command_rules(role: Option<&str>) -> Vec<String> {
     let default = crate::agents_config::config_lookup_global(&["allow_rules", "default"])
         .and_then(|v| v.as_bool());
-    let role_off = role
+    let role_value = role
         .map(str::trim)
         .filter(|r| !r.is_empty())
         .and_then(|role| {
             crate::agents_config::config_lookup_global(&["allow_rules", "roles", role])
                 .and_then(|v| v.as_bool())
         });
-    if !override_on(default, role_off) {
+    if !override_on(default, role_value) {
         return Vec::new();
     }
     table_allow_rules()
@@ -161,12 +161,12 @@ fn table_allow_rules() -> Vec<String> {
         .collect()
 }
 
-/// The override decision, pure for the tests: the role value wins over the
-/// default, and only an explicit `false` turns the rules off.
-fn override_on(default: Option<bool>, role_off: Option<bool>) -> bool {
-    match role_off {
-        Some(false) => false,
-        _ => default.unwrap_or(true),
+/// The override decision, pure for the tests: an explicit role value wins
+/// over the default, and a value missing on both reads as on.
+fn override_on(default: Option<bool>, role: Option<bool>) -> bool {
+    match role {
+        Some(v) => v,
+        None => default.unwrap_or(true),
     }
 }
 
