@@ -668,16 +668,16 @@ mod tests {
         assert_eq!(manifest_claim_in("s-a", &spaces, &all, &repo), None);
     }
 
-    /// One claim in a private claims root, held by `holder` for `ttl_ms`
-    /// (negative reads as already expired). The pid is this test process, so
-    /// a live verdict is deterministic. Claims live in the store the read
-    /// path opens, so the seed goes through the store's own acquire, never a
-    /// hand-written lockfile.
-    fn seed_claim(root: &Path, node: &str, holder: &str, ttl_ms: i64) {
+    /// One claim in a private claims root, held by `holder`. With
+    /// `unavailable`, the row carries no pid, so its verdict reads from the
+    /// TTL alone and the clock arm can expire it cleanly. Claims live in
+    /// the store the read path opens, so the seed goes through the store's
+    /// own acquire, never a hand-written lockfile.
+    fn seed_claim(root: &Path, node: &str, holder: &str, unavailable: bool) {
         let opts = crate::claims::AcquireOpts {
-            pid: Some(std::process::id()),
-            pid_unavailable: false,
-            ttl_ms: Some(ttl_ms),
+            pid: (!unavailable).then(std::process::id),
+            pid_unavailable: unavailable,
+            ttl_ms: Some(900_000),
             reason: Some("test window".into()),
             root: Some(root.to_path_buf()),
             ..Default::default()
@@ -732,7 +732,7 @@ mod tests {
         let _state = StateDirGuard::set(&state);
 
         // Admit arm: the holder's own live claim admits the recorded tree.
-        seed_claim(&root, "x-claim", "target-session:s-claim", 900_000);
+        seed_claim(&root, "x-claim", "target-session:s-claim", false);
         assert_eq!(
             claims_leg_in("s-claim", &repo, &wt.to_string_lossy(), Some(&root)),
             Some((real, "own_claim"))
@@ -742,7 +742,7 @@ mod tests {
         // dir a killed worktree add left behind - the claim still admits it.
         let half = base.join("renamed").join("x-half");
         std::fs::create_dir_all(&half).unwrap();
-        seed_claim(&root, "x-half", "target-session:s-claim", 900_000);
+        seed_claim(&root, "x-half", "target-session:s-claim", false);
         assert_eq!(
             claims_leg_in("s-claim", &repo, &half.to_string_lossy(), Some(&root)),
             Some((half.canonicalize().unwrap(), "own_claim"))
@@ -752,15 +752,26 @@ mod tests {
         // asking session. A fresh node, because the store never overwrites
         // a live row with a different holder.
         let other = checkout(&base, &repo, "renamed", "x-other", true);
-        seed_claim(&root, "x-other", "target-session:s-other", 900_000);
+        seed_claim(&root, "x-other", "target-session:s-other", false);
         assert_eq!(
             claims_leg_in("s-claim", &repo, &other.to_string_lossy(), Some(&root)),
             None
         );
 
-        // Withhold arm, expired claim: a stale TTL admits nobody.
+        // Withhold arm, expired claim: a stale TTL admits nobody. Acquire
+        // refuses a sub-minimum ttl, so the seed acquires normally and then
+        // drives the row's expiry into the past on the same store.
         let expired = checkout(&base, &repo, "renamed", "x-expired", true);
-        seed_claim(&root, "x-expired", "target-session:s-claim", -1);
+        seed_claim(&root, "x-expired", "target-session:s-claim", true);
+        {
+            let dir = crate::claims_root::claims_dir("node:x-expired", Some(&root)).unwrap();
+            let mut conn = crate::claim_store::open_directory(&dir).unwrap();
+            conn.execute(
+                "UPDATE claims SET expires_at = acquired_at - 1000 WHERE key = 'node:x-expired'",
+                [],
+            )
+            .unwrap();
+        }
         assert_eq!(
             claims_leg_in("s-claim", &repo, &expired.to_string_lossy(), Some(&root)),
             None
@@ -782,7 +793,7 @@ mod tests {
         // Withhold arm, a path outside any base: no candidate, no claim ask.
         let outside = tmp.path().join("elsewhere");
         std::fs::create_dir_all(&outside).unwrap();
-        seed_claim(&root, "x-claim", "target-session:s-claim", 900_000);
+        seed_claim(&root, "x-claim", "target-session:s-claim", false);
         assert_eq!(
             claims_leg_in("s-claim", &repo, &outside.to_string_lossy(), Some(&root)),
             None
