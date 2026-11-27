@@ -94,7 +94,7 @@ use backlog::refusal_surface_core;
 #[cfg(feature = "app")]
 pub use backlog::{
     backlog_list, backlog_model, backlog_write, blocked_rung, board_reader, inbox_user,
-    join_marker, law_cli, lawbook, pr_diff, review_prior_head, search_query,
+    join_marker, law_cli, lawbook, pr_diff, review_prior_head, review_read, search_query,
 };
 pub use backlog::{node_row, store_client};
 #[cfg(feature = "app")]

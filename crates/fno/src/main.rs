@@ -314,6 +314,9 @@ enum Role {
     /// native in-process against the events journals. The tail passes
     /// through byte-verbatim, help included.
     ReviewPriorHead(Vec<OsString>),
+    /// `fno do review read <tail>`: serve the scoped diff and record the
+    /// session's receipt, native in-process.
+    ReviewRead(Vec<OsString>),
     /// `fno do review --help` (and the alias's): the native usage, printed
     /// here because no Python leg remains to list the five leaves.
     ReviewHelp,
@@ -1293,6 +1296,18 @@ fn classify_review_prior_head(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(rest.to_vec())
 }
 
+/// `fno do review read <tail>`: the receipt command, claimed by the same
+/// literal three-token prefix as its siblings.
+fn classify_review_read(args: &[OsString]) -> Option<Vec<OsString>> {
+    let [root, group, action, rest @ ..] = args else {
+        return None;
+    };
+    if root.to_str()? != "do" || group.to_str()? != "review" || action.to_str()? != "read" {
+        return None;
+    }
+    Some(rest.to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf. Only the FIRST
 /// tail token names a leaf (a leaf spelled later is a flag value, exactly as
@@ -1310,7 +1325,14 @@ fn classify_review_root(args: &[OsString]) -> Option<(bool, bool, Vec<OsString>)
         };
     if matches!(
         tail.first().and_then(|a| a.to_str()),
-        Some("classify" | "post-dispositions" | "invocations" | "resolve-level" | "prior-head")
+        Some(
+            "classify"
+                | "post-dispositions"
+                | "invocations"
+                | "resolve-level"
+                | "prior-head"
+                | "read"
+        )
     ) {
         return None;
     }
@@ -1617,6 +1639,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_prior_head(args) {
         return Role::ReviewPriorHead(rest);
+    }
+    if let Some(rest) = classify_review_read(args) {
+        return Role::ReviewRead(rest);
     }
     if let Some((alias, help, rest)) = classify_review_root(args) {
         if help {
@@ -2598,6 +2623,7 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
             &rest,
         )),
         Role::ReviewPriorHead(rest) => fno::cli_usage::exit(fno::review_prior_head::run(&rest)),
+        Role::ReviewRead(rest) => fno::cli_usage::exit(fno::review_read::run(&rest)),
         Role::ReviewHelp => {
             println!(
                 "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
@@ -2609,6 +2635,9 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
             println!("  classify <args>                   the findings classifier");
             println!("  invocations <action>              parse, join, reserve, emit, settle");
             println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
+            println!(
+                "  read                              serve the round's diff, record a receipt"
+            );
             fno::cli_usage::exit(0)
         }
         Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agent_exec(
