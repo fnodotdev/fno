@@ -994,7 +994,7 @@ fn escalating_session(here: &Path) -> Option<String> {
 /// `(summary, scope)` of the term verdict; a failed read still records,
 /// as `unreadable ...`, so escalation never goes silent.
 fn verdict_read(here: &Path, scope: &str) -> (String, Option<String>) {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"));
+    let exe = crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"));
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["lead-history", "--verdict", "--cwd"]).arg(here);
     if !scope.is_empty() {

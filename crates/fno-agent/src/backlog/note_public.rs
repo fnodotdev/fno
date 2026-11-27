@@ -394,7 +394,7 @@ fn pointer(node_id: &str, text: &str) -> String {
 /// One wall-clock-bounded send. A live inject waits on the recipient's flock,
 /// so a slow one answers UNCONFIRMED: it may still land.
 fn send_pointer(address: &str, why: &str, body: &str) -> String {
-    let exe = match std::env::current_exe() {
+    let exe = match crate::client_exe::current() {
         Ok(exe) => exe,
         Err(e) => return format!("notify FAILED {address} ({why}): {e}"),
     };

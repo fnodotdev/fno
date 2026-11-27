@@ -110,7 +110,7 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
 /// update, so the history entry records the ruling and the tag cannot map
 /// twice.
 fn run_update(cmd: &[String]) -> std::io::Result<()> {
-    let exe = std::env::current_exe().unwrap_or_else(|_| "fno-agents".into());
+    let exe = crate::client_exe::current().unwrap_or_else(|_| "fno-agents".into());
     let mut command = std::process::Command::new(exe);
     command.args(cmd);
     command.status().map(|_| ())

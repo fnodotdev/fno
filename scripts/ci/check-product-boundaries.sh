@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Product boundary gate: the inventory doc's claims, checked against the
-# manifests and the source. Fails when the dev-only compile edge becomes a
-# real library edge, when the availability classifier or the PATH walk gains
+# manifests and the source. Fails when the compile edge stops pointing one
+# way (fno to fno-agent), when the availability classifier or the PATH walk gains
 # a second definition, or when the recorded duplicate-decision debt entries
 # disappear from the doc.
 set -uo pipefail
@@ -16,7 +16,7 @@ fail() {
 
 command -v jq >/dev/null 2>&1 || fail "jq is required (brew install jq)"
 
-# ── 1. the compile edge is dev-only, both directions ────────────────────────
+# ── 1. the compile edge points one way ────────────────────────
 AGENTS_JSON=$(cargo metadata --no-deps --offline --format-version 1 \
     --manifest-path crates/fno-agent/Cargo.toml 2>/dev/null) ||
     fail "cargo metadata failed for fno-agent"
@@ -27,25 +27,21 @@ FNO_JSON=$(cargo metadata --no-deps --offline --format-version 1 \
 echo "$AGENTS_JSON" | jq -e '.packages | length > 0' >/dev/null ||
     fail "positive control: parsed no packages from fno-agent metadata"
 
-# Positive control first: a parse that finds NO edge is a broken probe, not a
-# passing boundary, so the dev edge must be PRESENT before its kind is checked.
+# fno-agent names no fno dependency of any kind: fno links it, never the
+# other way.
 echo "$AGENTS_JSON" | jq -e '
     [.packages[] | select(.name == "fno-agent")
-        | .dependencies[] | select(.name == "fno") | .kind] | length > 0' >/dev/null ||
-    fail "positive control: the fno edge vanished from fno-agent metadata"
-
-echo "$AGENTS_JSON" | jq -e '
-    [.packages[] | select(.name == "fno-agent")
-        | .dependencies[] | select(.name == "fno") | .kind]
-    | all(.[]; . == "dev")' >/dev/null ||
-    fail "fno-agent links fno outside dev-dependencies"
+        | .dependencies[] | select(.name == "fno")] | length == 0' >/dev/null ||
+    fail "fno-agent names fno as a dependency; the edge points from fno to fno-agent only"
 
 echo "$FNO_JSON" | jq -e '.packages | length > 0' >/dev/null ||
     fail "positive control: parsed no packages from fno metadata"
+# Positive control: the one real edge is present, optional, and normal.
 echo "$FNO_JSON" | jq -e '
     [.packages[] | select(.name == "fno")
-        | .dependencies[] | select(.name == "fno-agent")] | length == 0' >/dev/null ||
-    fail "the mux crate links fno-agent"
+        | .dependencies[] | select(.name == "fno-agent")
+        | select(.optional and .kind == null)] | length == 1' >/dev/null ||
+    fail "fno must link fno-agent once, as an optional normal dependency behind the client feature"
 
 # ── 2. the classifier and its doc exist ─────────────────────────────────────
 [ -f crates/fno/src/product_boundary.rs ] ||
@@ -72,4 +68,4 @@ for token in canonical_root_with canonical_repo_root resolve_canonical_repo_root
         fail "the debt inventory no longer records $token"
 done
 
-echo "product-boundaries: ok (dev-only edge, one classifier, one PATH walk, debt recorded)"
+echo "product-boundaries: ok (one-way edge, one classifier, one PATH walk, debt recorded)"

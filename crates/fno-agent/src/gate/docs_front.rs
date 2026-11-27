@@ -19,7 +19,7 @@
 //!
 //! The front door (crates/fno) claims `do docs` lexically and execs this
 //! binary with the argv intact (the `do pr` handover); the arm in
-//! bin/client.rs strips `do docs` and lands here.
+//! client_cli/mod.rs strips `do docs` and lands here.
 
 use serde::Deserialize;
 use std::path::{Path, PathBuf};

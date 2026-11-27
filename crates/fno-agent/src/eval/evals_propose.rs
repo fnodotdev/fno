@@ -1697,7 +1697,8 @@ pub(crate) struct Run<'a> {
 pub(crate) fn run_leg(r: &Run) -> i32 {
     let repo = r.leg.repo;
     let lane = crate::evals_gate::config_lane(repo);
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
+    let exe =
+        crate::client_exe::current().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let cmd = evals_cmd(&exe, repo);
     let outcome = origin_main(repo).and_then(|sha| real_cycle(repo, &cmd, &lane, &sha, false));
     release_claim(&std::process::id().to_string(), r.leg.claims_root);
@@ -1733,7 +1734,8 @@ pub fn changes_cli(args: &[String]) -> i32 {
         return 2;
     };
     let lane = crate::evals_gate::config_lane(&repo);
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
+    let exe =
+        crate::client_exe::current().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let cmd = evals_cmd(&exe, &repo);
     let root = crate::claims::global_claims_root();
     let holder = format!("drafts-changes:{}", std::process::id());

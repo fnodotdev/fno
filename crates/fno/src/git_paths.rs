@@ -1,8 +1,8 @@
 //! Read the git common dir without trusting `--path-format=absolute`.
 //!
-//! Twin of `fno_agent::git_paths`, which holds the full rationale (fno-agent
-//! links this crate as a dev-dependency only); `fno-agent/tests/git_paths_twin.rs`
-//! pins the two to the same answers.
+//! Twin of `fno_agent::git_paths`, which holds the full rationale (the app
+//! build does not link fno-agent); `tests/git_paths_twin.rs` pins the two to
+//! the same answers.
 
 use std::path::{Path, PathBuf};
 

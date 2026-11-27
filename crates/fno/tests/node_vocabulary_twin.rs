@@ -1,6 +1,5 @@
 //! `fno::node_row` and `fno_agent::backlog` each name the node status
-//! words and the board columns (this crate links `fno` as a dev-dependency
-//! only). The mux reader classifies rows the keeper wrote, so a word or a
+//! words and the board columns (fno-agent never links fno). The mux reader classifies rows the keeper wrote, so a word or a
 //! column that one side adds alone is a row the two boards read apart.
 
 use fno::node_row::{KanbanColumn, NodeRow, Status as MuxStatus};

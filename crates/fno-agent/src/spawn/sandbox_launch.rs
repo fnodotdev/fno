@@ -371,7 +371,7 @@ pub fn sandboxed(cmd: Command) -> Command {
         engine_host: plan.host.clone(),
         argv,
     };
-    let exe = std::env::current_exe()
+    let exe = crate::client_exe::current()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "fno-agent".to_string());
     let wrapped = args.to_argv(&exe);

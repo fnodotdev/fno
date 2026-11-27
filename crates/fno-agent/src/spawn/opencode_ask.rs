@@ -13,7 +13,7 @@
 //! `ask` (resume-by-name) routes serve rows through the shared turn driver,
 //! and `ask --answer allow_once|deny` replies to the row's pending permission ask;
 //! other opencode rows still receive the explicit refusal instead of falling
-//! through to `bin/client.rs`'s generic "provider is required" text.
+//! through to `client_cli/mod.rs`'s generic "provider is required" text.
 //! Mirrors [`crate::agy_ask::maybe_run_agy_ask`]'s shape.
 
 /// The refusal text. A pointer that stops at `--text <prompt>` is a remedy that

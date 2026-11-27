@@ -623,7 +623,8 @@ fn cohort_gate(
 ) -> CohortVerdict {
     let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
     let known = serde_json::to_string(&ids).unwrap_or_default();
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
+    let exe =
+        crate::client_exe::current().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let out = match std::process::Command::new(exe)
         .args(["evals-attempt"])
         .args(["--cohorts-yaml"])
@@ -711,7 +712,8 @@ pub(crate) fn canonical_repo_root() -> std::path::PathBuf {
 /// binary or an unreadable answer returns (2, {"error": ...}) so every
 /// caller refuses closed.
 fn attempt_door(flags: &[String], tail: &[String]) -> (i32, serde_json::Value) {
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
+    let exe =
+        crate::client_exe::current().unwrap_or_else(|_| std::path::PathBuf::from("fno-agent"));
     let out = std::process::Command::new(exe)
         .arg("evals-attempt")
         .args(flags)

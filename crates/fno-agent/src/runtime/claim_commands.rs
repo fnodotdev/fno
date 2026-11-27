@@ -3,7 +3,7 @@
 //! Extracted from client_commands.rs, which it had outgrown: the front door
 //! execs `fno agent claim` into these commands, and the claim-sweep JSON
 //! assembly (the serializer the claim classifier golden is byte-checked
-//! against) lives here too. Dispatch stays in `bin/client.rs`
+//! against) lives here too. Dispatch stays in `client_cli/mod.rs`
 //! via the `mail-inject` `matches!` pattern, so the command remains hidden from
 //! `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agent claim` is still the
 //! only operator CLI for claims.
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 ///
 /// Purpose: (a) the front door runs every `fno agent claim` operation
 /// through it, and (b) callers in other languages shell to it. It is deliberately HIDDEN — dispatched via `matches!`
-/// in `bin/client.rs` (the `mail-inject` pattern) so it stays out of
+/// in `client_cli/mod.rs` (the `mail-inject` pattern) so it stays out of
 /// `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agent claim` remains the only
 /// operator CLI for claims.
 ///

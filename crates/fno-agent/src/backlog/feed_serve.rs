@@ -38,7 +38,7 @@ struct Read {
 /// `None` when the child fails first, so a refresh keeps the rows it has.
 fn start_read(home: &AgentsHome) -> Option<Read> {
     use std::io::BufRead;
-    let exe = std::env::current_exe().ok()?;
+    let exe = crate::client_exe::current().ok()?;
     let mut child = std::process::Command::new(exe)
         .args(["feed", "--json", "--limit", ALL_ROWS])
         .env(crate::paths::HOME_ENV, home.root())

@@ -18,7 +18,7 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 
 | Edge | Kind | Owner | Detail |
 |---|---|---|---|
-| fno to fno-agent | compile | crates/fno-agent/Cargo.toml | dev-dependencies only (production shells the binary) |
+| fno to fno-agent | compile | crates/fno/Cargo.toml | the `client` feature links the agent runtime, and the front door runs the client dispatch in process |
 | fno to fno-agent | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno agent fleet digest` (fail-open on absence) |
 | fno to fno-agent-worker | process | crates/fno/src/backlog/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
 | fno-agent to fno | process | crates/fno-agent/src/runtime/attach.rs | attach invokes the mux as a process, not a library |
@@ -29,7 +29,7 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 | claims, detach records, squads | state writer | crates/fno-agent and crates/fno | each state file names its owner in its module docs |
 | generated capability copies | artifact | build.rs | generated, freshness-gated in CI, not dual logic |
 
-The dev-only compile edge is checked by name in the boundary gate. A PR that moves `fno` from fno-agent' dev-dependencies into dependencies fails the gate. It cannot silently become a real library edge.
+The compile edge points one way, and the boundary gate checks it by name. fno links fno-agent behind its `client` feature. fno-agent names no `fno` dependency of any kind, dev included, so a twin check that reads both crates lives in `crates/fno/tests/fno_agent_twins.rs`. fno-app links fno without `client`, so the desktop app carries no agent runtime.
 
 ## Recorded duplicate-decision debt
 

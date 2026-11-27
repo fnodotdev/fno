@@ -1,7 +1,7 @@
 //! The early transport arms `gh-cache` and `target-status`: Python and shell
 //! callers exec HERE through `command_call` or the binary directly,
 //! transport-only - the group registers no client action. One dispatch line
-//! in `bin/client.rs` covers the group, the same shape
+//! in `client_cli/mod.rs` covers the group, the same shape
 //! `harness_reader::transport_doors` gives the harness probes; client.rs sits
 //! against its line budget, so each family's body lives in its own module and
 //! the arm comments moved with the code. `worktree-reapable` and

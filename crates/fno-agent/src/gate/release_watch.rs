@@ -158,7 +158,7 @@ fn head_lead_scope() -> Option<String> {
 /// task instead, so it lands on the lead board. True when either landed.
 fn mail_head_lead(root: &Path, key: &str, text: &str, url: &str) -> bool {
     // The running fno-agent owns mail send; under cargo test it is the harness.
-    let exe = std::env::current_exe().ok().filter(|_| !cfg!(test));
+    let exe = crate::client_exe::current().ok().filter(|_| !cfg!(test));
     let sent = head_lead_scope().zip(exe).is_some_and(|(scope, exe)| {
         let mut cmd = std::process::Command::new(exe);
         cmd.args(["mail", "send", "--from-name", SENDER])

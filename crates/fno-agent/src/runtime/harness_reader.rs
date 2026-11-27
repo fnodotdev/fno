@@ -1311,7 +1311,7 @@ impl MarkerOf for LineVerdict {
 /// everywhere it must be.
 fn row_matches_line(harness: &str) -> LineVerdict {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let sweep_bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"));
+    let sweep_bin = crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"));
     let mut sweep = Command::new(sweep_bin);
     sweep.args([
         "honesty-sweep",
@@ -1455,7 +1455,7 @@ fn manifest_pinned_line(
 
 fn readiness_marker_from_fixture(harness: &str, fixture: &Path) -> Option<String> {
     let screen = std::fs::read_to_string(fixture).ok()?;
-    let binary = std::env::current_exe().ok()?;
+    let binary = crate::client_exe::current().ok()?;
     let mut cmd = Command::new(binary);
     cmd.args(["manifest-eval", "--harness", harness]);
     cmd.stdin(std::process::Stdio::piped());

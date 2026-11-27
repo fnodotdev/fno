@@ -1760,7 +1760,7 @@ fn run_arm(
             }
         };
         let result = std::process::Command::new(
-            std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent")),
+            crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent")),
         )
         .args([
             "intel",

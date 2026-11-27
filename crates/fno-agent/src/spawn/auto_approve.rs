@@ -102,8 +102,8 @@ pub(crate) fn command_rules(role: Option<&str>) -> Vec<String> {
 }
 
 /// The vendored byte-copy of crate fno's must-enable table
-/// (`crates/fno/src/setup/must_enable.toml`). This crate links `fno` as a
-/// dev-dependency only (the publish gate holds), so the table travels as a
+/// (`crates/fno/src/setup/must_enable.toml`). This crate never links `fno`,
+/// so the table travels as a
 /// copy and `must_work_corpus` pins the two files byte-identical. Crate fno
 /// vets the rows through its filter loader before they ship; this side only
 /// renders the prefixes it already trusts. A copy that fails to parse rules

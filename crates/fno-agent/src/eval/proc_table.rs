@@ -133,8 +133,8 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
 }
 
 /// The live argv of `pid` from `KERN_PROCARGS2`, `None` when unreadable.
-/// Mirrors `fno::pane_argv::process_argv`; that crate is a dev-only link
-/// here, so the read lives beside its only production caller.
+/// Mirrors `fno::pane_argv::process_argv`; this crate never links `fno`,
+/// so the read lives beside its only production caller.
 #[cfg(target_os = "macos")]
 pub fn argv_of(pid: u32) -> Option<Vec<String>> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];

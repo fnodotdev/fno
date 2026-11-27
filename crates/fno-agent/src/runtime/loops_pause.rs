@@ -534,7 +534,7 @@ fn run_mail_hold(extra: &[&str]) -> MailLeg {
 fn run_mail_hold_for(session_id: &str, extra: &[&str]) -> MailLeg {
     let binary = std::env::var_os("FNO_LOOPS_MAIL_BIN")
         .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok())
+        .or_else(|| crate::client_exe::current().ok())
         .unwrap_or_else(|| PathBuf::from("fno-agent"));
     let mut cmd = std::process::Command::new(binary);
     cmd.args(["mail-hold", "--session", session_id]).args(extra);
@@ -894,7 +894,7 @@ pub fn run_loops_capture(args: &[String]) -> (i32, Value) {
     }
 }
 
-/// Entry point called from `bin/client.rs` direct dispatch. Prints to
+/// Entry point called from `client_cli/mod.rs` direct dispatch. Prints to
 /// stdout, returns exit code.
 pub fn run_loops(args: &[String]) -> i32 {
     let json_out = args

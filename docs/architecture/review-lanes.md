@@ -171,7 +171,7 @@ That direct command takes an already-structured target rather than a raw payload
 When the target repository has no `refs/remotes/origin/HEAD`, a bare `/review` or `/code-review` on a Codex app-server thread refuses and requires `--base`. The router derives `baseBranch` only from that authority. The `--uncommitted` flag remains the explicit working-tree target.
 
 **Discoverability note.** `mail-inject` is a `fno-agent` *binary* command, not a `fno agent mail` or `fno agent` (Python CLI) command.
-It is matched with `matches!` in `crates/fno-agent/src/bin/client.rs`, deliberately, so the routable-command parity guard does not see it; that keeps it out of `--help` and `CLIENT_COMMAND_USAGE`.
+It is matched with `matches!` in `crates/fno-agent/src/client_cli/mod.rs`, deliberately, so the routable-command parity guard does not see it; that keeps it out of `--help` and `CLIENT_COMMAND_USAGE`.
 So `fno agent mail --help`, `fno agent --help`, and a grep of the Python tree all report nothing, and a "does this exist?" probe against any of them answers false.
 
 When its explicit structured or STDIN contract is the point, use the hidden binary command. Otherwise reach for `fno agent mail send --raw` for recipient-aware routing.

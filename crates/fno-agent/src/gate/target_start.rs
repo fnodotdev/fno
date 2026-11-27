@@ -2447,7 +2447,7 @@ fn run_bounded_init(
     deadline: Instant,
     node: &str,
 ) -> Result<i32, Fail> {
-    let Ok(self_exe) = std::env::current_exe() else {
+    let Ok(self_exe) = crate::client_exe::current() else {
         return Err(refuse(
             "fno do target start: could not resolve the init door (own binary)",
         ));

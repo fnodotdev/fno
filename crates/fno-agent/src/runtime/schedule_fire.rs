@@ -188,7 +188,7 @@ pub(crate) fn reboot_backstop(home: &AgentsHome) {
     if std::os::unix::net::UnixStream::connect(home.supervisor_sock()).is_ok() {
         return;
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         return;
     };
     let args = vec!["restart".to_string(), "--if-down".to_string()];

@@ -399,7 +399,7 @@ pub(crate) fn broken_streak(ends: &[EndRec]) -> usize {
 }
 
 /// `fno do pr watch status` (and later the other five commands) dispatches here
-/// from `bin/client.rs` beside `pr-park`.
+/// from `client_cli/mod.rs` beside `pr-park`.
 pub fn run(args: &[String]) -> i32 {
     let mut json_out = false;
     for arg in args {

@@ -13,8 +13,8 @@
 //!   alone, so a Python or clap path under a retired root is not counted,
 //!   and its rows below the root add the names a Rust classifier claims;
 //! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
-//! - `crates/fno-agent/src/bin/client.rs`, its doors module
-//!   `bin/doors/client_doors.rs`, and the module tables in
+//! - `crates/fno-agent/src/client_cli/mod.rs`, its doors module
+//!   `client_cli/doors/client_doors.rs`, and the module tables in
 //!   `AGENTS_DOOR_TABLES`: every argv[0] word the fno-agent binary answers,
 //!   in `run` or before it, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. The group is
@@ -48,9 +48,9 @@ pub fn cap_for(path: &str) -> usize {
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/bin/client.rs";
+const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/client_cli/mod.rs";
 /// The binary-direct doors `run` dispatches through, split out of client.rs.
-pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/bin/doors/client_doors.rs";
+pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/client_cli/doors/client_doors.rs";
 /// The module tables client.rs hands argv[0] to, in `run` or before it: each
 /// file and the function whose `match` is the table.
 pub(crate) const AGENTS_DOOR_TABLES: &[(&str, &str)] = &[

@@ -44,6 +44,10 @@
 // schemas/agents-list-row.json; the crate-level recursion_limit above covers
 // the macro expansion since `spawned_by_session` joined the contract.
 
+// The client dispatch (client_cli) spells this crate `fno_agent::`, as it
+// did when it was a binary of its own.
+extern crate self as fno_agent;
+
 pub mod backlog;
 #[cfg(test)]
 #[path = "birth_guard_tests.rs"]
@@ -51,7 +55,9 @@ mod birth_guard_tests;
 mod bounded_cmd;
 pub mod cli_args;
 pub mod client;
+pub mod client_cli;
 pub mod client_commands;
+pub mod client_exe;
 pub mod client_render;
 pub mod client_transport;
 pub mod door_argv;
@@ -1776,7 +1782,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
 /// This mirrors `schemas/events-v3.json` (single envelope) and
 /// `schemas/status-v1.json`. The hand-rolled approach is
 /// chosen to avoid pulling in `schemars`; it MUST be accompanied by the
-/// struct-drift unit test in `src/bin/client.rs` that asserts every
+/// struct-drift unit test in `src/client_cli/mod.rs` that asserts every
 /// `AgentState` field key is present in the emitted status schema properties.
 ///
 /// Returns a JSON object suitable for printing via `--emit-schema`:

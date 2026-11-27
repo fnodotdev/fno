@@ -42,6 +42,7 @@ mod rm_teardown;
 pub(crate) mod roster_death;
 mod stop_by_session;
 mod stop_refusal_detail;
+pub use stop_refusal_detail::pane_kill_command;
 pub(crate) mod store_socket_sweep;
 pub(crate) mod worktree_sweep;
 pub(crate) use self::blocking_bound::directory_bytes;

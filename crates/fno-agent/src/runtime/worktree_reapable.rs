@@ -690,7 +690,7 @@ pub(crate) fn reapable_opts_with(
 
 /// The direct client command: `fno-agent worktree-reapable <path>
 /// [--allow-unborn] [--done-node]`. Prints the receipt line; exit 0 yes,
-/// 1 no. Beside `reclaim` in `bin/client.rs`, the same daemon-free direct
+/// 1 no. Beside `reclaim` in `client_cli/mod.rs`, the same daemon-free direct
 /// dispatch.
 pub fn run_client(args: &[String]) -> i32 {
     let mut path: Option<&String> = None;

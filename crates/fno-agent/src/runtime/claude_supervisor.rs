@@ -426,7 +426,7 @@ pub enum BirthVerdict {
 }
 
 /// The exit code a refused supervisor birth reports: the spawn path's
-/// roster-fault code (`bin/client.rs`), so a caller routing on exit classes
+/// roster-fault code (`client_cli/mod.rs`), so a caller routing on exit classes
 /// sees one number.
 pub const BIRTH_REFUSED_EXIT: i32 = 13;
 

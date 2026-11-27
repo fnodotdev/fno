@@ -99,6 +99,8 @@ pub use backlog::{
 pub use backlog::{node_row, store_client};
 #[cfg(feature = "app")]
 pub use checks::{claude_fallback, doctor, doctor_cost, lint_cli, menu_caps, repo_lint};
+#[cfg(feature = "client")]
+pub use cli::agent_client;
 #[cfg(feature = "app")]
 pub use cli::{
     accounts_route, agents_client_route, agents_mcp_route, agents_menu, bootstrap, command_names,

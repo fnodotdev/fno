@@ -102,7 +102,7 @@ What a yes does NOT promise: that the turn lands.
 No probe can see whether the recipient's prompt line is idle, so a paste can still refuse a mid-turn pane or a busy socket.
 A path existing is the whole claim.
 
-It is binary-direct (a Python subprocess), NOT a routable `fno agent` command: it is dispatched via `matches!` in `bin/client.rs` like `version`/`--emit-schema`, so it stays out of the command-parity lists (`RUST_CLIENT_COMMANDS` / `CLIENT_COMMAND_USAGE`).
+It is binary-direct (a Python subprocess), NOT a routable `fno agent` command: it is dispatched via `matches!` in `client_cli/mod.rs` like `version`/`--emit-schema`, so it stays out of the command-parity lists (`RUST_CLIENT_COMMANDS` / `CLIENT_COMMAND_USAGE`).
 
 ### `--harness codex`: the codex live rung
 

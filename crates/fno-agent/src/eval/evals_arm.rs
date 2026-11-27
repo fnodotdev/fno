@@ -478,7 +478,7 @@ fn parse_summary(raw: Option<&str>) -> Summary {
 type Spawner<'a> = &'a dyn Fn(&[String]) -> Result<u32, String>;
 
 pub(crate) fn self_exe() -> String {
-    std::env::current_exe()
+    crate::client_exe::current()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "fno-agent".into())
 }

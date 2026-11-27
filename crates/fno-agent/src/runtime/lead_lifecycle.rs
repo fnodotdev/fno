@@ -11,7 +11,7 @@ use std::process::Command;
 /// Run one `fno-agent` argv; a failure answers Python `call_binary_json`'s
 /// error text: the trimmed stderr, capped at 200 characters.
 fn call_self(argv: &[String]) -> Result<std::process::Output, String> {
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"));
+    let exe = crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"));
     let out = Command::new(exe)
         .args(argv)
         .output()
@@ -409,7 +409,7 @@ pub fn run_term(args: &[String]) -> i32 {
     if !reason.trim().is_empty() {
         argv.extend(["--reason".to_string(), reason]);
     }
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"));
+    let exe = crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"));
     let out = match Command::new(exe).args(&argv).output() {
         Ok(out) => out,
         Err(e) => {

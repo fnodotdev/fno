@@ -1655,7 +1655,7 @@ pub fn teach_line() -> String {
     )
 }
 
-/// Command entrypoint reached from bin/client.rs's direct dispatch. `pub`: the
+/// Command entrypoint reached from client_cli/mod.rs's direct dispatch. `pub`: the
 /// bin target sees the lib as an external crate (the announce.rs note).
 pub fn run_chats(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {

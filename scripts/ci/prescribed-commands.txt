@@ -6,7 +6,7 @@
 # Refresh the blocks below when a surface changes:
 #   [fno] paths the repo text prescribes (the gate's FAIL lines name them;
 #        a longest resolving prefix is enough)
-#   [fno-agent] the client dispatch surface (crates/fno-agent/src/bin/client.rs)
+#   [fno-agent] the client dispatch surface (crates/fno-agent/src/client_cli/mod.rs)
 #   [slash] ls skills/ and commands/ (strip .md)
 [fno]
 agents

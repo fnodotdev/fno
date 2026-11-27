@@ -75,7 +75,7 @@ impl ScopedReads {
             .repo
             .as_deref()
             .ok_or("read repository is unresolved")?;
-        let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+        let exe = crate::client_exe::current().map_err(|error| error.to_string())?;
         let client = crate::merge_command::hop_client_bin(&exe)
             .ok_or("candidate reader binary is unavailable")?;
         let payload =

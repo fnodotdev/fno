@@ -1711,7 +1711,7 @@ fn dispatch_resume(
 }
 
 // ===========================================================================
-// Client entry point (called from bin/client.rs)
+// Client entry point (called from client_cli/mod.rs)
 // ===========================================================================
 
 /// Route a codex `ask` to the client-side `codex exec` path, bypassing the

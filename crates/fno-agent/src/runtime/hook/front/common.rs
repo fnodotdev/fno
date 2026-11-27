@@ -181,7 +181,7 @@ pub(crate) fn fno_bin() -> Option<PathBuf> {
 
 /// This binary: the legs that once started `fno-agent <command>` start it.
 pub(crate) fn fno_agent_bin() -> Option<PathBuf> {
-    std::env::current_exe().ok()
+    crate::client_exe::current().ok()
 }
 
 pub(crate) fn is_executable(path: &Path) -> bool {

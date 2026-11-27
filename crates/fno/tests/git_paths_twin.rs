@@ -1,5 +1,5 @@
 //! `fno::git_paths` and `fno_agent::git_paths` are two copies of one reader
-//! (this crate links `fno` as a dev-dependency only). Both must answer every
+//! (fno-agent never links fno). Both must answer every
 //! stdout shape git has produced, including the old-git echo of the flag.
 
 use std::path::{Path, PathBuf};

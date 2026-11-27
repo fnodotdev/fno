@@ -379,7 +379,7 @@ pub fn run(args: &[String]) -> i32 {
     // self-exec beats any front-door resolver (a smoke or CI shard ships
     // fno-agent with no `fno` sibling, and declared-only stays the test
     // rule). The fallthrough keeps a resolver for exotic exec layouts.
-    let door_exe: OsString = std::env::current_exe()
+    let door_exe: OsString = crate::client_exe::current()
         .map(|path| path.into_os_string())
         .unwrap_or_else(|_| crate::scrape::fno_bin());
     let receipt = select_read(kind, &forwarded, &door_exe, bound_s);

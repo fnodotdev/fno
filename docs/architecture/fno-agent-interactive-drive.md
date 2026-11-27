@@ -17,7 +17,7 @@ The key realization (verified against the live CLIs): this is **not** a grid cha
 
 ## Commands
 
-Both are thin front-doors that call the spawn IPC (`agent.spawn`) with `host_mode=interactive`. Added to the hand-rolled dispatch in `crates/fno-agent/src/bin/client.rs` (`build_request`) and to `AUTO_ROUTE_COMMANDS` in `cli/src/fno/agents/rust_runtime.py`. The custom agents group intercepts before Typer, so these daemon-native commands route to the Rust binary without a Python Typer command (like `spawn`/`drive`).
+Both are thin front-doors that call the spawn IPC (`agent.spawn`) with `host_mode=interactive`. Added to the hand-rolled dispatch in `crates/fno-agent/src/client_cli/mod.rs` (`build_request`) and to `AUTO_ROUTE_COMMANDS` in `cli/src/fno/agents/rust_runtime.py`. The custom agents group intercepts before Typer, so these daemon-native commands route to the Rust binary without a Python Typer command (like `spawn`/`drive`).
 
 | Command | Form | Meaning |
 |---|---|---|

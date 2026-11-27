@@ -335,7 +335,7 @@ fn read_jsonl(path: &Path) -> (Vec<(String, Value)>, usize) {
 /// mirroring Python `registry._is_identity_token` -- it replaced the
 /// `KNOWN_PROVIDERS` enumeration so one alien harness never bricks the shared
 /// read (it degrades to durable routing, posture); dispatch capability
-/// is gated separately at the spawn/ask seam (`bin/client.rs`).
+/// is gated separately at the spawn/ask seam (`client_cli/mod.rs`).
 pub(crate) fn is_identity_token(v: Option<&str>) -> bool {
     matches!(
         v,

@@ -806,7 +806,7 @@ fn load_corpus(
 /// arms collapse into the same fault line naming the detail.
 fn judge_via_rust(argv: &[String]) -> Option<Value> {
     use std::os::unix::process::CommandExt;
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         eprintln!("judge fault: fno-agent binary not found; run `fno doctor update --rust`");
         return None;
     };

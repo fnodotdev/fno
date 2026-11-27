@@ -58,7 +58,7 @@ fn parse_args(args: &[String]) -> KillCheckArgs {
     let mut git_bin = std::env::var("FNO_KILLCHECK_GIT_BIN").unwrap_or_else(|_| "git".to_string());
 
     // Tolerate a leading `kill-check` command token (loopcheck does the same with
-    // `loop-check`). `bin/client.rs` already passes `&args[1..]`, but callers /
+    // `loop-check`). `client_cli/mod.rs` already passes `&args[1..]`, but callers /
     // tests that include the command still parse correctly.
     let args = if args.first().map(|s| s.as_str()) == Some("kill-check") {
         &args[1..]
@@ -1130,7 +1130,7 @@ fn run(args: &[String]) -> RunOutput {
 
 // ── public entry points (mirror loopcheck's run_X / run_X_capture split) ──────
 
-/// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
+/// Print stdout/stderr and return the exit code. Used by `client_cli/mod.rs`.
 pub fn run_kill_check(args: &[String]) -> i32 {
     // Absorb the Python wrapper's default: with no plan argument, the plan
     // comes from the manifest's plan_path field (phase/cli.py resolved it via

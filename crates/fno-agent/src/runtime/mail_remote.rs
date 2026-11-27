@@ -952,7 +952,7 @@ fn cmd_reply(args: &[String]) -> i32 {
 /// `mail reply`. The relay's re-entry marker and hop count ride along, so a
 /// loop back into the relay stops at the hop limit.
 fn forward_reply(args: &[String]) -> i32 {
-    let exe = std::env::current_exe()
+    let exe = crate::client_exe::current()
         .map(OsString::from)
         .unwrap_or_else(|_| OsString::from("fno-agent"));
     let mut argv: Vec<OsString> = vec![exe, "mail".into(), "reply".into()];

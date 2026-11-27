@@ -1,12 +1,9 @@
 //! The served-liveness freshness rule, vendored from
 //! `crates/fno/src/sessions/served_liveness.rs`.
 //!
-//! Both crates publish separately, and the fno release carrying the module
-//! is not on crates.io yet, so a real dependency stays blocked on the
-//! publish gate. This mirror holds the rule until a synchronized 0.3.x
-//! release lets fno-agent depend on the published crate; the contract
-//! parity test below makes silent drift impossible, and its deletion is
-//! the trigger to retire this file.
+//! fno links this crate, never the other way, so the rule lives twice. The
+//! twin test in `crates/fno/tests/fno_agent_twins.rs` holds both copies to
+//! one contract.
 
 use std::time::Duration;
 
@@ -14,12 +11,12 @@ use std::time::Duration;
 /// The sweep's shared reads (the batched truth probe alone is near a
 /// second cold) are too heavy to run continuously, so the tick runs on
 /// this cadence and the freshness window tolerates one missed tick.
-pub(crate) const SERVED_LIVENESS_CADENCE: Duration = Duration::from_secs(60);
+pub const SERVED_LIVENESS_CADENCE: Duration = Duration::from_secs(60);
 
 /// A measurement older than twice the cadence no longer answers "is this
 /// row alive NOW": one missed tick still serves, two do not. Republishing
 /// an old word is what made a 24-hour-old `dead` read as current.
-pub(crate) const SERVED_LIVENESS_MAX_AGE_SECS: u64 = 2 * 60;
+pub const SERVED_LIVENESS_MAX_AGE_SECS: u64 = 2 * 60;
 
 pub(crate) fn fresh(measured_at_secs: Option<u64>, now_secs: u64) -> bool {
     measured_at_secs
@@ -31,7 +28,7 @@ pub(crate) fn fresh(measured_at_secs: Option<u64>, now_secs: u64) -> bool {
 /// and measured serves the stored word; every other case reads `unknown` -
 /// a probe that did not answer NOW is neither alive nor dead, and a null
 /// made any alive filter count a full fleet as zero.
-pub(crate) fn served_liveness_word<'a>(
+pub fn served_liveness_word<'a>(
     word: Option<&'a str>,
     measured_at_secs: Option<u64>,
     now_secs: u64,
@@ -47,7 +44,7 @@ pub(crate) fn served_liveness_word<'a>(
 /// passed (the word reads `unknown`), `never-measured` with no word or no
 /// stamp. A served field carries its basis; a null with no reason beside
 /// it answers nothing.
-pub(crate) fn served_liveness_basis(
+pub fn served_liveness_basis(
     word: Option<&str>,
     measured_at_secs: Option<u64>,
     now_secs: u64,
@@ -56,56 +53,5 @@ pub(crate) fn served_liveness_basis(
         (Some(_), Some(_)) if fresh(measured_at_secs, now_secs) => "fresh",
         (Some(_), Some(_)) => "stale",
         _ => "never-measured",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const NOW: u64 = 1_800_000_000;
-
-    #[test]
-    fn the_vendored_rule_matches_the_fno_crate_module_by_contract() {
-        // The parity guard that lets this mirror exist: the constants and
-        // the observable rule must match the fno crate's module exactly.
-        // Dev-only link (see Cargo.toml); when the real dependency lands,
-        // delete this file and read the rule from fno directly.
-        assert_eq!(
-            SERVED_LIVENESS_CADENCE,
-            fno::served_liveness::SERVED_LIVENESS_CADENCE
-        );
-        assert_eq!(
-            SERVED_LIVENESS_MAX_AGE_SECS,
-            fno::served_liveness::SERVED_LIVENESS_MAX_AGE_SECS
-        );
-        let word = Some("alive");
-        for measured in [Some(NOW - 90), Some(NOW - 121), None] {
-            assert_eq!(
-                served_liveness_word(word, measured, NOW),
-                fno::served_liveness::served_liveness_word(word, measured, NOW),
-                "word gate disagrees at {measured:?}"
-            );
-            assert_eq!(
-                served_liveness_basis(word, measured, NOW),
-                fno::served_liveness::served_liveness_basis(word, measured, NOW),
-                "basis disagrees at {measured:?}"
-            );
-        }
-        // No measured input, however broken, reads null or
-        // the stale verdict - both mirrors answer `unknown`.
-        for (word, measured) in [
-            (Some("alive"), Some(NOW - 121)),
-            (Some("dead"), Some(NOW - 121)),
-            (Some("alive"), None),
-            (None, Some(NOW - 10)),
-            (None, None),
-        ] {
-            assert_eq!(
-                served_liveness_word(word, measured, NOW),
-                "unknown",
-                "word={word:?} measured={measured:?}"
-            );
-        }
     }
 }

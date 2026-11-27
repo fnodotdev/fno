@@ -606,7 +606,7 @@ pub fn is_file_mode_0600(path: &Path) -> bool {
 /// returns itself (so a `--fresh`-style redirect is a no-op there). The
 /// `cli/src/fno/paths.py` leg spells it too, so the two
 /// layers cannot drift (; review HIGH). Shared by the client `--fresh`
-/// dispatch (`bin/client.rs`).
+/// dispatch (`client_cli/mod.rs`).
 ///
 /// A THIRD implementation of this question lives in `fno::digest_overlay`, which
 /// crate `fno` needs because it does not depend on `fno-agent`. It parses the

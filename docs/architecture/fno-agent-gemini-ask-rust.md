@@ -41,7 +41,7 @@ codex now delegates to this module; its 58-test regression suite proves the extr
 
 `cli/src/fno/agents/rust_runtime.py` now has an empty `PYTHON_AGENT_COMMANDS`, so `make_context` routes `ask` through the same `command in AUTO_ROUTE_COMMANDS` branch as every other command. The provider-conditional special case (`RUST_CLIENT_ASK_PROVIDERS`, `_resolve_ask_provider`, the `elif command == "ask"` branch, the `_ASK_VALUE_FLAGS` scanner, the `FNO_AGENT_DEBUG_ROUTING` breadcrumb) is deleted — the Rust client now owns the full create/resume decision for all three providers.
 
-The one case that previously stayed on Python — an `ask` with no resolvable provider (new agent, no `--provider`) — is now surfaced by the Rust client itself in `bin/client.rs::unresolvable_ask_exit`: it reproduces Python's `select_provider` exit-2 error byte-for-byte (`provider is required for new agent <repr(name)>; pass --provider one of: claude, codex, gemini`, or the `unknown provider` variant) rather than falling through to the daemon PTY path (Locked Decision 3). `py_repr` (from `claude_ask.rs`) reproduces Python's `{name!r}` quoting.
+The one case that previously stayed on Python — an `ask` with no resolvable provider (new agent, no `--provider`) — is now surfaced by the Rust client itself in `client_cli/mod.rs::unresolvable_ask_exit`: it reproduces Python's `select_provider` exit-2 error byte-for-byte (`provider is required for new agent <repr(name)>; pass --provider one of: claude, codex, gemini`, or the `unknown provider` variant) rather than falling through to the daemon PTY path (Locked Decision 3). `py_repr` (from `claude_ask.rs`) reproduces Python's `{name!r}` quoting.
 
 ## Test surfaces
 

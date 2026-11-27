@@ -20,7 +20,6 @@ use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::ops::ControlFlow;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use fno::{bootstrap, cli_args, mux_cli, proto};
@@ -559,33 +558,16 @@ fn exit_mux(code: i32) -> ! {
     fno::cli_usage::exit(code)
 }
 
-/// The carried tail runs through the native owner in place: inherited stdio
-/// and the owner's exit status stay intact without another process slot. A
-/// missing binary is a refusal, never a silent empty read.
+/// The carried tail runs through the client dispatch in this process:
+/// inherited stdio and the owner's exit status stay intact without another
+/// process slot.
 fn fno_agent_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
-    fno_agent_exec_bin(label, action, rest, &fno::digest_overlay::fno_agent_bin())
-}
-
-/// [`fno_agent_exec`] against a caller-resolved binary: the status claim
-/// resolves through the Python auto semantics (a stale `$FNO_AGENT_BIN`
-/// falls through) instead of the env-honoring paired lookup.
-fn fno_agent_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
-    let mut cmd = std::process::Command::new(bin);
-    cmd.args(action);
-    cmd.args(rest);
-    cmd.envs(fno::cli_usage::exec_env());
-    // The agent's in-process mux client reads the socket dir from this one
-    // variable; a user shell exports none, so the front door's resolution
-    // rides along.
-    if std::env::var_os("FNO_MUX_DIR")
-        .filter(|v| !v.is_empty())
-        .is_none()
-    {
-        cmd.env("FNO_MUX_DIR", proto::mux_dir());
-    }
-    let error = cmd.exec();
-    eprintln!("{label}: could not run fno-agent: {error}");
-    1
+    let argv = action
+        .iter()
+        .map(OsString::from)
+        .chain(rest.iter().cloned())
+        .collect();
+    fno::agent_client::run(label, argv)
 }
 
 /// Parse `serve` flags into [`fno::web::WebArgs`]. One of `--web`, `--stop`,
@@ -711,10 +693,10 @@ fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
     match fno::mux_link::serve(&args) {
         fno::mux_link::Door::Exit(code) => code,
         fno::mux_link::Door::Attach(name) => {
-            let bin = fno::digest_overlay::fno_agent_bin();
-            let error = fno::mux_link::attach_command(&bin, &name).exec();
-            eprintln!("{LABEL}: could not run fno-agent: {error}");
-            1
+            let attach = fno::mux_link::inline_attach(&name);
+            std::env::set_var(attach.set.0, attach.set.1);
+            std::env::remove_var(attach.unset);
+            fno_agent_exec(LABEL, &attach.argv, &[])
         }
     }
 }
@@ -2002,6 +1984,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
 }
 
 fn main() {
+    // Started under the client's name (the `fno-agent` link, or a client
+    // re-exec): the argv is a client argv, verbatim.
+    if env::args_os().next().is_some_and(|arg0| {
+        Path::new(&arg0).file_name()
+            == Some(std::ffi::OsStr::new(fno_agent::client_exe::CLIENT_ARG0))
+    }) {
+        fno::agent_client::run_here("fno-agent", env::args_os().skip(1).collect());
+    }
     fno::legacy_env::adopt();
     fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
@@ -2590,24 +2580,9 @@ fn run_agents_role(role: Role) -> ControlFlow<(), Role> {
                 &rest,
             ))
         }
-        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agent_bin_auto() {
-            Some(bin) => fno::cli_usage::exit(fno_agent_exec_bin(
-                "fno agent status",
-                &["status"],
-                &rest,
-                &bin,
-            )),
-            None => {
-                eprintln!(
-                    "fno agent status: requires the 'fno-agent' binary, which was not found \
-                     (a runnable $FNO_AGENT_BIN, beside the front door, the dev target, PATH -- \
-                     the default lookup deliberately skips a stale or non-executable override). \
-                     Get it via `pip install fno` (bundled), `cargo install fno-agent`, or \
-                     `cargo build --release -p fno-agent` plus `export FNO_AGENT_BIN=<path>`."
-                );
-                fno::cli_usage::exit(127);
-            }
-        },
+        Role::AgentsStatus(rest) => {
+            fno::cli_usage::exit(fno_agent_exec("fno agent status", &["status"], &rest))
+        }
         other => ControlFlow::Continue(other),
     }
 }
@@ -2951,13 +2926,11 @@ mod tests {
     fn native_fno_agent_handoff_replaces_front_pid() {
         if std::env::var_os("test_front_handoff_pid_path").is_some() {
             let script = "printf '%s' \"$$\" > \"$test_front_handoff_pid_path\" && exit 19";
-            let rest = [OsString::from(script)];
-            fno::cli_usage::exit(fno_agent_exec_bin(
+            fno::agent_client::exec(
                 "test native handoff",
-                &["-c"],
-                &rest,
                 Path::new("/bin/sh"),
-            ));
+                vec![OsString::from("-c"), OsString::from(script)],
+            );
         }
 
         let pid_path =

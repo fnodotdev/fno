@@ -1,4 +1,4 @@
-//! The binary-direct doors of `bin/client.rs`'s `run`, split out by the
+//! The binary-direct doors of `client_cli/mod.rs`'s `run`, split out by the
 //! question each group answers: which daemon-free command answers this argv.
 //! A door returns `Some(exit)` when it owns the command and `None` to let the
 //! next group look. The groups run in the order `run` once held them inline,

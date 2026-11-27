@@ -1,23 +1,11 @@
 //! pi's session identity across the two crates that build its attach argv
 //! (x-c198).
 //!
-//! `fno` never links `fno-agent` (it shells the binary at runtime), so the
-//! argv that opens pi's own TUI exists twice. This test links both and pins
-//! them byte-for-byte, the way `codex_shared_daemon_attach.rs` already does for
-//! codex, so a change to either fails here rather than drifting into a viewport
-//! that opens a different session from the one `fno agent attach` opens.
+//! The argv that opens pi's own TUI exists twice, here and in the fno crate's
+//! viewport. `crates/fno/tests/fno_agent_twins.rs` pins the two byte for byte.
 
 use fno_agent::pi::{duplicate_resume_refusal, encode_cwd, pi_attach_argv, SessionLookup};
 use std::path::{Path, PathBuf};
-
-#[test]
-fn the_pi_attach_argv_is_identical_in_both_crates() {
-    let session_id = "fno-tui-0001";
-    assert_eq!(
-        pi_attach_argv(session_id),
-        fno::agents_view::pi_attach_argv(session_id)
-    );
-}
 
 /// The argv is the plain TUI, never `--mode rpc`: the two lanes are mutually
 /// exclusive per PROCESS, and this one is the watching lane.

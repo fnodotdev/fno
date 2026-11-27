@@ -1,9 +1,7 @@
-//! The sibling exec: the front door hands a claimed argv to the `fno-agent`
-//! binary installed beside it.
-//!
-//! The binary install puts the four binaries in one directory, so a missing
-//! sibling is a broken install. It refuses with the install remedy and never
-//! provisions anything: no Python CLI is left to provision.
+//! The client hand-off: the front door hands a claimed argv to the client
+//! dispatch, in process when this build links it, else to the `fno-agent`
+//! binary installed beside it. A missing sibling is a broken install. It
+//! refuses with the install remedy and never provisions anything.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -17,6 +15,7 @@ fn bootstrap_command(program: impl AsRef<OsStr>) -> Command {
 }
 
 /// The remedy for a missing or broken sibling binary.
+#[cfg(not(feature = "client"))]
 const NO_SIBLING_REMEDY: &str =
     "run fno update, or set FNO_AGENT_BIN. A cargo install completes with: cargo install fno-agent";
 
@@ -27,10 +26,19 @@ pub fn forward_backlog(args: &[OsString]) -> ! {
     forward_agents(args, "fno backlog")
 }
 
-/// Forward argv to the sibling Rust binary, printing `label` on the exec
-/// refusal. One exec, stdio inherited, signals and exit codes pass through
-/// unchanged. A missing binary refuses with the install remedy.
+/// Forward argv to the client dispatch, in process when this build links it.
+/// Otherwise one exec of the sibling binary, stdio inherited, signals and exit
+/// codes passed through unchanged; a missing binary refuses with the install
+/// remedy.
 pub fn forward_agents(args: &[OsString], label: &str) -> ! {
+    #[cfg(feature = "client")]
+    crate::agent_client::run(label, args.to_vec());
+    #[cfg(not(feature = "client"))]
+    exec_sibling(args, label)
+}
+
+#[cfg(not(feature = "client"))]
+fn exec_sibling(args: &[OsString], label: &str) -> ! {
     let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = bootstrap_command(&bin);
     command.args(args);

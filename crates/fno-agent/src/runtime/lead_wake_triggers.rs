@@ -940,7 +940,7 @@ fn dispatch_walk_detached(
 /// The walk binary: this daemon's own executable, so a drift-retired
 /// successor never launches from a stale path.
 fn walk_binary() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"))
+    crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"))
 }
 
 /// The wake-mode walk's argv: the address and the diff travel on the

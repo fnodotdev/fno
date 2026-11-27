@@ -54,7 +54,7 @@ const TURN_TIMEOUT: Duration = Duration::from_secs(600);
 const COMPACTION_TIMEOUT: Duration = TURN_TIMEOUT;
 /// How long the daemon's `ask` waits on a submitter's reply before answering
 /// `in_flight`. Comfortably under the client's 120s `RESPONSE_DEADLINE`
-/// (crates/fno-agent/src/bin/client.rs) so a bounded receipt, not a silent
+/// (crates/fno-agent/src/client_cli/mod.rs) so a bounded receipt, not a silent
 /// transport failure, is what the caller sees. Env-overridable so tests can
 /// exercise the expiry path without sleeping 90s.
 pub fn ask_wait() -> Duration {

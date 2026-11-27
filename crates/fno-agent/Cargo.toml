@@ -3,7 +3,7 @@ name = "fno-agent"
 # Versions on its own line: bump by hand when this crate changes. A release of
 # crates/fno that leaves this crate alone ships it at the same number.
 # sync-version.sh never stamps it.
-version = "0.0.17"
+version = "0.0.18"
 edition = "2021"
 # MSRV: std's File::lock/lock_shared/try_lock/unlock stabilized in Rust 1.89
 #, which let this crate drop the fs2 dependency for advisory
@@ -180,11 +180,3 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 # default parser can land one ULP off (0.9696969696969697 reads back as
 # ...696), so a parity compare needs the exact parse.
 serde_json = { version = "1", features = ["float_roundtrip"] }
-# Tests feed a refusal's printed `fno mux pane kill ...` command to the real
-# parser rather than a copy of its grammar, so the two cannot drift apart.
-# Dev-only: fno never links fno-agent, it shells the binary at runtime, and
-# the production side travels the other way as the vendored
-# review_invocation_owner.rs copy the parity test pins byte-identical. A
-# real dependency stays blocked on the publish gate until the two crates
-# release a synchronized version whose registry copy carries the pub module.
-fno = { path = "../fno" }

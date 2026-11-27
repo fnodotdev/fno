@@ -45,7 +45,7 @@ esac
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
-CONST_PATH="crates/fno-agent/src/bin/client.rs"
+CONST_PATH="crates/fno-agent/src/client_cli/mod.rs"
 REMOTE="${PR_REMOTE:-origin}"
 BASE_REF="${PR_BASE_REF:-main}"
 

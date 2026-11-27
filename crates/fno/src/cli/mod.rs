@@ -2,6 +2,8 @@
 
 #[cfg(feature = "app")]
 pub mod accounts_route;
+#[cfg(feature = "client")]
+pub mod agent_client;
 #[cfg(feature = "app")]
 pub mod agents_client_route;
 #[cfg(feature = "app")]

@@ -128,7 +128,7 @@ fno agent session rm worker-claude --force
 
 ## Phase 6 Wave 5 — Rust daemon lifecycle commands
 
-The sections above describe the original Python (US4) lifecycle for one-shot agents. Phase 6 Wave 5 implements the same commands in the Rust supervisor daemon (`crates/fno-agent/src/runtime/daemon.rs`), where agents are persistent PTY-backed sessions owned by per-agent worker processes (Outcome B). The commands are JSON-RPC handlers on `supervisor.sock`; the `fno-agent` client maps the daemon's structured `ErrorCode` to process exit codes (`bin/client.rs::exit_code_for`). The driver-awareness is new: a command's behavior depends on whether an operator is currently driving the agent (an interactive/step/paranoid `drive` session, tracked in the daemon's in-memory `DriveTable`).
+The sections above describe the original Python (US4) lifecycle for one-shot agents. Phase 6 Wave 5 implements the same commands in the Rust supervisor daemon (`crates/fno-agent/src/runtime/daemon.rs`), where agents are persistent PTY-backed sessions owned by per-agent worker processes (Outcome B). The commands are JSON-RPC handlers on `supervisor.sock`; the `fno-agent` client maps the daemon's structured `ErrorCode` to process exit codes (`client_cli/mod.rs::exit_code_for`). The driver-awareness is new: a command's behavior depends on whether an operator is currently driving the agent (an interactive/step/paranoid `drive` session, tracked in the daemon's in-memory `DriveTable`).
 
 ### Exit-code conventions (client-side)
 

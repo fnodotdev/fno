@@ -211,8 +211,8 @@ pub(super) fn resume_target_from_argv(argv: &[String]) -> Option<String> {
 /// `fno do plan path`, folds in the state dirs, and carries the invariant
 /// that omitting the state root leaves a resumed worker unable to write its
 /// claim lockfile. Copying it is a fourth divergent implementation of subtle
-/// logic. Depending on fno-agent inverts a boundary its own Cargo.toml
-/// records: fno never links it, it shells the binary at runtime. The open
+/// logic. The mux server builds without the agent runtime (the app build
+/// has no `client` feature), so it shells the client at runtime. The open
 /// candidate is TAKEN as of / the tokens come from the declared
 /// `interactive_resume` form via `fno-agent resume-argv` (see
 /// [`declared_resume_form`]), and this fn only fills the session id.

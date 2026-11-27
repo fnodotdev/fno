@@ -82,7 +82,7 @@ pub fn classify_followup(candidate: &Candidate) -> &'static str {
 /// `spawned` decision counts as a dispatch: exit 0 also covers `noop` and
 /// `skipped`, which bump nothing.
 fn dispatch_think(node_id: &str, cwd: Option<&str>) -> bool {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         return false;
     };
     let mut cmd = std::process::Command::new(exe);

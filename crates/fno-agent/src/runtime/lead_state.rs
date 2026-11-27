@@ -17,7 +17,7 @@
 //! differently on "absent" versus "cannot read", and flattening the two is the
 //! shared root this reader exists to end.
 //!
-//! CLI surface (direct dispatch in `bin/client.rs`, not routable `fno agent`
+//! CLI surface (direct dispatch in `client_cli/mod.rs`, not routable `fno agent`
 //! commands, same reasoning as `kill-check`):
 //!   `fno-agent lead-state [--scope S | --session ID] [--root PATH]`
 //!     one JSON LeadState on stdout, exit 0; unknowns are encoded in the JSON.

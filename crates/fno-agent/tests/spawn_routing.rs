@@ -550,7 +550,7 @@ fn spawn_gemini_once_happy_path() {
 
 // ---------------------------------------------------------------------------
 // Client binary integration tests: verify client.rs routing wiring.
-// These exercise the thin shell in bin/client.rs that delegates to the lib.
+// These exercise the thin shell in client_cli/mod.rs that delegates to the lib.
 // ---------------------------------------------------------------------------
 
 /// Locate the fno-agent client binary from the build output dir.
