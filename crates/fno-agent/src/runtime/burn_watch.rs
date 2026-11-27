@@ -1139,6 +1139,15 @@ fn wake(sid: &str, node: &str, busy: bool, reason: &str, runner: Runner) -> (boo
     wake_with_text(sid, busy, &wake_text(node, reason), SENDER, runner)
 }
 
+/// Did the wake reach the worker by a lane that guarantees the read? A
+/// durable-queued mail lands at the worker's next turn, so it counts:
+/// recording only live-lane deliveries left a busy lead's warning set
+/// unrecorded, and every later pass re-mailed it (the 2026-11-27 resend
+/// storm). watch_expiry's `via != "durable"` read shares this rule.
+pub(crate) fn wake_reached(sent: bool, lane: &str) -> bool {
+    sent || lane == "durable"
+}
+
 pub(crate) fn wake_with_text(
     sid: &str,
     busy: bool,

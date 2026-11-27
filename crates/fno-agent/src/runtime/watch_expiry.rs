@@ -617,7 +617,7 @@ pub(crate) fn run_pass_with(
             "burn-watch",
             &mut runner,
         );
-        if !delivered && via != "durable" {
+        if !crate::burn_watch::wake_reached(delivered, via) {
             delivery_failures += 1;
             first_error.get_or_insert_with(|| {
                 format!(
