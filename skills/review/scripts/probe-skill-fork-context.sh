@@ -87,67 +87,33 @@ else
   exit 2
 fi
 
-# Seed arm + inheritance arm. Python does the per-line work: malformed
-# rows are skipped (a crash-truncated line must not abort the scan), and
-# timestamps compare as datetimes, not as strings.
-counts="$(python3 - "$builder" "$fork" "$canary" <<'PYEOF' || true
-import json
-import sys
-from datetime import datetime
-
-def parse_ts(value):
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-builder_path, fork_path, canary = sys.argv[1], sys.argv[2], sys.argv[3]
-
-birth = None
-with open(fork_path, encoding="utf-8", errors="replace") as f:
-    for line in f:
-        try:
-            ts = parse_ts(json.loads(line).get("timestamp"))
-        except ValueError:
-            continue
-        if ts is not None:
-            birth = ts
-            break
-if birth is None:
-    print("VOID: no parseable timestamp in the fork transcript; cannot bound the seed window")
-    sys.exit(3)
-
-pre = 0
-with open(builder_path, encoding="utf-8", errors="replace") as f:
-    for line in f:
-        if canary not in line:
-            continue
-        try:
-            ts = parse_ts(json.loads(line).get("timestamp"))
-        except ValueError:
-            continue
-        if ts is not None and ts < birth:
-            pre += 1
-
-inherited = 0
-with open(fork_path, encoding="utf-8", errors="replace") as f:
-    for line in f:
-        if '"tool_result"' in line or canary not in line:
-            continue
-        inherited += 1
-
-print(pre)
-print(inherited)
-PYEOF
-)"
-if grep -q "^VOID:" <<<"$counts"; then
-  echo "$counts"
+# Seed arm + inheritance arm. jq does the per-line work: a row that does
+# not parse is skipped (a crash-truncated line must not abort the scan),
+# and timestamps compare as epoch seconds. jq's fromdateiso8601 has no
+# fractional-second form, so each stamp truncates to the whole second;
+# the canary is seeded well before the fork, so the coarser grain cannot
+# reorder the two sides. The user path starts no Python, so this stays jq.
+birth="$(jq -Rr '
+  fromjson? | select(type == "object")
+  | try (.timestamp | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch empty
+' "$fork" | sed -n '1p')"
+if [[ -z "$birth" ]]; then
+  echo "VOID: no parseable timestamp in the fork transcript; cannot bound the seed window"
   exit 2
 fi
-pre="$(sed -n '1p' <<<"$counts")"
-inherited="$(sed -n '2p' <<<"$counts")"
+
+pre="$(jq -Rr --argjson birth "$birth" --arg canary "$canary" '
+  select(contains($canary))
+  | fromjson? | select(type == "object")
+  | try (.timestamp | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch empty
+  | select(. < $birth)
+  | 1
+' "$builder" | awk 'END { print NR + 0 }')"
+inherited="$(jq -Rr --arg canary "$canary" '
+  select(contains($canary))
+  | select((contains("\"tool_result\"") | not))
+  | 1
+' "$fork" | awk 'END { print NR + 0 }')"
 
 echo "pre-fork builder canary rows: $pre"
 echo "fork canary rows outside tool results: $inherited"
