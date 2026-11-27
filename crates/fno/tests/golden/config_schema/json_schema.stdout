@@ -3104,6 +3104,23 @@
           "title": "Asserts",
           "type": "string"
         },
+        "context": {
+          "anyOf": [
+            {
+              "enum": [
+                "fresh",
+                "shared"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How the reviewer runs, declared by the entry author. fresh: a dispatch with no builder context (a subprocess, a fork, another model). shared: it runs inside the invoking session. /target passes the declared context to emit-attestation.sh as reviewer_context (positional 3) at the emit. A descriptor without the field leaves the stamp to how the dispatch actually ran. A typed stamp is a claim, not producer evidence.",
+          "title": "Context"
+        },
         "invocation": {
           "title": "Invocation",
           "type": "string"
