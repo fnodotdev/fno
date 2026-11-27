@@ -110,7 +110,7 @@ pub(crate) fn read_drain_bus(bus_dir: &Path, form: &str) -> Vec<Value> {
     let rotated_out = cursor.as_deref().is_some_and(|id| {
         !msgs
             .iter()
-            .any(|m| m.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .any(|m| m.get("id").and_then(Value::as_str) == Some(id))
     });
     if cursor.is_none() || rotated_out {
         fno_mail::log::read_bus_segments(&bus_dir.join("messages.jsonl"))
