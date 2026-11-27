@@ -765,7 +765,7 @@ mod tests {
         seed_claim(&root, "x-expired", "target-session:s-claim", true);
         {
             let dir = crate::claims_root::claims_dir("node:x-expired", Some(&root)).unwrap();
-            let mut conn = crate::claim_store::open_directory(&dir).unwrap();
+            let conn = crate::claim_store::open_directory(&dir).unwrap();
             conn.execute(
                 "UPDATE claims SET expires_at = acquired_at - 1000 WHERE key = 'node:x-expired'",
                 [],
