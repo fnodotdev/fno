@@ -430,33 +430,43 @@ mod tests {
         a_live_cursor_target_keeps_the_segments_off();
     }
 
-    /// A bus row the live log no longer holds still drains at the prompt
-    /// boundary: the drain was down across a rotation, and the retained
-    /// segments carry the unread row. Runs its own with_hold_env (never
-    /// call from inside one: the test env lock is not reentrant).
+    /// A row the cursor never judged that landed in a retained segment
+    /// still drains at the prompt boundary: the drain was down across a
+    /// rotation, and the segments carry the rows after the cursor target.
+    /// Rows up to the cursor stay judged. Runs its own with_hold_env
+    /// (never call from inside one: the test env lock is not reentrant).
     fn a_rotated_row_drains_at_the_next_boundary() {
         let session = "d9daf3e8-1111-2222-3333-444455556666";
-        let handle = crate::identity::canonical_handle(session);
         crate::mail_hold::tests::with_hold_env(|_home| {
             let (_dir, bus) = bus_fixture("rotated-drain");
-            // The older segment holds the stuck row; the live log holds a
-            // newer row and the row the cursor names.
-            let stuck = format!(
-                "{{\"id\":\"msg-stuck\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"from the rotated segment\",\
+            // The older segment holds the judged rows and the stranded
+            // unread row; the live log holds a newer row. The cursor names
+            // the segment's middle row.
+            let judged = format!(
+                "{{\"id\":\"msg-judged\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"predates the cursor\",\
                 \"ts\":\"2026-11-25T04:55:54Z\"}}\n"
             );
             let cursor_row = format!(
                 "{{\"id\":\"msg-cursor\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"cursor target\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"cursor target\",\
                 \"ts\":\"2026-11-25T05:00:00Z\"}}\n"
+            );
+            let stranded = format!(
+                "{{\"id\":\"msg-stranded\",\"thread\":\"t\",\"from\":\"peer\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the rotated segment\",\
+                \"ts\":\"2026-11-25T06:00:00Z\"}}\n"
             );
             let fresh = format!(
                 "{{\"id\":\"msg-fresh\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"from the live log\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the live log\",\
                 \"ts\":\"2026-11-26T12:00:00Z\"}}\n"
             );
-            std::fs::write(bus.join("messages.jsonl.1"), format!("{stuck}{cursor_row}")).unwrap();
+            std::fs::write(
+                bus.join("messages.jsonl.1"),
+                format!("{judged}{cursor_row}{stranded}"),
+            )
+            .unwrap();
             std::fs::write(bus.join("messages.jsonl"), &fresh).unwrap();
             let form = crate::spawn_context::session_identity_key(session);
             let cursors = bus.join("cursors");
@@ -471,9 +481,13 @@ mod tests {
             let out = String::from_utf8(out).unwrap();
             assert!(
                 out.contains("from the rotated segment"),
-                "rotated row not drained: {out}"
+                "stranded row not drained: {out}"
             );
             assert!(out.contains("from the live log"), "live row missing: {out}");
+            assert!(
+                !out.contains("predates the cursor"),
+                "judged row relitigated: {out}"
+            );
             let (cursor, _) =
                 crate::bus_read::read_cursor_file(&cursors.join(format!("{form}.json")));
             assert_eq!(
@@ -489,22 +503,21 @@ mod tests {
     /// second scan would relitigate it.
     fn a_live_cursor_target_keeps_the_segments_off() {
         let session = "d9daf3e8-1111-2222-3333-444455556666";
-        let handle = crate::identity::canonical_handle(session);
         crate::mail_hold::tests::with_hold_env(|_home| {
             let (_dir, bus) = bus_fixture("live-cursor");
             let judged = format!(
                 "{{\"id\":\"msg-judged\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"already judged\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"already judged\",\
                 \"ts\":\"2026-11-24T00:00:00Z\"}}\n"
             );
             let cursor_row = format!(
                 "{{\"id\":\"msg-cursor\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"cursor target\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"cursor target\",\
                 \"ts\":\"2026-11-25T05:00:00Z\"}}\n"
             );
             let fresh = format!(
                 "{{\"id\":\"msg-fresh\",\"thread\":\"t\",\"from\":\"peer\",\
-                \"to\":\"{handle}\",\"kind\":\"send\",\"body\":\"from the live log\",\
+                \"to\":\"{session}\",\"kind\":\"send\",\"body\":\"from the live log\",\
                 \"ts\":\"2026-11-26T12:00:00Z\"}}\n"
             );
             std::fs::write(bus.join("messages.jsonl.1"), &judged).unwrap();
