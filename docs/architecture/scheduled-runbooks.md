@@ -59,7 +59,7 @@ The door refuses these steps:
 
 ## The irreversible pause
 
-A live run stops at an irreversible step. The agent asks the user with `fno inbox outstanding ask`, and the question names the run id and the step id. When the user answers, the agent runs the step again with `--yes <question id>`. The door accepts the yes only when three facts hold:
+A live run stops at an irreversible step. The agent asks the user with `fno inbox outstanding ask`, and the question names the run id and the step id. When the user answers, the agent runs the step again with `--yes <question id>`. The door accepts the yes on three facts:
 
 - the question names this run and this step
 - the user answered it on their own answer path, not a delegate or a sink close
