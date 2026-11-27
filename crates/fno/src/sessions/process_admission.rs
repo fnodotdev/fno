@@ -14,7 +14,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "client")))]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 

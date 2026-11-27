@@ -11273,7 +11273,7 @@ crates/fno-agent/tests/generic_completion.rs	clippy::indexing_slicing	response["
 crates/fno-agent/tests/generic_completion.rs	clippy::indexing_slicing	response["status"] = json!("inactive");
 crates/fno-agent/tests/generic_completion.rs	clippy::indexing_slicing	response["verdict"] = Value::Null;
 crates/fno-agent/tests/generic_completion.rs	clippy::indexing_slicing	response["verdict"]["required_requirements"] = json!([
-crates/fno-agent/tests/git_paths_twin.rs	clippy::indexing_slicing	let out = if args[0] == "--path-format=absolute" {
+crates/fno/tests/git_paths_twin.rs	clippy::indexing_slicing	let out = if args[0] == "--path-format=absolute" {
 crates/fno-agent/tests/graph_keeper_socket.rs	clippy::indexing_slicing	assert_eq!(id["graph"], graph.display().to_string());
 crates/fno-agent/tests/graph_keeper_socket.rs	clippy::indexing_slicing	assert_eq!(id["v"], 1, "protocol version rides Identify");
 crates/fno-agent/tests/graph_keeper_socket.rs	clippy::indexing_slicing	assert_eq!(reply["result"], "shutdown");
