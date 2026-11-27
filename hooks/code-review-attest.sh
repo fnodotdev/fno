@@ -142,11 +142,10 @@ case "$event" in
     #    is the part a plain spawned task cannot carry, so it gates the match.
     #    Nothing the review prints can dodge it, and no unrelated subagent
     #    can forge it. The `fresh` stamp this marker earns is measured, not
-    #    assumed: the 2026-11-26 canary probe seeded a string in the builder
-    #    transcript, Skill-invoked code-review, and read the fork transcript
-    #    (zero hits; first row parentUuid:null with only the compiled skill
-    #    prompt), so the Skill fork starts empty and the stamp stays sound.
-    #    Re-run the probe if the harness's Skill-fork mechanics change.
+    #    assumed: the canary probe at
+    #    skills/review/scripts/probe-skill-fork-context.sh (first run
+    #    2026-11-26) found the Skill fork starts empty. Re-run it if the
+    #    harness's Skill-fork mechanics change.
     #
     #    Fail direction is unchanged: a missing or renamed sidecar leaves this
     #    signal at 0 and the gate holds, rather than attesting on a guess.
