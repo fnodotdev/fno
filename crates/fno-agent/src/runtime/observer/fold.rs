@@ -2055,7 +2055,7 @@ mod tests {
     #[test]
     fn skill_fixture_folds_one_row_per_call() {
         let lines = [
-            call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-139d"}"#),
+            call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-aaaa"}"#),
             call_line("2026-11-24T04:13:00.000Z", "call_b", "Skill", r#"{"skill":"fno:review"}"#),
             r#"{"message":{"content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
             r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#.to_string(),
@@ -2071,7 +2071,7 @@ mod tests {
                 kind: InvocationKind::Skill,
                 name: "fno:blueprint".to_string(),
                 session: SESSION.to_string(),
-                node: Some("x-139d".to_string()),
+                node: Some("x-aaaa".to_string()),
                 start: Some("2026-11-24T04:12:48.545Z".to_string()),
                 end: Some("2026-11-24T04:12:52.568Z".to_string()),
                 outcome: Some(Outcome::Ok),
@@ -2094,7 +2094,7 @@ mod tests {
         let rows = fold(&[
             user_line(
                 "2026-11-24T04:51:25.957Z",
-                r#"<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-139d</command-args>"#,
+                r#"<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-aaaa</command-args>"#,
             ),
             call_line(
                 "2026-11-24T04:51:36.409Z",
@@ -2118,7 +2118,7 @@ mod tests {
         let command = &rows[0];
         assert_eq!(command.kind, InvocationKind::Command);
         assert_eq!(command.name, "fno:target");
-        assert_eq!(command.node.as_deref(), Some("x-139d"));
+        assert_eq!(command.node.as_deref(), Some("x-aaaa"));
         assert_eq!(command.start.as_deref(), Some("2026-11-24T04:51:25.957Z"));
         assert_eq!(command.end.as_deref(), Some("2026-11-24T05:20:23.760Z"));
         assert_eq!(command.outcome, None);
@@ -2134,7 +2134,7 @@ mod tests {
                 "2026-11-23T15:57:09.570Z",
                 "call_bg",
                 "Agent",
-                r#"{"description":"Measure x-35a8 premises","prompt":"Read the worktree","subagent_type":"Explore"}"#,
+                r#"{"description":"Measure x-bbbb premises","prompt":"Read the worktree","subagent_type":"Explore"}"#,
             ),
             call_line(
                 "2026-11-23T15:57:20.000Z",
@@ -2153,7 +2153,7 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].kind, InvocationKind::Agent);
         assert_eq!(rows[0].name, "Explore");
-        assert_eq!(rows[0].node.as_deref(), Some("x-35a8"));
+        assert_eq!(rows[0].node.as_deref(), Some("x-bbbb"));
         assert_eq!(rows[0].end, None);
         assert_eq!(rows[0].outcome, Some(Outcome::Launched));
         assert_eq!(rows[1].name, "general-purpose");
@@ -2171,28 +2171,28 @@ mod tests {
             goal_line(
                 "2026-06-29T06:52:59.630Z",
                 r#""met":false,"sentinel":true,"#,
-                "x-a747",
+                "x-cccc",
             ),
             user_line(
                 "2026-06-29T06:52:59.630Z",
-                r#"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x-a747</command-args>"#,
+                r#"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x-cccc</command-args>"#,
             ),
             goal_line(
                 "2026-06-29T07:08:34.378Z",
                 r#""met":false,"reason":"PR #85 is open,"#,
-                "x-a747",
+                "x-cccc",
             ),
             goal_line(
                 "2026-06-29T07:56:13.785Z",
                 r#""met":true,"iterations":69,"durationMs":3794155,"tokens":117513,"#,
-                "x-a747",
+                "x-cccc",
             ),
         ]);
         assert_eq!(rows.len(), 2);
         let goal = &rows[0];
         assert_eq!(goal.kind, InvocationKind::Goal);
-        assert_eq!(goal.name, "x-a747");
-        assert_eq!(goal.node.as_deref(), Some("x-a747"));
+        assert_eq!(goal.name, "x-cccc");
+        assert_eq!(goal.node.as_deref(), Some("x-cccc"));
         assert_eq!(goal.start.as_deref(), Some("2026-06-29T06:52:59.630Z"));
         assert_eq!(goal.end.as_deref(), Some("2026-06-29T07:56:13.785Z"));
         assert_eq!(goal.outcome, Some(Outcome::Met));
