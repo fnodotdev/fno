@@ -1189,6 +1189,11 @@ fn flock_self_test(home: &AgentsHome) -> Result<(), DaemonError> {
 /// exit. The race-loser path returns `Ok(())` after logging, so the client that
 /// lazy-forked it simply connects to the winner.
 pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonError> {
+    // A hold is a clean exit: launchd's KeepAlive relaunches only a failed one.
+    if let Some(hold) = crate::daemon_hold::read_hold(&home) {
+        eprintln!("fno-agent-daemon: not starting; {}", hold.refusal());
+        return Ok(());
+    }
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
 
     // Startup row-count assertion (AC5), BEFORE the socket is bound: a

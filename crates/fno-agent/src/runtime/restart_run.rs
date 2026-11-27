@@ -251,6 +251,71 @@ pub fn render_restart(
     }
 }
 
+/// `restart --hold <reason>`: place the hold marker FIRST, so no client or
+/// launchd relaunch can rebind while the daemon drains, then stop the daemon.
+/// A stop that fails leaves the hold in place and says so.
+pub async fn run_hold(reason: &str, json: bool) -> i32 {
+    let home = AgentsHome::from_env();
+    if reason.trim().is_empty() {
+        eprintln!("fno-agent restart: --hold needs a reason, so the refused caller can read why");
+        return 2;
+    }
+    if let Err(e) = crate::daemon_hold::place_hold(&home, reason) {
+        eprintln!("fno-agent restart: cannot write the hold marker: {e}");
+        return 1;
+    }
+    let (stopped, code) = match crate::client::stop_daemon(&home).await {
+        Ok(pid) => (pid, 0),
+        Err(e) => {
+            eprintln!("fno-agent restart: hold placed, but the stop failed: {e}");
+            (None, 1)
+        }
+    };
+    let line = match stopped {
+        Some(pid) => format!("held: daemon pid {pid} stopped; no start until --release"),
+        None if code == 0 => "held: no daemon was serving; no start until --release".to_string(),
+        None => "held: the daemon may still run; the marker blocks every restart of it".to_string(),
+    };
+    if json {
+        println!(
+            "{}",
+            json!({"held": true, "stopped_pid": stopped, "reason": reason})
+        );
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
+    }
+    code
+}
+
+/// `restart --release`: lift the hold, then start a daemon.
+pub async fn run_release(json: bool) -> i32 {
+    let home = AgentsHome::from_env();
+    let lifted = match crate::daemon_hold::release_hold(&home) {
+        Ok(prior) => prior,
+        Err(e) => {
+            eprintln!("fno-agent restart: cannot remove the hold marker: {e}");
+            return 1;
+        }
+    };
+    let started = crate::client::ensure_daemon(&home, &resolve_daemon_bin()).await;
+    let line = match (&lifted, &started) {
+        (Some(hold), Ok(())) => format!("released: hold ({}) lifted; daemon serving", hold.reason),
+        (None, Ok(())) => "no hold was set; daemon serving".to_string(),
+        (_, Err(e)) => format!("hold lifted, but the daemon did not start: {e}"),
+    };
+    if json {
+        println!(
+            "{}",
+            json!({"released": lifted.is_some(), "serving": started.is_ok()})
+        );
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
+    }
+    i32::from(started.is_err())
+}
+
 /// Dispatch `fno-agent restart`: swap a (possibly stale) daemon for one built
 /// from the current binary. SIGTERM the running daemon (graceful drain; PTY
 /// workers survive), wait for the socket to clear, lazy-start fresh. With
@@ -268,6 +333,11 @@ pub async fn run_restart(
     mux: bool,
 ) -> i32 {
     let home = AgentsHome::from_env();
+    // The chain-only gates run from hooks: a held daemon is the operator's
+    // choice, so they stay quiet instead of failing every session start.
+    if (if_drifted || if_down) && crate::daemon_hold::read_hold(&home).is_some() {
+        return 0;
+    }
     if gated_restart_declines(&home, if_drifted, if_down).await {
         return 0;
     }

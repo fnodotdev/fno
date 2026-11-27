@@ -37,6 +37,8 @@ pub enum ClientError {
     DaemonBinMissing(PathBuf),
     #[error("daemon is not running")]
     DaemonNotRunning,
+    #[error("{0}")]
+    DaemonHeld(String),
     #[error(
         "no response from the daemon for `{method}` within {timeout:?} - it is either \
          wedged (listening, not serving) or still working a slow handler. `fno agent \
@@ -254,6 +256,9 @@ pub async fn ensure_daemon(
     let sock = home.supervisor_sock();
     if UnixStream::connect(&sock).await.is_ok() {
         return Ok(());
+    }
+    if let Some(hold) = crate::daemon_hold::read_hold(home) {
+        return Err(ClientError::DaemonHeld(hold.refusal()));
     }
     if !daemon_bin.exists() {
         return Err(ClientError::DaemonBinMissing(daemon_bin.to_path_buf()));
@@ -1179,6 +1184,41 @@ pub async fn restart_daemon(
         forced: false,
         note: None,
     })
+}
+
+/// Stop the running daemon and start none. The caller places the hold first,
+/// so nothing can rebind while the old daemon drains. Returns the pid that was
+/// stopped, `None` when no daemon was serving.
+pub async fn stop_daemon(home: &AgentsHome) -> Result<Option<u32>, RestartError> {
+    let status = Request::new(1, "agent.status", json!({}));
+    let result = match call_if_running(home, &status).await {
+        Ok(resp) => status_result(resp).ok(),
+        Err(ClientError::DaemonNotRunning) => None,
+        Err(e) => return Err(RestartError::Client(e)),
+    };
+    let Some(result) = result else {
+        return Ok(None);
+    };
+    let daemon = result.get("daemon");
+    let old_pid = daemon
+        .and_then(|d| d.get("pid"))
+        .and_then(Value::as_u64)
+        .and_then(|p| Pid::try_from(p).ok())
+        .ok_or(RestartError::StatusMissingPid)?;
+    let recorded_start = daemon
+        .and_then(|d| d.get("pid_start_time"))
+        .and_then(Value::as_u64);
+    if !crate::daemon::pid_is_ours(old_pid.as_u32(), recorded_start) {
+        return Ok(None);
+    }
+    let termination = terminate_confirmed(old_pid, recorded_start, RESTART_SIGTERM_GRACE).await?;
+    if termination == Termination::Survived {
+        return Err(RestartError::DidNotDie {
+            pid: old_pid.as_u32(),
+        });
+    }
+    await_lock_free_or_rebound(home, old_pid.as_u32(), recorded_start, teardown_bound()).await?;
+    Ok(Some(old_pid.as_u32()))
 }
 
 #[cfg(test)]

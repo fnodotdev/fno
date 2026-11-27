@@ -70,6 +70,7 @@ pub mod context_window;
 pub mod convert;
 pub mod cutover;
 pub mod daemon;
+pub mod daemon_hold;
 pub mod daemon_predecessor;
 pub mod discovered_sessions;
 pub mod disk_floor;
