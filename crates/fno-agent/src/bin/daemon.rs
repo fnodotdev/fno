@@ -48,7 +48,7 @@ fn main() {
     }
 
     // A hold is a clean exit: launchd's KeepAlive relaunches only a failed one.
-    if let Some(hold) = fno_agent::daemon_hold::read_hold(&fno_agent::paths::AgentsHome::from_env())
+    if let Some(hold) = fno_agent::hold_marker::read_hold(&fno_agent::paths::AgentsHome::from_env())
     {
         eprintln!("fno-agent-daemon: not starting; {}", hold.refusal());
         return;

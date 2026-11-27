@@ -257,7 +257,7 @@ pub async fn ensure_daemon(
     if UnixStream::connect(&sock).await.is_ok() {
         return Ok(());
     }
-    if let Some(hold) = crate::daemon_hold::read_hold(home) {
+    if let Some(hold) = crate::hold_marker::read_hold(home) {
         return Err(ClientError::DaemonHeld(hold.refusal()));
     }
     if !daemon_bin.exists() {

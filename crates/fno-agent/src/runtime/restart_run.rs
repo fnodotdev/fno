@@ -260,7 +260,7 @@ pub async fn run_hold(reason: &str, json: bool) -> i32 {
         eprintln!("fno-agent restart: --hold needs a reason, so the refused caller can read why");
         return 2;
     }
-    if let Err(e) = crate::daemon_hold::place_hold(&home, reason) {
+    if let Err(e) = crate::hold_marker::place_hold(&home, reason) {
         eprintln!("fno-agent restart: cannot write the hold marker: {e}");
         return 1;
     }
@@ -293,7 +293,7 @@ pub async fn run_hold(reason: &str, json: bool) -> i32 {
 /// `restart --release`: lift the hold, then start a daemon.
 pub async fn run_release(json: bool) -> i32 {
     let home = AgentsHome::from_env();
-    let lifted = match crate::daemon_hold::release_hold(&home) {
+    let lifted = match crate::hold_marker::release_hold(&home) {
         Ok(prior) => prior,
         Err(e) => {
             eprintln!("fno-agent restart: cannot remove the hold marker: {e}");
@@ -337,7 +337,7 @@ pub async fn run_restart(
     let home = AgentsHome::from_env();
     // The chain-only gates run from hooks: a held daemon is the operator's
     // choice, so they stay quiet instead of failing every session start.
-    if (if_drifted || if_down) && crate::daemon_hold::read_hold(&home).is_some() {
+    if (if_drifted || if_down) && crate::hold_marker::read_hold(&home).is_some() {
         return 0;
     }
     if gated_restart_declines(&home, if_drifted, if_down).await {
