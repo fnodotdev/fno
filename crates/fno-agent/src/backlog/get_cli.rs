@@ -222,14 +222,14 @@ pub fn run(tail: &[String]) -> i32 {
         .cloned()
         .collect();
     if let Some(hit) = resolve_tiers(&live, args.id) {
-        if args.render.strict && number_tier_only(hit, args.id) {
-            return refuse_number_collision(hit, args.id);
-        }
         let id = hit
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        if args.render.strict && number_tier_only(hit, &id, args.id) {
+            return refuse_number_collision(&id, args.id);
+        }
         return serve_loaded(&graph_path, &id, false, &args.render, &args.id);
     }
     let archived: Vec<Value> = index
@@ -301,20 +301,15 @@ pub fn run(tail: &[String]) -> i32 {
 /// node only through the display-number tier. Such a token is also the shape of
 /// an all-digit hash id, so the id tier's miss and the number tier's hit
 /// disagree about what the caller named.
-fn number_tier_only(hit: &Value, query: &str) -> bool {
+fn number_tier_only(hit: &Value, hit_id: &str, query: &str) -> bool {
     let digits = query.split_once('-').map_or("", |(_, d)| d);
     let hash_width = (4..=8).contains(&digits.len()) && digits.bytes().all(|b| b.is_ascii_digit());
-    let q_lc = query.to_lowercase();
-    hash_width
-        && hit.get("id").and_then(Value::as_str) != Some(query)
-        && hit.get("slug").and_then(Value::as_str) != Some(q_lc.as_str())
-        && !super::node_ref::entry_aliases(hit).contains(&query)
+    hash_width && hit_id != query && !super::node_ref::entry_aliases(hit).contains(&query)
 }
 
 /// The `--strict` refusal for a number-tier-only hit: names both readings and
 /// serves neither.
-fn refuse_number_collision(hit: &Value, query: &str) -> i32 {
-    let node = hit.get("id").and_then(Value::as_str).unwrap_or_default();
+fn refuse_number_collision(node: &str, query: &str) -> i32 {
     let message = format!(
         "No node with id '{query}' in the live graph. '{query}' is also the display number of {node}: \
          run `fno backlog get {node}` to read that node."
@@ -625,11 +620,11 @@ mod tests {
 
     #[test]
     fn strict_flags_a_hash_width_token_that_only_the_number_tier_hit() {
-        let row = json!({"id": "x-ea0e", "slug": "alpha-node"});
-        assert!(number_tier_only(&row, "x-2844"));
-        assert!(!number_tier_only(&row, "x-ea0e"));
-        assert!(!number_tier_only(&row, "x-15"));
+        let row = json!({"id": "x-ea0e"});
+        assert!(number_tier_only(&row, "x-ea0e", "x-2844"));
+        assert!(!number_tier_only(&row, "x-ea0e", "x-ea0e"));
+        assert!(!number_tier_only(&row, "x-ea0e", "x-15"));
         let aliased = json!({"id": "x-ea0e", "aliases": ["x-2844"]});
-        assert!(!number_tier_only(&aliased, "x-2844"));
+        assert!(!number_tier_only(&aliased, "x-ea0e", "x-2844"));
     }
 }
