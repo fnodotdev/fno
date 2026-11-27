@@ -572,7 +572,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .child(
             column("board-next")
                 .w(px(NEXT_W))
-                .flex_shrink()
+                .flex_shrink_1()
                 .min_w(px(NEXT_MIN_W))
                 .child(next_column(root)),
         )
