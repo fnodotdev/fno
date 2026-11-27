@@ -243,7 +243,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 20 | Never parent new work into a running epic (lead:121) | guard: `epic_max_open_children` + role-linked rollup |
 | 21 | Rank is the user's (lead:123) | guard: `fno backlog rank` refuses agent sessions |
 | 22 | Verdict stalled, degraded or unknown: escalate (lead:131) | row (later): event lead_checkin verdict, action nudge |
-| 23 | A role clears only its own question (lead:137) | guard: clear refuses a role on another's question |
+| 23 | A role clears its own question, or a lead holding the node's scope clears a non-deny-class one (lead:137, D3744) | guard: clear refuses a role outside the scope and any deny class |
 | 24 | Escalate the four classes only; decide the rest (lead:138) | row: why_user_escape |
 | 25 | Silence past the deadline takes the default (lead:139) | stays prose (check-in reader) |
 | 26 | User answers in chat: record it (lead:140) | row (later): port of hooks/operator-capture-nudge.sh |
