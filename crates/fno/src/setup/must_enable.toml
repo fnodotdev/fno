@@ -24,6 +24,8 @@ corpus = [
   "fno do pr info 1",
   "fno do pr list",
   "fno do pr logs 1",
+  "fno do target start x-0000",
+  "fno do target status",
   "grep -rn foo src | head -20",
   "tail -n 5 README.md",
   "jq .name package.json",
@@ -67,6 +69,10 @@ why = "plan files and the session manifest"
 [[rule]]
 prefix = ["fno", "do", "pr", ["status", "wait", "info", "list", "logs"]]
 why = "PR reads; never create, push or merge"
+
+[[rule]]
+prefix = ["fno", "do", "target"]
+why = "the delivery loop's own commands: cold start, claim, status; a worker never waits on a target prompt (user ruling D3654)"
 
 [[rule]]
 prefix = [["grep", "head", "tail", "jq"]]

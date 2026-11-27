@@ -332,6 +332,26 @@
       "title": "AgentsBlock",
       "type": "object"
     },
+    "AllowRulesBlock": {
+      "description": "fno's allow rules ride each Claude Code spawn (user ruling D3653).",
+      "properties": {
+        "default": {
+          "default": true,
+          "title": "Default",
+          "type": "boolean"
+        },
+        "roles": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {},
+          "title": "Roles",
+          "type": "object"
+        }
+      },
+      "title": "AllowRulesBlock",
+      "type": "object"
+    },
     "AppBlock": {
       "description": "fno-app (the desktop app) settings (nested under 'config.app').\n\nThe app reads the GLOBAL settings file (~/.fno/settings.yaml): a Finder-launched app has no project cwd. The three switches gate the attention signals the app itself fires when an agent turns blocked or done outside the window: the notification (a macOS notification whose tap focuses the agent's chat), the sound and the Dock badge. The app derives the transitions from the layout it already renders, so these switches are independent of the daemon's mux.notify_on_blocked / mux.notify_on_done knobs, which govern the TUI and the osascript fallback. The font and font_size keys hold the terminal pane's face and point size; the app's Settings page writes them and re-measures the panes live.",
       "properties": {
@@ -4159,6 +4179,9 @@
     },
     "agents": {
       "$ref": "#/$defs/AgentsBlock"
+    },
+    "allow_rules": {
+      "$ref": "#/$defs/AllowRulesBlock"
     },
     "app": {
       "$ref": "#/$defs/AppBlock"

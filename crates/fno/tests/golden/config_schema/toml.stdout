@@ -110,6 +110,12 @@ timezone = ""
 # Auto-approve routine worker file work: while true, a new spawn gets Claude Code permission rules that allow reads and edits in its own worktree and plan folder. Claude Code still applies deny and ask rules first, and secret and settings names keep their prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in an interactive terminal. A command with no terminal cannot set it. That check slows an agent down and does not stop one with a Bash tool, so the Bash permission is the real guard.
 auto_approve_routine = false
 
+[allow_rules]
+# Ride fno's allow rules with each spawn (user ruling D3653): every Claude Code spawn composes a settings file whose permissions.allow carries fno's must-enable command rows, so a worker never waits on a classifier prompt for fno's own commands. On by default. A value that is missing or mistyped reads as on; only an explicit false turns the ride-along off. Claude Code still applies deny and ask rules first, so a rule here never grants past your own settings.
+default = true
+# Per-role override of allow_rules.default keyed by the spawn's --role (for example allow_rules.roles.lead = false). The role value wins over the default; a role with no row uses the default.
+roles = {}
+
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
 on_unavailable = "refuse"

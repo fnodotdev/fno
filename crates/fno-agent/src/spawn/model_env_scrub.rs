@@ -237,7 +237,12 @@ pub fn scrub_onto(cmd: &mut std::process::Command, overlay: &[(&str, &str)]) {
 /// does. Content-addressed (blake3 of the payload) and mode 0600, matching the
 /// Python writer's contract; a route overlay present in the env makes
 /// `incoherent_model_env` empty, so this file can only be the unrouted floor.
-pub fn write_scrub_settings(dropped: &[(String, String)]) -> std::io::Result<PathBuf> {
+/// `allow` carries fno's command rules (D3653): the plain unrouted spawn owns
+/// no other settings file, so the floor file is where they ride.
+pub fn write_scrub_settings(
+    dropped: &[(String, String)],
+    allow: &[String],
+) -> std::io::Result<PathBuf> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -245,7 +250,15 @@ pub fn write_scrub_settings(dropped: &[(String, String)]) -> std::io::Result<Pat
     for (key, _) in dropped {
         env.insert(key.clone(), serde_json::Value::String(String::new()));
     }
-    let payload = serde_json::to_string(&serde_json::json!({ "env": env }))?;
+    let mut payload_doc = serde_json::Map::new();
+    payload_doc.insert("env".to_string(), serde_json::Value::Object(env));
+    if !allow.is_empty() {
+        payload_doc.insert(
+            "permissions".to_string(),
+            serde_json::json!({ "allow": allow }),
+        );
+    }
+    let payload = serde_json::to_string(&serde_json::Value::Object(payload_doc))?;
     let digest = blake3::hash(payload.as_bytes()).to_hex();
     let dir = crate::paths::AgentsHome::from_env()
         .root()
@@ -315,7 +328,7 @@ mod tests {
                 "glm-4.5-air".to_string(),
             ),
         ];
-        let path = write_scrub_settings(&dropped).expect("settings floor writes");
+        let path = write_scrub_settings(&dropped, &[]).expect("settings floor writes");
         let raw = std::fs::read_to_string(&path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let env = v.get("env").unwrap().as_object().unwrap();
@@ -323,7 +336,7 @@ mod tests {
         assert_eq!(env["ANTHROPIC_MODEL"], "");
         assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "");
         assert!(path.starts_with(dir.join("agents/route-settings")));
-        assert_eq!(write_scrub_settings(&dropped).unwrap(), path);
+        assert_eq!(write_scrub_settings(&dropped, &[]).unwrap(), path);
         std::env::remove_var("FNO_AGENT_HOME");
         let _ = std::fs::remove_dir_all(&dir);
     }
