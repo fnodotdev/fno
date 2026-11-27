@@ -3,9 +3,9 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::time::Duration;
 
 use gpui::{point, px, size, App, Bounds, WindowBounds, WindowOptions};
-// objc 0.2 macros expand textually at the call site: msg_send! calls sel!
-// and sel! calls sel_impl!, so all three names must be imported here.
-use objc::{class, msg_send, sel, sel_impl};
+use objc2::runtime::AnyObject;
+use objc2::{class, msg_send};
+use objc2_foundation::{NSPoint, NSRect};
 
 use crate::{MainView, ShotOptions};
 
@@ -66,7 +66,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             return 1;
         }
     };
-    gpui::Application::new().run(move |cx: &mut App| {
+    gpui_platform::application().run(move |cx: &mut App| {
         // Accessory policy first. gpui pins the Regular policy at
         // finish-launching, so a Dock icon and the launch-activation
         // channel would otherwise open for every shot process. The shot
@@ -74,12 +74,12 @@ pub fn run(opts: ShotOptions) -> i32 {
         // below never becomes key (focus: false), so the user's key
         // window is untouched through the whole run.
         // SAFETY: plain read on this process's own NSApplication.
-        let app: *mut objc::runtime::Object =
+        let app: *mut AnyObject =
             unsafe { msg_send![class!(NSApplication), sharedApplication] };
         // SAFETY: plain setter on this process's own NSApplication; the
         // value 1 is NSApplicationActivationPolicyAccessory, so the
         // process never activates and no Dock icon appears.
-        let _: () = unsafe { msg_send![app, setActivationPolicy: 1i64] };
+        let _: () = unsafe { msg_send![app, setActivationPolicy: 1isize] };
         let out = out.clone();
         let family = family.clone();
         let open = cx.open_window(shot_window_options(), move |window, cx| {
@@ -130,7 +130,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         };
         // SAFETY: setter on the window this process owns; the floating
         // level keeps occlusion visible under covering windows.
-        let _: () = unsafe { msg_send![w, setLevel: 3i64] };
+        let _: () = unsafe { msg_send![w, setLevel: 3isize] };
         // SAFETY: setter on the window this process owns; mouse events
         // pass through, so nothing the user clicks reaches the window.
         let _: () = unsafe { msg_send![w, setIgnoresMouseEvents: true] };
@@ -143,7 +143,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         // The read-back shows what the window itself claims, so a
         // reverted setter never hides behind the server-side read.
         // SAFETY: plain read of the window's own level claim.
-        let level_after: i64 = unsafe { msg_send![w, level] };
+        let level_after: isize = unsafe { msg_send![w, level] };
         // SAFETY: plain read of the window's own alpha claim.
         let alpha_after: f64 = unsafe { msg_send![w, alphaValue] };
         eprintln!(
@@ -159,7 +159,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             if !settle_then_tap(cx, &handle, w, tap, ui).await {
                 eprintln!("fno-app --shot: the board feeds never settled; no frame captured");
                 remove_pin_dir(&pin_dir());
-                cx.update(|app| app.quit()).ok();
+                cx.update(|app| app.quit());
                 std::process::exit(1);
             }
             // Hold mode: leave the near-invisible composited window up
@@ -196,7 +196,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
             }
-            cx.update(|app| quit_shot(app, code)).ok();
+            cx.update(|app| quit_shot(app, code));
         })
         .detach();
     });
@@ -382,7 +382,7 @@ unsafe fn cf_f64(dict: *const c_void, key: *const c_void) -> Option<f64> {
 unsafe fn cf_string(dict: *const c_void, key: *const c_void) -> Option<String> {
     let mut v: *const c_void = std::ptr::null();
     if CFDictionaryGetValueIfPresent(dict, key, &mut v) && !v.is_null() {
-        let c: *const c_char = msg_send![v as *mut objc::runtime::Object, UTF8String];
+        let c: *const c_char = msg_send![v as *mut AnyObject, UTF8String];
         if !c.is_null() {
             return Some(CStr::from_ptr(c).to_string_lossy().into_owned());
         }
@@ -395,8 +395,7 @@ unsafe fn cf_string(dict: *const c_void, key: *const c_void) -> Option<String> {
 /// live through the call.
 unsafe fn ns_string(s: &str) -> *const c_void {
     let c = CString::new(s).expect("constant key carries no interior NUL");
-    let s: *mut objc::runtime::Object =
-        msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
+    let s: *mut AnyObject = msg_send![class!(NSString), stringWithUTF8String: c.as_ptr()];
     s as *const c_void
 }
 
@@ -406,7 +405,7 @@ unsafe fn ns_string(s: &str) -> *const c_void {
 async fn settle_then_tap(
     cx: &mut gpui::AsyncApp,
     handle: &gpui::WindowHandle<crate::window::Root>,
-    w: *mut objc::runtime::Object,
+    w: *mut AnyObject,
     tap: Option<(f64, f64)>,
     ui: Option<crate::UiShot>,
 ) -> bool {
@@ -696,11 +695,11 @@ fn flatten_png(path: &std::path::Path) -> Result<(), FrameError> {
 /// time, so no user click can reach the shot window. The events only
 /// dispatch once the caller yields to the run loop. SAFETY: reads and
 /// class-method calls on the window this process owns.
-unsafe fn tap_window_point(w: *mut objc::runtime::Object, tx: f64, ty: f64) {
-    let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
-    let num: i64 = msg_send![w, windowNumber];
+unsafe fn tap_window_point(w: *mut AnyObject, tx: f64, ty: f64) {
+    let frame: NSRect = msg_send![w, frame];
+    let num: isize = msg_send![w, windowNumber];
     // AppKit window coordinates put the origin at the bottom left.
-    let at = core_graphics::geometry::CGPoint {
+    let at = NSPoint {
         x: tx,
         y: frame.size.height - ty,
     };
@@ -708,24 +707,24 @@ unsafe fn tap_window_point(w: *mut objc::runtime::Object, tx: f64, ty: f64) {
         "fno-app --shot: tap window ({tx},{ty}) -> window-local ({:.0},{:.0})",
         at.x, at.y
     );
-    let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
+    let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
     // NSEventTypeLeftMouseDown=1, NSEventTypeLeftMouseUp=2.
-    for kind in [1u64, 2u64] {
-        let ev: *mut objc::runtime::Object = msg_send![class!(NSEvent),
-            mouseEventWithType: kind
-            location: at
-            modifierFlags: 0u64
-            timestamp: 0f64
-            windowNumber: num
-            context: std::ptr::null::<c_void>()
-            eventNumber: 0i64
-            clickCount: 1i64
+    for kind in [1usize, 2usize] {
+        let ev: *mut AnyObject = msg_send![class!(NSEvent),
+            mouseEventWithType: kind,
+            location: at,
+            modifierFlags: 0usize,
+            timestamp: 0f64,
+            windowNumber: num,
+            context: std::ptr::null_mut::<AnyObject>(),
+            eventNumber: 0isize,
+            clickCount: 1isize,
             pressure: 1f32];
         if ev.is_null() {
             eprintln!("fno-app --shot: the tap event did not create");
             return;
         }
-        let _: () = msg_send![app, postEvent: ev atStart: false];
+        let _: () = msg_send![app, postEvent: ev, atStart: false];
     }
 }
 
@@ -736,18 +735,18 @@ unsafe fn tap_window_point(w: *mut objc::runtime::Object, tx: f64, ty: f64) {
 /// pass-through, read-only sharing, one-percent alpha) live in run(),
 /// applied in the same run-loop turn as the open so the birth never
 /// shows.
-unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut objc::runtime::Object)> {
-    let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
-    let windows: *mut objc::runtime::Object = msg_send![app, windows];
+unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut AnyObject)> {
+    let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+    let windows: *mut AnyObject = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
-    let mut chosen: Option<(*mut objc::runtime::Object, i64)> = None;
+    let mut chosen: Option<(*mut AnyObject, isize)> = None;
     for i in 0..count {
-        let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-        let num: i64 = msg_send![w, windowNumber];
+        let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+        let num: isize = msg_send![w, windowNumber];
         if num <= 0 {
             continue;
         }
-        let frame: core_graphics::geometry::CGRect = msg_send![w, frame];
+        let frame: NSRect = msg_send![w, frame];
         eprintln!(
             "fno-app --shot: window candidate: number={num} frame=({:.0},{:.0} {:.0}x{:.0})",
             frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
@@ -761,8 +760,8 @@ unsafe fn shot_window_id() -> Option<(u32, f64, usize, *mut objc::runtime::Objec
     let Some((w, num)) = chosen.or_else(|| {
         // Fallback: the first positive-numbered window.
         (0..count).find_map(|i| {
-            let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
-            let num: i64 = msg_send![w, windowNumber];
+            let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+            let num: isize = msg_send![w, windowNumber];
             (num > 0).then_some((w, num))
         })
     }) else {
