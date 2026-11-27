@@ -525,7 +525,8 @@ fn always_off_session(class: HelpClass) -> bool {
 /// stopping turn still carries the same distress would re-write a row on
 /// each fire. The reason arm covers a worker that restates one block on every
 /// turn: the same class and reason is one event, so it files one mail and one
-/// route. Only classes that always route off-session take the reason arm:
+/// route, until a different reason of that class lands. Only classes that
+/// always route off-session take the reason arm:
 /// Wait, Budget and the in-session classes climb on recurrence by design. A
 /// NEW turn with a NEW reason still appends and climbs (the rung count),
 /// because the run moved. `reason` is the capped text the row stores.
@@ -536,15 +537,23 @@ fn blocked_distress_already_emitted(
     turn_key: &str,
     reason: &str,
 ) -> bool {
-    blocked_rows_for(project_events, runs, |v| {
+    let rows = blocked_rows_for(project_events, runs, |v| {
         v.pointer("/data/class").and_then(|x| x.as_str()) == Some(class.as_str())
-            && (v.pointer("/data/turn").and_then(|x| x.as_str()) == Some(turn_key)
-                || (always_off_session(class)
-                    && v.pointer("/data/reason").and_then(|x| x.as_str()) == Some(reason)))
-    })
-    .into_iter()
-    .next()
-    .is_some()
+    });
+    let str_at = |v: &Value, p: &str| v.pointer(p).and_then(|x| x.as_str()).map(str::to_owned);
+    if rows
+        .iter()
+        .any(|v| str_at(v, "/data/turn").as_deref() == Some(turn_key))
+    {
+        return true;
+    }
+    // Only the newest row of the class counts for the reason arm, so a block
+    // that recurs after a different one was filed is a new event.
+    always_off_session(class)
+        && rows
+            .iter()
+            .max_by_key(|v| str_at(v, "/ts").unwrap_or_default())
+            .is_some_and(|v| str_at(v, "/data/reason").as_deref() == Some(reason))
 }
 
 /// Every committed `blocked` row for one session, narrowed by a predicate on
@@ -1452,6 +1461,20 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1]["data"]["rung"], 1);
+        assert!(
+            append_blocked_event(
+                &project,
+                &global,
+                "run-a",
+                None,
+                None,
+                &mk("wall a"),
+                "turn-4",
+                None,
+            )
+            .is_some(),
+            "a block that recurs after a different one is a new event"
+        );
     }
 
     /// One session files a help under two ids: the stop hook's scan uses the
