@@ -143,7 +143,8 @@ fno do plan graduate --plan-path "$PLAN_PATH" --session-id "$SESSION_ID"
 
 The stamp operation is designed to be re-runnable without side effects:
 
-- If `(session_id, urls)` are both already present in frontmatter, the stamp exits 0 without writing anything.
+- If `(session_id, urls)` are both already present, the stamp exits 0 without writing anything.
+- `urls` and `session_ids` live in the `## Gate records` fence. The stamp writes them there for a plan with neither, and keeps a legacy plan's lists in frontmatter. The newest url also lands as a scalar `pr_url` in frontmatter, the one PR link Obsidian shows.
 - `shipped_at` is only set on the first stamp and is never overwritten on
   re-runs.
 - `urls` and `session_ids` are deduplicated before writing; appending the same

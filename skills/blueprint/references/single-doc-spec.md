@@ -19,7 +19,6 @@ claims: <node id>
 difficulty: <low | medium | high>   # Required for plans created after 2026-08-26.
 # An intrinsic property of the work: expected time, edge cases, unknowns, and
 # what a senior tech lead makes of the problem. Not a model or capacity hint.
-sources: [<artifacts actually read>]
 ---
 
 # <Title>
@@ -33,6 +32,7 @@ sources: [<artifacts actually read>]
 ## Gate records
 
 ```yaml
+sources: [<artifacts actually read>]
 consolidation:
   outcome: <absorb | append | proceed_alone>
   proceed_alone_against: []   # or absorbed: / appended_to: / rejected:, each entry an id with its reason

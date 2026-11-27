@@ -80,7 +80,7 @@ pub fn user_answered(journals_raw: &str) -> std::collections::HashSet<String> {
         if data.get("superseded").and_then(Value::as_bool) == Some(true) {
             continue;
         }
-        if data.get("delegated").and_then(Value::as_bool) == Some(true) {
+        if data.get("delegate").and_then(Value::as_bool) == Some(true) {
             continue;
         }
         if let Some(qid) = data.get("item_id").and_then(Value::as_str) {
@@ -1402,7 +1402,7 @@ mod tests {
     fn the_user_answered_fold_reads_own_answers_only() {
         let own = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-own","sink":"mux","option":1,"superseded":false}}"#;
         let sup = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-sup","sink":"mux","option":1,"superseded":true}}"#;
-        let del = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-del","sink":"mux","option":1,"superseded":false,"delegated":true}}"#;
+        let del = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-del","sink":"mux","option":1,"superseded":false,"delegate":true}}"#;
         let missing = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"sink":"mux","option":1}}"#;
         let got = user_answered(&format!("{own}\n{sup}\n{del}\n{missing}"));
         assert!(got.contains("q-own"));

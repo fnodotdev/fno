@@ -19,13 +19,11 @@ grep -Fq "name each one tried" "$LEAD_SKILL"
 grep -Fq "cannot claim that names no route tried" "$STYLE_DOC"
 grep -Fq "12. Mail prose refuses a cannot claim" "$STYLE_DOC"
 
-# The rule block must survive injection: with fno-agent answering `due`,
-# the SessionStart additionalContext carries the rule.
-STUB_DIR="$(mktemp -d)"
-trap 'rm -rf "$STUB_DIR"' EXIT
-printf '#!/bin/sh\necho due\n' >"$STUB_DIR/due"
-chmod +x "$STUB_DIR/due"
-out="$(FNO_AGENT_BIN="$STUB_DIR/due" FNO_AGENT_HOME="$STUB_DIR/agents" \
+# The rule block must survive injection: on a fresh install (no session joined yet) the preamble is due, and the SessionStart additionalContext carries the rule.
+HOME_DIR="$(mktemp -d)"
+trap 'rm -rf "$HOME_DIR"' EXIT
+unset FNO_AGENT_BIN FNO_HOOK_HARNESS CODEX_PLUGIN_ROOT FNO_PLATFORM || true
+out="$(FNO_AGENT_HOME="$HOME_DIR/agents" FNO_HOME="$HOME_DIR/fno" \
     CLAUDE_CODE_SESSION_ID=verified-facts-contract \
     CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null)"
 grep -Fq "## Verified facts only" <<<"$out"

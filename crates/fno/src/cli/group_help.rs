@@ -40,6 +40,7 @@ const DO: &[(&str, &str)] = &[
     ("research", "research briefs"),
     ("resume", "resume receipts"),
     ("review", "the review lane"),
+    ("runbook", "runbook runs: step, check, rollback, close"),
     ("show", "show one revision"),
     ("state", "the target session manifest"),
     ("target", "target sessions: start, init, status"),

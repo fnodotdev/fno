@@ -20,7 +20,7 @@ fn every_lead_injection_template_and_rendered_succession_uses_role_vocabulary() 
         capture_tree(&root.join(path), &mut captured);
     }
     for path in [
-        "hooks/context-nudge.sh",
+        "crates/fno-agent/src/runtime/hook/front/stop.rs",
         "hooks/session-start.sh",
         "hooks/lead-postcompact-reinject.sh",
         "crates/fno-agent/src/runtime/lead_checkin.rs",

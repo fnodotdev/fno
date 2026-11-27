@@ -526,26 +526,14 @@ fn holds_unreadable(error: &crate::state_layout_move::MoveError) -> Entry {
     }
 }
 
-/// The whole receipt of a pass whose settings would split a class home.
-fn unroutable(root: &Path) -> Option<Receipt> {
-    let (key, why) = crate::state_layout_home::unroutable_setting(root)?;
-    Some(Receipt {
-        entries: vec![Entry {
-            legacy: key.to_string(),
-            status: Status::Refused(format!("{key} {why}; nothing moves until then")),
-        }],
-    })
-}
-
 /// One migration pass over the whole table against one state root.
 /// Dry run (default) reports every owed row `pending` and writes nothing;
 /// `apply` moves, merges, parks and deletes per kind. A held name stays.
 /// Idempotent: a second apply over a migrated root moves nothing and writes
-/// no stamp.
+/// no stamp. The class homes resolve through `fno_homes`, the same leg the
+/// front door reads, so no pre-check holds the pass back on a setting one
+/// binary would answer differently.
 pub fn migrate(root: &Path, apply: bool) -> Receipt {
-    if let Some(refused) = unroutable(root) {
-        return refused;
-    }
     let _pass = if apply {
         crate::state_layout_undo::lock_root(root)
     } else {
@@ -1393,9 +1381,6 @@ pub fn run_at_daemon_start(home: &crate::paths::AgentsHome) {
 /// carries it home. Both record a hold. A name that is neither is an error,
 /// so a typo never reads as a clean rollback.
 fn migrate_reverse(root: &Path, names: &[String], apply: bool) -> Result<Receipt, String> {
-    if let Some(refused) = unroutable(root) {
-        return Ok(refused);
-    }
     let _pass = if apply {
         crate::state_layout_undo::lock_root(root)
     } else {
@@ -1527,8 +1512,6 @@ pub fn run_migrate_cli(args: &[String]) -> i32 {
     });
     let receipt = match ask {
         Ask::Forward => migrate(&root, apply),
-        // Refuse before the release clears a hold.
-        Ask::Release(_) if unroutable(&root).is_some() => migrate(&root, apply),
         Ask::Release(names) => match crate::state_layout_undo::release(&root, &names) {
             Ok(()) => migrate(&root, apply),
             Err(e) => {
@@ -2764,45 +2747,9 @@ mod tests {
         );
         assert!(other.join("cache/corrections/cursors.json").is_file());
 
-        // A setting the front door cannot resolve stops every mover entry.
+        // A writer's launchd.out already in the root logs dir moves with the
+        // class below; the legacy spelling stays a link after the pass.
         put(&m.root.join("logs/launchd.out"), "rows\n");
-        let refuses = |key: &str| {
-            let reversed = migrate_reverse(&m.root, &["bus".to_string()], true).unwrap();
-            for receipt in [migrate(&m.root, false), migrate(&m.root, true), reversed] {
-                let named: Vec<&str> = receipt.entries.iter().map(|e| e.legacy.as_str()).collect();
-                assert_eq!(named, [key]);
-                assert_eq!(receipt.refused_count(), 1);
-            }
-            assert!(m.root.join("logs/launchd.out").is_file());
-            assert!(
-                !m.state.exists() && m.stamps().is_empty(),
-                "{key}: nothing moved"
-            );
-        };
-        {
-            let _pin = crate::claims::EnvVarGuard::unset("FNO_STATE_HOME");
-            let config = m.base.join("config.toml");
-            let set_home = |value: &str| {
-                put(
-                    &config,
-                    &format!("[paths]\nstate_dir_local = \"{value}\"\n"),
-                );
-            };
-            set_home("~/{project}");
-            refuses("paths.state_dir_local");
-            set_home("${HOME}/state");
-            assert!(
-                crate::state_layout_home::unroutable_setting(&m.root).is_none(),
-                "a variable is no template"
-            );
-            put(&config, "");
-        }
-        {
-            let yaml = m.base.join("settings.yaml");
-            put(&yaml, "");
-            let _pin = crate::claims::EnvVarGuard::set("FNO_CONFIG", yaml.to_str().unwrap());
-            refuses("FNO_CONFIG");
-        }
 
         // The default root's logs move, and the legacy spelling stays a link.
         // A new plist can write the home before this pass runs.

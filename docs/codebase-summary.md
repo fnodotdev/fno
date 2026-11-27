@@ -47,7 +47,7 @@ footnote/                              # Flat root - plugin.json at .claude-plug
 │   ├── hooks-codex.json                # Codex CLI hook configuration
 │   ├── target-stop-hook.sh              # Blocks exit during pipeline
 │   ├── session-start.sh                # Session initialization
-│   ├── spend-drift-monitor.js              # Spend cap + model drift
+│   ├── spend-drift-monitor.sh              # Shim: spend cap + model drift leg
 │   └── helpers/                        # Hook helper scripts
 │
 ├── commands/                           # 1 slash command

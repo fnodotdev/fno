@@ -66,13 +66,13 @@ Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check
 - `require-ack` blocks until the event's `acks` name the rule.
 - The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
 
-`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agent/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agent/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. A decision recorded with `--at-command <glob>` also gets a tier-0 rule `law-<id>-at` with `events = ["pre-tool"]`, `tools = ["Bash"]` and `commands` set to the globs. A decision recorded with `--at-door <send|spawn|merge>[:<subject-glob>]` also gets a tier-0 rule `law-<id>-door` on that `door:` event, with `subjects` set to the globs. Both action rules take the decision's strength and sit beside its prompt rule, so the law still reaches the prompt. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`. The span goes to the event store of the caller's project, resolved from the cwd `rule()` gets, never from `FNO_REPO_ROOT`. The hook pins that variable to the plugin root, and spans written there reached no reader.
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 
 The four doors ask the same way through `rules_source::rule`. The merge door reads one `door:merge` event per PR. The subject is `<owner/repo>#<n>`. The node comes from the body. A block holds the merge with blocker `rule`. The preview carries the same answer, so `fno do pr status` never says ready where merge refuses.
 
-The send door reads `door:send` with the recipient as subject. A block exits 3.
+The send door reads `door:send` with the recipient as subject. A recipient that is not a uuid or an 8-hex fno id is a name. For a name the subjects also carry `by-name:<recipient>`, so a rule can match a send by name. A block exits 3.
 
 The spawn gate reads `door:spawn` (harness, model, node, phase). A block refuses with exit 93 before any capacity math runs. `--force` does not clear a rule.
 
@@ -82,9 +82,11 @@ At every door a warn or an unread source prints and the door proceeds. Rules nev
 
 Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the decision door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
 
-`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
+`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It reads them from the cwd project's event store, the same store the fires write. When the store cannot be read, `unread` names its path and the answer stays `ok: true`. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
 
 `{"mode":"rules-explain","event":{"kind":"pre-tool","tool":"Edit","paths":["cli/src/a.py"]}}` reads every live rule against that event. The event takes the `Event` fields. An event with no `project` takes the cwd's project. Each row carries a `status` and its `clauses`. The status is `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`, `retrieval` (tier 1, ranked only at a prompt or skill event) or `unevaluated` (tier 2). Each clause names one filter the rule sets, whether it held, and the event value it saw. The clauses are the ones `matches` uses, so a tier-0 `applies` row is exactly a rule `decide` fires. `rules-report` is the firing log: fires, blocks and warns per rule, and `never_fired` for the rest.
+
+The lead check-in reads the same spans. Its `law_fires` reading counts the spans that carry a `law` at a `pre-tool` or `door:*` event over the last 24h. It prints one line with at most five laws, such as `law fires at actions: D1051 x2 (sessions a1b2c3d4)`. A quiet window prints no line.
 
 ## Events
 
@@ -241,7 +243,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 20 | Never parent new work into a running epic (lead:121) | guard: `epic_max_open_children` + role-linked rollup |
 | 21 | Rank is the user's (lead:123) | guard: `fno backlog rank` refuses agent sessions |
 | 22 | Verdict stalled, degraded or unknown: escalate (lead:131) | row (later): event lead_checkin verdict, action nudge |
-| 23 | A role clears only its own question (lead:137) | guard: clear refuses a role on another's question |
+| 23 | A role clears its own question, or a lead holding the node's scope clears a non-deny-class one (lead:137, D3744) | guard: clear refuses a role outside the scope and any deny class |
 | 24 | Escalate the four classes only; decide the rest (lead:138) | row: why_user_escape |
 | 25 | Silence past the deadline takes the default (lead:139) | stays prose (check-in reader) |
 | 26 | User answers in chat: record it (lead:140) | row (later): port of hooks/operator-capture-nudge.sh |

@@ -21,6 +21,8 @@ source "$REPO_ROOT/scripts/lib/with-timeout.sh" 2>/dev/null || true
 source "$REPO_ROOT/hooks/lib/agents-bin.sh" 2>/dev/null || true
 BIN="$(fno_agent_bin "$REPO_ROOT")"
 [[ -n "$BIN" ]] || skip "no fno-agent binary resolvable"
+# The hook is a shim into `fno-agent hook front`: pin it to this binary.
+export FNO_AGENT_BIN="$BIN"
 
 # Door probe: an unknown hidden door falls through to the routable table and
 # refuses; a binary with the door answers silent-empty (rc 0) on no stdin.

@@ -1311,13 +1311,13 @@ pub(super) fn job_lane_send(
     let wrapped = turn.as_str();
     let provider = job.harness.clone().unwrap_or_else(|| "claude".to_string());
     let mut reasons: Vec<String> = Vec::new();
-    // A job holder's claude lane is control.sock, which parks on a new line,
-    // so the child types the one-line turn a running session absorbs.
+    // A job holder's claude lane is control.sock. The non-submitting LF
+    // keeps the header on its own line, and a mid-turn session absorbs it
+    // (measured on claude 2.1.325: `absorbed_mid_turn` in 1.4 s).
     let state = if provider.as_harness() == Harness::Codex {
         mail_inject_codex(&session_id, wrapped, Some(&mut reasons), None)
     } else {
-        // `--steer`: the child types the whole turn as one line.
-        mail_inject_claude(&session_id, wrapped, Some(&mut reasons), None, true)
+        mail_inject_claude(&session_id, wrapped, Some(&mut reasons), None, false)
     };
     crate::mail_receipt::record(&msg_id, &state, &sender, &recipient);
     let injected = state.reached();

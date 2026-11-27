@@ -265,6 +265,22 @@ fn push(
     }
 }
 
+/// A clean `code-review` pass needs a receipt from `fno do review read`: the
+/// same session served the round's whole diff at this head, and the emit's own
+/// `head_sha` and `branch` must match that receipt. The rest of the emit's data
+/// (round, flags, counts, execution context) relaxes nothing.
+fn missing_receipt(data: &Map<String, Value>, session: &str) -> Option<String> {
+    let text = |key| data.get(key).and_then(Value::as_str).unwrap_or_default();
+    if text("reviewer") != "code-review" || text("verdict") != "pass" {
+        return None;
+    }
+    let claim = crate::backlog::review_read::Claim {
+        head: text("head_sha"),
+        branch: text("branch"),
+    };
+    crate::backlog::review_read::emit_refusal(session, &claim)
+}
+
 pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
     if args.iter().any(|arg| arg == "--help") {
         print!("{}", include_str!("event_emit_help.txt"));
@@ -341,6 +357,10 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
         let supplied = supplied_string(data.get("attester_session_id"));
         if !supplied.is_empty() && supplied != resolved {
             eprintln!("error: attester_session_id supplied as '{supplied}' but this process resolves to '{resolved}'. Drop the field; the emitter stamps it. No event emitted.");
+            return 1;
+        }
+        if let Some(refusal) = missing_receipt(&data, resolved) {
+            eprintln!("error: {refusal} No event emitted.");
             return 1;
         }
         data.insert("attester_session_id".into(), json!(resolved));

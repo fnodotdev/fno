@@ -31,6 +31,11 @@
 //! own refusal bytes: the capture's stderr named the harness (typer's usage
 //! line), which was implementation noise, so those goldens hold the native
 //! one-line refusal and compare like any other case.
+//!
+//! Every case carries the same one-line transcript: a typed assistant line
+//! with one Skill call. The by-skill golden attributes one row by transcript,
+//! and the invocation fold reads a call only from an assistant line whose
+//! block has an id.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};

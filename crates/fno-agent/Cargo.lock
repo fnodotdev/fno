@@ -1313,6 +1313,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "fno-homes",
  "fno-mail",
  "fno-proto",
  "futures-util",
@@ -1352,6 +1353,7 @@ dependencies = [
  "clap",
  "crossterm",
  "fno",
+ "fno-homes",
  "fno-mail",
  "fno-proto",
  "futures-util",
@@ -1386,6 +1388,10 @@ dependencies = [
  "tracing",
  "webpki-roots 0.26.11",
 ]
+
+[[package]]
+name = "fno-homes"
+version = "0.1.0"
 
 [[package]]
 name = "fno-mail"

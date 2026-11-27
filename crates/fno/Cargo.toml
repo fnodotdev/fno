@@ -87,6 +87,11 @@ pdf = ["app", "dep:hayro"]
 full = ["app", "web", "transfer", "pdf"]
 
 [dependencies]
+# The one class-home resolver (cache/data/state precedence + platform
+# defaults): pure std, so it joins the light set a contract build already
+# carries. Both binaries link it; neither binary links the other. A caret
+# range: the crate versions on its own, as fno-mail does.
+fno-homes = { path = "../fno-homes", version = "0.1" }
 # The mail protocol core: the hold store the sideline marks read. A caret
 # range, as in fno-agent: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }

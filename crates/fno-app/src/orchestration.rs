@@ -22,6 +22,8 @@ const NODE_W: usize = 11;
 const QUESTIONS_W: f32 = 440.0;
 /// The next queue's column width.
 const NEXT_W: f32 = 300.0;
+/// The next queue shrinks to this before the seat table gives up a cell.
+const NEXT_MIN_W: f32 = 140.0;
 
 /// A failed read in the error color. Before the first read the body says
 /// "reading…" instead, so this shows nothing.
@@ -67,6 +69,10 @@ struct Widths {
     host_w: usize,
     seat_w: usize,
     title_w: usize,
+    /// The narrowest the table column may get: its side padding, the fixed
+    /// cells with their gaps, and room for the Title heading. Under it the
+    /// column's own clip would cut a heading short.
+    min_w: Pixels,
 }
 
 fn widths(root: &Root, machines: &[Machine]) -> Widths {
@@ -102,18 +108,22 @@ fn widths(root: &Root, machines: &[Machine]) -> Widths {
     let fixed = 2 + seat_w + 9 + NODE_W + if hosts { host_w } else { 0 };
     // One gap between each pair of cells, and the row's own side padding.
     let gaps = if hosts { 5.0 } else { 4.0 };
-    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
-    let rest = rest - adv * fixed as f32 - px(8.0) * gaps;
+    let gap = px(8.0) * gaps;
+    let min_w = px(24.0) + adv * (fixed + 5) as f32 + gap;
+    let rest =
+        root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(NEXT_W) - px(24.0 * 3.0);
+    let rest = rest - adv * fixed as f32 - gap;
     let title_w = (rest / adv).floor().max(4.0) as usize;
     Widths {
         hosts,
         host_w,
         seat_w,
         title_w,
+        min_w,
     }
 }
 
-fn table(root: &Root) -> Div {
+fn table(root: &Root, w: Widths) -> Div {
     let p = root.palette;
     let adv = root.adv;
     let mut out = div()
@@ -134,7 +144,8 @@ fn table(root: &Root) -> Div {
         host_w,
         seat_w,
         title_w,
-    } = widths(root, machines);
+        ..
+    } = w;
     let head = |t: &str, chars: usize| col(t.to_string(), chars, Role::Hint, root, adv);
     let mut heads = div()
         .flex()
@@ -538,6 +549,13 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             .overflow_y_scroll()
             .pb_8()
     };
+    let machines = root
+        .board
+        .fleet()
+        .map(|f| f.machines.as_slice())
+        .unwrap_or_default();
+    let w = widths(root, machines);
+    let table_min = w.min_w;
     let columns = div()
         .flex()
         .flex_row()
@@ -545,11 +563,17 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .min_h_0()
         .w_full()
         .gap_6()
-        .child(column("board-table").flex_1().min_w_0().child(table(root)))
+        .child(
+            column("board-table")
+                .flex_1()
+                .min_w(table_min)
+                .child(table(root, w)),
+        )
         .child(
             column("board-next")
                 .w(px(NEXT_W))
-                .flex_none()
+                .flex_shrink_1()
+                .min_w(px(NEXT_MIN_W))
                 .child(next_column(root)),
         )
         .child(

@@ -260,7 +260,7 @@ pub enum Liveness {
 /// drives compatible serves to Drive, and `peek --follow` still reaches its
 /// 2.x serve's `/api/event` stream at runtime through the dispatch in
 /// `peek_one`, which never reads this tier.
-const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
+const PEEK_READER_HARNESSES: [&str; 3] = ["claude", "codex", "footnote"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
 ///
@@ -3006,6 +3006,7 @@ pub use reader_state::{IsolatedRead, ReaderState};
 // shrink-only under the file-budget gate.
 mod hold_marks;
 
+pub(crate) use hold_marks::hold_dir;
 pub(crate) use hold_marks::overlay_hold_marks;
 #[cfg(test)]
 pub(crate) use hold_marks::overlay_hold_marks_at;
@@ -4414,6 +4415,7 @@ config_dir = "~/.claude-alt"
         // its transcript still reads, so Follow, never Locate.
         assert_eq!(thread_reach(Some("claude"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("codex"), None), Reach::Follow);
+        assert_eq!(thread_reach(Some("footnote"), None), Reach::Follow);
         // opencode stays Locate on purpose: the portal's serve-attach
         // capability drives compatible serves to Drive from the Locate tier
         // (PEEK_READER_HARNESSES doc), and peek --follow reaches the 2.x
@@ -4457,6 +4459,10 @@ config_dir = "~/.claude-alt"
             // portal's serve-attach capability drives it) and its follow
             // dispatches through peek_one's SSE stream at runtime.
             .filter(|arm| arm != "opencode")
+            .chain(
+                body.contains("agent == \"footnote\"")
+                    .then(|| "footnote".to_string()),
+            )
             .collect();
         let mirror: std::collections::BTreeSet<String> = super::PEEK_READER_HARNESSES
             .into_iter()

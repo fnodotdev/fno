@@ -140,21 +140,22 @@ pub fn state_dir_value() -> PathBuf {
 }
 
 /// `paths.data_dir`'s class home: the `FNO_DATA_HOME` pin, else the merged
-/// `paths.data_dir` key, else the platform default `~/.local/share/fno`.
-/// The install payload and other binaries own this home; the state root
-/// keeps config and irreplaceable data.
+/// `paths.data_dir` key, else the platform default (`$XDG_DATA_HOME/fno`
+/// when set on the XDG platforms, else `~/.local/share/fno`). Resolved
+/// through `fno_homes`, the one class-home resolver both binaries share;
+/// the install payload and other binaries own this home.
 pub fn data_dir_value() -> PathBuf {
-    if let Some(pin) = std::env::var_os("FNO_DATA_HOME") {
-        if !pin.is_empty() {
-            return resolve_path(Path::new(&pin));
-        }
-    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let raw = super::merged_config(&repo_root());
-    let home = home_dir().to_string_lossy().into_owned();
-    match super::raw_get(&raw, "paths.data_dir").and_then(|v| v.as_str()) {
-        Some(configured) => resolve_path(&PathBuf::from(expanduser(configured, &home))),
-        None => home_dir().join(".local/share/fno"),
-    }
+    let configured = super::raw_get(&raw, "paths.data_dir")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    fno_homes::class_home(
+        &cwd,
+        "FNO_DATA_HOME",
+        configured.as_deref(),
+        fno_homes::ClassHome::Data,
+    )
 }
 
 /// Python `os.path.expanduser` for the `~/` shapes this reader meets. The
@@ -713,5 +714,34 @@ mod tests {
             "/tmp/fake-home/code/x"
         );
         assert_eq!(expanduser("/abs/path", "/tmp/fake-home"), "/abs/path");
+    }
+
+    #[test]
+    fn data_dir_value_honors_xdg_data_home() {
+        let _lock = crate::model_catalog::state_env_lock();
+        let base = std::env::temp_dir().join(format!("fno-xdg-data-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let empty_config = base.join("config.toml");
+        std::fs::write(&empty_config, "").unwrap();
+        let saved: Vec<(&'static str, Option<std::ffi::OsString>)> =
+            ["XDG_DATA_HOME", "FNO_DATA_HOME", "FNO_CONFIG"]
+                .map(|k| (k, std::env::var_os(k)))
+                .into_iter()
+                .collect();
+        let xdg = base.join("xdg-data");
+        std::env::set_var("XDG_DATA_HOME", &xdg);
+        std::env::remove_var("FNO_DATA_HOME");
+        // The pin makes the config chain the one empty file, so the machine's
+        // own global config cannot answer paths.data_dir into the assert.
+        std::env::set_var("FNO_CONFIG", &empty_config);
+        let got = data_dir_value();
+        for (key, value) in &saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::fs::remove_dir_all(&base).ok();
+        assert_eq!(got, xdg.join("fno"));
     }
 }

@@ -308,7 +308,7 @@ Hooks provide lifecycle control for autonomous loops, context injection, and sig
 | Event | Trigger | Hooks |
 |-------|---------|-------|
 | `Stop` | Session exit attempted | `target-stop-hook.sh` - blocks exit when `target-state.md` shows `status: IN_PROGRESS` and output lacks a `<promise>` tag |
-| `PostToolUse` | After any tool call | `spend-drift-monitor.js` - interactive spend cap and model-drift check |
+| `PostToolUse` | After any tool call | `hook-front.sh PostToolUse` (spend-drift leg) - interactive spend cap and model-drift check |
 | `SessionStart` | Session begins | `inject-project-vision.sh` - loads project vision into context |
 
 ### Hook Scripts
@@ -316,7 +316,7 @@ Hooks provide lifecycle control for autonomous loops, context injection, and sig
 | Script | Purpose |
 |--------|---------|
 | `target-stop-hook.sh` | In-session loop control. Prevents premature exit during autonomous pipeline |
-| `spend-drift-monitor.js` | Interactive spend cap and model-drift attestation |
+| `spend-drift-monitor.sh` | Shim into the spend-drift leg of `hook front PostToolUse`: interactive spend cap and model-drift attestation |
 | `inject-project-vision.sh` | Injects project vision document at session start |
 | `session-start.sh` | General session bootstrap |
 

@@ -672,7 +672,7 @@ fn wake_held(
             let mut runner = crate::burn_watch::run_command;
             let (delivered, via) =
                 crate::burn_watch::wake_with_text(sid, false, &text, "ci-tier", &mut runner);
-            if !delivered && via != "durable" {
+            if !crate::burn_watch::wake_reached(delivered, via) {
                 // No wake row, so the next pass retries this hold.
                 eprintln!("ci-tier: {slug}: wake for {branch} failed via {via}");
                 continue;

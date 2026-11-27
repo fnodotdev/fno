@@ -90,6 +90,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--wait",
     "--max",
     "--prompt-file",
+    "--runbook",
     "--mux-session",
     "--spawned-by",
     "--when",

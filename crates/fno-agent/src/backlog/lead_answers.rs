@@ -607,8 +607,26 @@ struct CachedRecommendation {
     option: Option<u64>,
 }
 
+/// Whether every node of a page's frozen team sits inside the check-in's
+/// scope. A lead promoted to a wider scope keeps the team string its open
+/// pages were written under, so an exact match hides those questions. Subset
+/// (not any-overlap) keeps a sibling lead's partly shared page off this line.
+fn team_within(team: &str, scope: &str) -> bool {
+    let members: BTreeSet<&str> = scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let nodes: Vec<&str> = team
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    !nodes.is_empty() && nodes.iter().all(|node| members.contains(node))
+}
+
 /// The pure fold: open pages whose question_id the stem names and whose
-/// team equals this check-in's canonical scope, oldest first. Rows carry
+/// team sits inside this check-in's scope, oldest first. Rows carry
 /// what the render needs to name the decide command. Each row joins the
 /// arm's cached item by id: `quiet` is `snoozed` or `deadline` while the
 /// question waits on either, and `overdue` names what a past deadline means
@@ -620,7 +638,6 @@ pub(crate) fn held_from_pages(
     items: &[CachedItem],
     now: i64,
 ) -> Vec<Value> {
-    let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
     for (stem, text) in pages {
         let Some((front, _)) = crate::attention_file::parse_page(text) else {
@@ -632,7 +649,7 @@ pub(crate) fn held_from_pages(
         if !crate::attention_arm::stem_names_id(stem, &front.question_id) {
             continue;
         }
-        if crate::territory::canonical_scope(&front.team) != canon {
+        if !team_within(&front.team, scope) {
             continue;
         }
         let epoch = chrono::DateTime::parse_from_rfc3339(&front.asked_at)
@@ -1038,6 +1055,7 @@ mod tests {
         assert!(row_line(1), "{lines:?}");
         assert!(row_line(2), "{lines:?}");
         a_due_question_lists_once_per_window_and_other_scopes_keep_their_record();
+        a_re_scoped_lead_still_sees_its_open_questions();
     }
 
     fn a_due_question_lists_once_per_window_and_other_scopes_keep_their_record() {
@@ -1107,5 +1125,49 @@ mod tests {
         );
         let failed = quiet_line(&worker, || Tail::Unreadable("transcript unreadable".into()));
         assert_eq!(failed, "READER FAILED transcript unreadable");
+    }
+
+    fn open_page(question_id: &str, team: &str) -> (String, String) {
+        let text = format!(
+            "---\nquestion_id: {question_id}\nstatus: open\nasked_at: 2026-10-20T15:32:09Z\nteam: {team}\nnode: lead-node\n---\nbody\n"
+        );
+        (format!("{question_id}-ask"), text)
+    }
+
+    /// A lead re-scoped with one more node added still sees the questions its
+    /// pages were written under, and a lead whose scope shares no node does not.
+    fn a_re_scoped_lead_still_sees_its_open_questions() {
+        let old_team = "lead-a,lead-b,lead-c,lead-d,lead-e,lead-f,lead-g,lead-h";
+        let pages = vec![
+            open_page("q-63c90fdc", old_team),
+            open_page("q-499a7db0", old_team),
+            open_page("q-other01", "lead-x,lead-y"),
+        ];
+        let widened = format!("{old_team},lead-w");
+        let rows = held_from_pages(&pages, &widened, &[], 0);
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(ids, ["q-63c90fdc", "q-499a7db0"], "{rows:?}");
+        let own = held_from_pages(&pages, "lead-x,lead-y", &[], 0);
+        let own_ids: Vec<&str> = own
+            .iter()
+            .filter_map(|r| r["question_id"].as_str())
+            .collect();
+        assert_eq!(own_ids, ["q-other01"], "{own:?}");
+        let narrower = held_from_pages(&pages, "lead-x", &[], 0);
+        assert!(
+            narrower.is_empty(),
+            "a page team wider than the scope stays off: {narrower:?}"
+        );
+        let mut partly = pages.clone();
+        partly.push(open_page("q-partly1", "lead-a,lead-z"));
+        let rows = held_from_pages(&partly, &widened, &[], 0);
+        assert_eq!(
+            rows.len(),
+            2,
+            "a page with a node outside the scope stays off: {rows:?}"
+        );
     }
 }

@@ -34,6 +34,7 @@ READER FAILED layout: layout unavailable: no stderr
 team: - teams, double-ruled 0, stale-teamed 1, manifest-splits -, disagreements -
   stale team epic-y on lead-exited (stored status exited); fno agent rm lead-exited (tool-call reading: no transcript for session sess-exited)
 READER FAILED posture: no session id resolved from the ambient environment
+review_board: none: make one from the Gus or Lara Visual Log, then post it with `fno backlog note <epic> "Review board: <slug>"`
 attention ledger: no merged PRs (0 asks, 0 merged), 0 repeated subject(s), 0 revert(s), 0 guard refusal(s)
 READER FAILED refusal_rate: no session id resolved from the ambient environment
 READER FAILED pushback: no session id; cannot attribute pushback spans
@@ -48,7 +49,7 @@ install: unmeasured (no fno source checkout resolved)
 READER FAILED visual_log_reader: ensure-reader.sh not found (env roots, install pointer, checkout copy)
 boot_revival: none
 parked: none
-coverage: 25 of 46 readings ok
+coverage: 27 of 48 readings ok
 failed readers: user_notes (no canon handoff doc for scope epic-y), operator_turns (no resolvable session identity), blueprint (no session id; cannot count this lead's blueprint subagents), escalations (unreadable (No such file or directory (os error 2))), capacity (gate payload did not parse: EOF while parsing a value at line 1 column 0: ), layout (layout unavailable: no stderr), workers (every status_age_s is null), answered (questions folder <ROOT>/spaces/<ROOTSLUG>-repo/questions unreadable: No such file or directory (os error 2)), posture (no session id resolved from the ambient environment), refusal_rate (no session id resolved from the ambient environment), pushback (no session id; cannot attribute pushback spans), subagents (no session id resolved from the ambient environment), wake_meter (no session id resolved from the ambient environment), correction_meter (no session id resolved from the ambient environment), drain (drain payload did not parse: EOF while parsing a value at line 1 column 0: ), held (the attention arm has not written items.json), repeated_asks (no session id resolved from the ambient environment), skill_drift (no session id resolved from the ambient environment), main_ci (gh api branches/main returned no head sha), visual_log_reader (ensure-reader.sh not found (env roots, install pointer, checkout copy)), self_hold (current session identity is unavailable)
 vs last beat: none, this is the first canonical beat for this scope
 change: attention: <FOLDED>

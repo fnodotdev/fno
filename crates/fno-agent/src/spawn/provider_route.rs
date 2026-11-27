@@ -235,27 +235,70 @@ impl RawRecord {
     }
 }
 
-/// The built-in vendor presets from the canonical reach TOML: every
-/// `[vendor.*]` with `builtin = true`, its `anthropic` table read as
-/// `base_url` / `api_key_env` / `api_key_file`.
+/// The canonical reach TOML's vendor rows, parsed once.
+#[derive(serde::Deserialize)]
+struct ReachFile {
+    #[serde(default)]
+    vendor: BTreeMap<String, ReachVendor>,
+}
+
+#[derive(serde::Deserialize)]
+struct ReachVendor {
+    #[serde(default)]
+    builtin: bool,
+    anthropic: Option<toml::Table>,
+    openai: Option<toml::Table>,
+    haiku_model: Option<String>,
+}
+
+fn reach_file() -> &'static ReachFile {
+    static REACH: OnceLock<ReachFile> = OnceLock::new();
+    REACH.get_or_init(|| {
+        toml::from_str(include_str!("../model_reach.toml")).expect("model_reach.toml parses")
+    })
+}
+
+/// One vendor's `protocol` endpoint table in the canonical reach TOML
+/// (`base_url`, `key_env`, `key_file`), and whether the vendor is builtin.
+pub(crate) fn reach_endpoint(vendor: &str, protocol: &str) -> Option<(&'static toml::Table, bool)> {
+    let row = reach_file().vendor.get(vendor)?;
+    let endpoint = match protocol {
+        "anthropic" => row.anthropic.as_ref(),
+        "openai" => row.openai.as_ref(),
+        _ => None,
+    }?;
+    Some((endpoint, row.builtin))
+}
+
+/// The built-in vendor presets: every reach preset with `builtin = true`.
+/// They route with no config record.
 fn builtin_providers() -> &'static BTreeMap<String, RawRecord> {
     static BUILTIN: OnceLock<BTreeMap<String, RawRecord>> = OnceLock::new();
     BUILTIN.get_or_init(|| {
-        let parsed: toml::Table =
-            toml::from_str(include_str!("../model_reach.toml")).expect("model_reach.toml parses");
+        reach_presets()
+            .iter()
+            .filter(|(_, (_, builtin))| *builtin)
+            .map(|(name, (raw, _))| (name.clone(), raw.clone()))
+            .collect()
+    })
+}
+
+/// The preset a config record of the same name overlays. A non-builtin
+/// vendor's preset fills only the fields its record leaves unset; the
+/// record itself stays the consent to bill it.
+fn record_base(name: &str) -> Option<RawRecord> {
+    reach_presets().get(name).map(|(raw, _)| raw.clone())
+}
+
+/// Every `[vendor.*]` in the canonical reach TOML with an `anthropic`
+/// table, read as `base_url` / `api_key_env` / `api_key_file`, and its
+/// builtin bit.
+fn reach_presets() -> &'static BTreeMap<String, (RawRecord, bool)> {
+    static PRESETS: OnceLock<BTreeMap<String, (RawRecord, bool)>> = OnceLock::new();
+    PRESETS.get_or_init(|| {
         let mut out = BTreeMap::new();
-        let Some(vendor) = parsed.get("vendor").and_then(toml::Value::as_table) else {
-            return out;
-        };
-        for (name, table) in vendor {
-            if !table
-                .get("builtin")
-                .and_then(toml::Value::as_bool)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let Some(endpoint) = table.get("anthropic").and_then(toml::Value::as_table) else {
+        for (name, row) in &reach_file().vendor {
+            let Some(endpoint) = row.anthropic.as_ref() else {
                 continue;
             };
             let mut raw = RawRecord::from(endpoint);
@@ -279,12 +322,8 @@ fn builtin_providers() -> &'static BTreeMap<String, RawRecord> {
                     .map(str::to_string);
             }
             raw.protocol = Some("anthropic".to_string());
-            raw.haiku_model = table
-                .get("haiku_model")
-                .and_then(toml::Value::as_str)
-                .filter(|v| !v.is_empty())
-                .map(str::to_string);
-            out.insert(name.clone(), raw);
+            raw.haiku_model = row.haiku_model.clone().filter(|v| !v.is_empty());
+            out.insert(name.clone(), (raw, row.builtin));
         }
         out
     })
@@ -303,7 +342,10 @@ pub fn providers(cwd: &Path) -> BTreeMap<String, ProviderRecord> {
             let Some(record) = value.as_table() else {
                 continue;
             };
-            let base = out.remove(name).unwrap_or_default();
+            let base = out
+                .remove(name)
+                .or_else(|| record_base(name))
+                .unwrap_or_default();
             out.insert(name.clone(), base.overlay(RawRecord::from(record)));
         }
     }
@@ -332,7 +374,10 @@ fn record_from_block(block: &toml::Table, name: &str) -> Option<ProviderRecord> 
     let raw = match (builtin_providers().get(name).cloned(), overlay) {
         (None, None) => return None,
         (Some(preset), None) => preset,
-        (preset, Some(overlay)) => preset.unwrap_or_default().overlay(overlay),
+        (preset, Some(overlay)) => preset
+            .or_else(|| record_base(name))
+            .unwrap_or_default()
+            .overlay(overlay),
     };
     Some(raw.fold_tiers())
 }
@@ -693,6 +738,18 @@ mod tests {
                 .get(&TierAlias::Haiku)
                 .map(String::as_str),
             Some("glm-4.7")
+        );
+        // A non-builtin vendor needs a record, and a one-key record takes
+        // the rest from the reach table.
+        assert!(record_from_block(&block, "openrouter").is_none());
+        let block: toml::Table =
+            toml::from_str("[providers.openrouter]\napi_key_env = \"OPENROUTER_API_KEY\"\n")
+                .expect("block parses");
+        let record = record_from_block(&block, "openrouter").expect("openrouter resolves");
+        assert_eq!(record.protocol, Protocol::Anthropic);
+        assert_eq!(
+            record.base_url.as_deref(),
+            Some("https://openrouter.ai/api")
         );
     }
 

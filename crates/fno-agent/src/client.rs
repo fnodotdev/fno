@@ -37,6 +37,8 @@ pub enum ClientError {
     DaemonBinMissing(PathBuf),
     #[error("daemon is not running")]
     DaemonNotRunning,
+    #[error("{0}")]
+    DaemonHeld(String),
     #[error(
         "no response from the daemon for `{method}` within {timeout:?} - it is either \
          wedged (listening, not serving) or still working a slow handler. `fno agent \
@@ -254,6 +256,9 @@ pub async fn ensure_daemon(
     let sock = home.supervisor_sock();
     if UnixStream::connect(&sock).await.is_ok() {
         return Ok(());
+    }
+    if let Some(hold) = crate::hold_marker::read_hold(home) {
+        return Err(ClientError::DaemonHeld(hold.refusal()));
     }
     if !daemon_bin.exists() {
         return Err(ClientError::DaemonBinMissing(daemon_bin.to_path_buf()));

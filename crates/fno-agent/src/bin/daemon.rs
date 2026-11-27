@@ -47,6 +47,13 @@ fn main() {
         std::process::exit(2);
     }
 
+    // A hold is a clean exit: launchd's KeepAlive relaunches only a failed one.
+    if let Some(hold) = fno_agent::hold_marker::read_hold(&fno_agent::paths::AgentsHome::from_env())
+    {
+        eprintln!("fno-agent-daemon: not starting; {}", hold.refusal());
+        return;
+    }
+
     // Test harnesses may launch children with SIGTERM blocked. The daemon owns
     // its SIGTERM listener below, so do not inherit a mask that makes graceful
     // shutdown permanently pending.

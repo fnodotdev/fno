@@ -18,8 +18,10 @@ split across lines is still seen):
                             environ.setdefault(, environ.pop( with a literal
                             UPPER_SNAKE name
   rs  crates/**/*.rs        env::var(, env::var_os(, env_dir_unless_null(
-                            and non_empty_env( with a literal name,
-                            any path part named target excluded
+                            and non_empty_env(/non_empty_env_os( with a
+                            literal name, plus the carrier argument of a
+                            class_home(/class_home_fast( call; any path
+                            part named target excluded
 
 Known limit: a name read through any other variable (lowercase locals, loop
 variables, concat!/format!-built names) is not seen. A name read through an
@@ -64,7 +66,11 @@ PY_READ_RE = re.compile(
     | environ\[\s*['"]([A-Z][A-Z0-9_]+)['"]\s*\]
     """
 )
-RS_READ_RE = re.compile(r'\b(?:env::var(?:_os)?|env_dir_unless_null|non_empty_env)\(\s*"([A-Z][A-Z0-9_]+)"')
+RS_READ_RE = re.compile(r'\b(?:env::var(?:_os)?|env_dir_unless_null|non_empty_env(?:_os)?)\(\s*"([A-Z][A-Z0-9_]+)"')
+# The class-home resolvers take the env carrier name as a parameter, so the
+# carrier never sits inside an env::var call. The first quoted UPPER_SNAKE
+# argument of a class_home(/class_home_fast( call names the carrier it reads.
+RS_RESOLVER_READ_RE = re.compile(r'\bclass_home(?:_fast)?\s*\([^)]*?"([A-Z][A-Z0-9_]+)"')
 
 # The same call shapes with a bare UPPER_SNAKE identifier instead of a literal.
 RS_CONST_READ_RE = re.compile(
@@ -139,6 +145,7 @@ def scan(root: Path) -> tuple[dict[str, dict[str, list[str]]], list[str]]:
             record_const("py", rel, lineno, const)
     for rel, text in texts["rs"]:
         harvest(RS_READ_RE, text, rel, "rs")
+        harvest(RS_RESOLVER_READ_RE, text, rel, "rs")
         for m in RS_CONST_READ_RE.finditer(text):
             lineno = text.count("\n", 0, m.start()) + 1
             const = next(g for g in m.groups() if g)

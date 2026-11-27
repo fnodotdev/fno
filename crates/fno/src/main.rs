@@ -314,6 +314,9 @@ enum Role {
     /// native in-process against the events journals. The tail passes
     /// through byte-verbatim, help included.
     ReviewPriorHead(Vec<OsString>),
+    /// `fno do review read <tail>`: serve the scoped diff and record the
+    /// session's receipt, native in-process.
+    ReviewRead(Vec<OsString>),
     /// `fno do review --help` (and the alias's): the native usage, printed
     /// here because no Python leg remains to list the five leaves.
     ReviewHelp,
@@ -428,6 +431,7 @@ enum Role {
     /// `fno agent mail unread`: the native cursor-bounded unread listing.
     /// The command and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
+    MailSent(Vec<OsString>),
     /// `fno agent mail view`: refused by name; the command is now `show`
     /// (no compat shell, the same rule as a removed mux command).
     MailViewRenamed,
@@ -570,6 +574,15 @@ fn fno_agent_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Pat
     cmd.args(action);
     cmd.args(rest);
     cmd.envs(fno::cli_usage::exec_env());
+    // The agent's in-process mux client reads the socket dir from this one
+    // variable; a user shell exports none, so the front door's resolution
+    // rides along.
+    if std::env::var_os("FNO_MUX_DIR")
+        .filter(|v| !v.is_empty())
+        .is_none()
+    {
+        cmd.env("FNO_MUX_DIR", proto::mux_dir());
+    }
     let error = cmd.exec();
     eprintln!("{label}: could not run fno-agent: {error}");
     1
@@ -1143,6 +1156,17 @@ fn classify_plan_family(
     Some((&["plan-cli"], tail, None))
 }
 
+/// `fno do runbook <anything>`: the whole group rides the runbook-cli door,
+/// the receipt door a runbook spawn's agent runs every step through.
+fn classify_runbook_family(
+    args: &[OsString],
+) -> Option<(&'static [&'static str], Vec<OsString>, Option<&'static str>)> {
+    if args.first()?.to_str()? != "do" || args.get(1)?.to_str()? != "runbook" {
+        return None;
+    }
+    Some((&["runbook-cli"], args.get(2..)?.to_vec(), None))
+}
+
 /// `fno do phase <anything>` and the deprecated bare `fno phase <anything>`:
 /// the whole group claims (kill-check is the group's one command, and it
 /// strips its own name from the tail), so the bare spelling's leaf sits one
@@ -1283,6 +1307,18 @@ fn classify_review_prior_head(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(rest.to_vec())
 }
 
+/// `fno do review read <tail>`: the receipt command, claimed by the same
+/// literal three-token prefix as its siblings.
+fn classify_review_read(args: &[OsString]) -> Option<Vec<OsString>> {
+    let [root, group, action, rest @ ..] = args else {
+        return None;
+    };
+    if root.to_str()? != "do" || group.to_str()? != "review" || action.to_str()? != "read" {
+        return None;
+    }
+    Some(rest.to_vec())
+}
+
 /// `fno do review <tail>` and the root alias `fno review <tail>`: the
 /// assurance root claims native when the tail names no leaf. Only the FIRST
 /// tail token names a leaf (a leaf spelled later is a flag value, exactly as
@@ -1300,7 +1336,14 @@ fn classify_review_root(args: &[OsString]) -> Option<(bool, bool, Vec<OsString>)
         };
     if matches!(
         tail.first().and_then(|a| a.to_str()),
-        Some("classify" | "post-dispositions" | "invocations" | "resolve-level" | "prior-head")
+        Some(
+            "classify"
+                | "post-dispositions"
+                | "invocations"
+                | "resolve-level"
+                | "prior-head"
+                | "read"
+        )
     ) {
         return None;
     }
@@ -1355,7 +1398,12 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
             // RemoteMail claim this arm replaces never fires for reply.
             Some(Role::MailReply(tail.to_vec()))
         }
-        "hold" | "dnd" | "hold-release" | "sent" | "ack" => Some(Role::MailHold(
+        "sent" => Some(Role::MailSent(
+            std::iter::once(OsString::from(command))
+                .chain(tail.to_vec())
+                .collect(),
+        )),
+        "hold" | "dnd" | "hold-release" | "ack" => Some(Role::MailHold(
             std::iter::once(OsString::from(command))
                 .chain(tail.to_vec())
                 .collect(),
@@ -1580,6 +1628,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
         .or_else(|| classify_state_family(args))
         .or_else(|| classify_phase_family(args))
         .or_else(|| classify_plan_family(args))
+        .or_else(|| classify_runbook_family(args))
         .or_else(|| classify_pr_stub_manifest(args))
         .or_else(|| classify_bare_stub_manifest(args))
     {
@@ -1602,6 +1651,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     }
     if let Some(rest) = classify_review_prior_head(args) {
         return Role::ReviewPriorHead(rest);
+    }
+    if let Some(rest) = classify_review_read(args) {
+        return Role::ReviewRead(rest);
     }
     if let Some((alias, help, rest)) = classify_review_root(args) {
         if help {
@@ -2392,11 +2444,22 @@ fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
             &["spawn-remote"],
             &rest,
         )),
-        Role::MailHold(rest) => fno::cli_usage::exit(fno_agent_exec(
-            "fno agent mail hold|dnd|hold-release|sent|ack",
-            &["mail"],
-            &rest,
-        )),
+        Role::MailHold(rest) => {
+            let is_hold = rest.first().is_some_and(|c| c == "hold" || c == "dnd");
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match is_hold.then(|| fno::mail_hold_status::run(&args)).flatten() {
+                Some(code) => fno::cli_usage::exit(code),
+                None => fno::cli_usage::exit(fno_agent_exec(
+                    "fno agent mail hold|dnd|hold-release|sent|ack",
+                    &["mail"],
+                    &rest,
+                )),
+            }
+        }
         Role::MailSend(rest) => {
             // Role::MailSend carries the tail without the command; the exec
             // prefix re-adds `send` or an id-shaped target reads as the command.
@@ -2441,7 +2504,30 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
             &rest,
         )),
         Role::MailUnread(rest) => {
-            fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match fno::mail_unread::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
+                }
+            }
+        }
+        Role::MailSent(rest) => {
+            let args: Vec<String> = rest
+                .iter()
+                .skip(1)
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            match fno::mail_sent::run(&args) {
+                Some(code) => fno::cli_usage::exit(code),
+                None => {
+                    fno::cli_usage::exit(fno_agent_exec("fno agent mail sent", &["mail"], &rest))
+                }
+            }
         }
         Role::MailViewRenamed => {
             eprintln!("fno agent mail view was renamed: use fno agent mail show");
@@ -2549,6 +2635,7 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
             &rest,
         )),
         Role::ReviewPriorHead(rest) => fno::cli_usage::exit(fno::review_prior_head::run(&rest)),
+        Role::ReviewRead(rest) => fno::cli_usage::exit(fno::review_read::run(&rest)),
         Role::ReviewHelp => {
             println!(
                 "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
@@ -2560,6 +2647,9 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
             println!("  classify <args>                   the findings classifier");
             println!("  invocations <action>              parse, join, reserve, emit, settle");
             println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
+            println!(
+                "  read                              serve the round's diff, record a receipt"
+            );
             fno::cli_usage::exit(0)
         }
         Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agent_exec(
@@ -2933,6 +3023,10 @@ mod tests {
         assert_eq!(
             decide_role(&os(&["do", "plan", "validate", "p.md"]), false),
             Role::TargetFamily(&["plan-cli"], os(&["validate", "p.md"]), None)
+        );
+        assert_eq!(
+            decide_role(&os(&["do", "runbook", "close", "r.jsonl"]), false),
+            Role::TargetFamily(&["runbook-cli"], os(&["close", "r.jsonl"]), None)
         );
         assert!(!matches!(
             decide_role(&os(&["plan", "validate", "p.md"]), false),

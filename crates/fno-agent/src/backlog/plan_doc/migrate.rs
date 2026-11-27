@@ -233,9 +233,9 @@ fn migrate_paths(res: &mut MigrateResult, paths: Vec<std::path::PathBuf>, apply:
     }
 }
 
-/// The `--gate-records` migration: lift the gate-block keys (consolidation,
-/// surface, decisions_acknowledged) out of frontmatter into a `## Gate
-/// records` section appended to the body. Line-level and byte-preserving,
+/// The `--gate-records` migration: lift the record keys (`records::GATE_KEYS`)
+/// out of frontmatter into the `## Gate records` fence, appending the section
+/// when the body has none. Line-level and byte-preserving,
 /// like `migrate_text`; the RENAME table never runs here.
 pub fn gate_records(plans_dir: &Path, apply: bool) -> MigrateResult {
     let mut res = MigrateResult::default();
@@ -267,8 +267,8 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// The gate-block keys this mode lifts. Top-level only: nested keys stay.
-const GATE_BLOCK_KEYS: &[&str] = &["consolidation", "surface", "decisions_acknowledged"];
+/// The keys this mode lifts. Top-level only: nested keys stay.
+const GATE_BLOCK_KEYS: &[&str] = super::records::GATE_KEYS;
 
 /// Cut `key:` plus every following indented, blank or comment line, up to the
 /// next top-level key. Returns the cut lines and the fm-index range end.
@@ -285,12 +285,102 @@ fn cut_block(fm_lines: &[&str], start: usize) -> (Vec<String>, usize) {
     (cut, i)
 }
 
+/// One YAML-safe plain or quoted scalar.
+fn yaml_scalar(text: &str) -> String {
+    serde_yaml_ng::to_string(text)
+        .map(|t| t.trim_end().to_string())
+        .unwrap_or_else(|_| format!("{text:?}"))
+}
+
 /// The top-level key of a frontmatter line, via migrate.rs's own key regex.
 fn migrate_key(line: &str) -> Option<String> {
     key_re()
         .captures(line)
         .filter(|c| c[1].is_empty())
         .map(|c| c[2].to_string())
+}
+
+/// Parse back: the cut text must yield the same YAML values the frontmatter
+/// carried, or the file needs a human. The error names why, for the note.
+fn cut_round_trips(fm: &str, cut_text: &str) -> Result<(), RoundTrip> {
+    let fm_value: serde_yaml_ng::Value = serde_yaml_ng::from_str(fm)
+        .map_err(|e| RoundTrip(format!("frontmatter does not parse: {e}")))?;
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(cut_text)
+        .map_err(|e| RoundTrip(format!("the cut does not parse: {e}")))?;
+    let parsed_map = parsed
+        .as_mapping()
+        .ok_or_else(|| RoundTrip("the cut is not a YAML mapping".into()))?;
+    for (k, v) in parsed_map {
+        let key = k.as_str().unwrap_or_default();
+        let original = fm_value
+            .get(key)
+            .cloned()
+            .unwrap_or(serde_yaml_ng::Value::Null);
+        if super::doc::yaml_to_json(v) != super::doc::yaml_to_json(&original) {
+            return Err(RoundTrip(format!("{key} cut does not round-trip")));
+        }
+    }
+    Ok(())
+}
+
+/// Why a cut failed its parse-back, worded for the review note.
+struct RoundTrip(String);
+
+impl std::fmt::Display for RoundTrip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Place the cut into the record fence (splicing into an existing one), keep
+/// the newest url as a scalar `pr_url` for the Obsidian PR column, and prove
+/// the migrated file lifts clean: no both-places, no stranger key.
+fn place_cut(
+    fm: &str,
+    mut keep: Vec<String>,
+    body: &str,
+    has_section: bool,
+    per_key: &[(&str, String)],
+    cut_text: &str,
+    notes: &mut Vec<String>,
+) -> Option<String> {
+    let new_body = if has_section {
+        match super::records::set_blocks(body, per_key) {
+            Ok(b) => b,
+            Err(e) => {
+                notes.push(format!("kept ({e}) - review"));
+                return None;
+            }
+        }
+    } else {
+        format!(
+            "{}\n## Gate records\n\n```yaml\n{}\n```\n",
+            body.trim_end_matches('\n'),
+            cut_text
+        )
+    };
+    if !top_level_keys(fm).contains("pr_url") {
+        let urls = super::records::body_list(&new_body, "urls").ok().flatten();
+        if let Some(last) = urls.as_ref().and_then(|u| u.last()) {
+            keep.push(format!("pr_url: {}", yaml_scalar(last)));
+        }
+    }
+    let new_text = format!("---\n{}\n---{}", keep.join("\n"), new_body);
+    match super::doc::load_plan_text(&new_text).map(|d| d.validation_map().map(|_| ())) {
+        Ok(Ok(())) => Some(new_text),
+        Ok(Err(e)) => {
+            notes.push(format!(
+                "kept (the migrated file does not lift: {e}) - review"
+            ));
+            None
+        }
+        Err(e) => {
+            notes.push(format!(
+                "kept (the migrated file does not parse: {e}) - review"
+            ));
+            None
+        }
+    }
 }
 
 /// One file's gate-records lift: (new_text, notes). new_text is None when
@@ -304,25 +394,32 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
     let fm = &m[2];
     let fm_lines: Vec<&str> = fm.lines().collect();
 
-    // A body already carrying the section would end up with two; that file
-    // needs a human, not a second fence.
+    // A body that already carries the section takes the cut inside its fence;
+    // a key the fence already holds would make two copies, so a human decides.
     let body = &m[3];
-    if super::doc::extract_sections(body)
-        .iter()
-        .any(|(h, _)| h == super::records::GATE_SECTION)
-    {
-        notes.push("kept (body already carries a ## Gate records section) - review".to_string());
-        return (None, notes);
-    }
+    let existing = match super::records::body_records(body) {
+        Ok(r) => r,
+        Err(e) => {
+            notes.push(format!("kept ({e}) - review"));
+            return (None, notes);
+        }
+    };
 
     // Find the cut ranges: each gate key's block, in line order.
     let mut keep: Vec<String> = Vec::new();
     let mut cut: Vec<String> = Vec::new();
+    let mut per_key: Vec<(&str, String)> = Vec::new();
     let mut blocks = 0usize;
     let mut i = 0usize;
     while let Some(line) = fm_lines.get(i) {
         match migrate_key(line) {
             Some(k) if GATE_BLOCK_KEYS.contains(&k.as_str()) => {
+                if existing.as_ref().is_some_and(|r| r.contains_key(&k)) {
+                    notes.push(format!(
+                        "kept ({k} is in both frontmatter and ## Gate records) - review"
+                    ));
+                    return (None, notes);
+                }
                 let (mut part, next) = cut_block(&fm_lines, i);
                 // A fence inside frontmatter would break the record fence.
                 if part.iter().any(|l| l.trim_start().starts_with("```")) {
@@ -330,6 +427,12 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
                     return (None, notes);
                 }
                 blocks += 1;
+                let key = GATE_BLOCK_KEYS
+                    .iter()
+                    .find(|g| **g == k)
+                    .copied()
+                    .unwrap_or_default();
+                per_key.push((key, part.join("\n")));
                 cut.append(&mut part);
                 i = next;
             }
@@ -343,48 +446,23 @@ pub fn gate_records_text(text: &str) -> (Option<String>, Vec<String>) {
         return (None, notes);
     }
 
-    // Parse back: the cut text must yield the same YAML values the
-    // frontmatter carried, or the file needs a human.
-    let fm_value: serde_yaml_ng::Value = match serde_yaml_ng::from_str(fm) {
-        Ok(v) => v,
-        Err(e) => {
-            notes.push(format!("kept (frontmatter does not parse: {e}) - review"));
-            return (None, notes);
-        }
-    };
     let cut_text = cut.join("\n");
-    let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&cut_text) {
-        Ok(v) => v,
-        Err(e) => {
-            notes.push(format!("kept (the cut does not parse: {e}) - review"));
-            return (None, notes);
-        }
-    };
-    let parsed_map = match parsed.as_mapping() {
-        Some(m) => m,
-        None => {
-            notes.push("kept (the cut is not a YAML mapping) - review".to_string());
-            return (None, notes);
-        }
-    };
-    for (k, v) in parsed_map {
-        let key = k.as_str().unwrap_or_default();
-        let original = fm_value
-            .get(key)
-            .cloned()
-            .unwrap_or(serde_yaml_ng::Value::Null);
-        if super::doc::yaml_to_json(v) != super::doc::yaml_to_json(&original) {
-            notes.push(format!("kept ({key} cut does not round-trip) - review"));
-            return (None, notes);
-        }
+    if let Err(why) = cut_round_trips(fm, &cut_text) {
+        notes.push(format!("kept ({why}) - review"));
+        return (None, notes);
     }
 
-    let new_text = format!(
-        "---\n{}\n---{}\n## Gate records\n\n```yaml\n{}\n```\n",
-        keep.join("\n"),
-        body.trim_end_matches('\n'),
-        cut_text,
-    );
+    let Some(new_text) = place_cut(
+        fm,
+        keep,
+        body,
+        existing.is_some(),
+        &per_key,
+        &cut_text,
+        &mut notes,
+    ) else {
+        return (None, notes);
+    };
     for key in GATE_BLOCK_KEYS {
         if cut.iter().any(|l| migrate_key(l).as_deref() == Some(*key)) {
             notes.push(format!("{key} -> ## Gate records"));
@@ -460,10 +538,42 @@ mod tests {
         // Re-running on a migrated file lifts nothing.
         let (again, _) = gate_records_text(&out);
         assert!(again.is_none());
-        // AC5-ERR: a body that already carries the section stays untouched.
+        // AC6-ERR: a key in both frontmatter and the fence stays untouched.
         let guarded = "---\nstatus: ready\nconsolidation:\n  outcome: absorb\n---\n\n## Gate records\n\n```yaml\nconsolidation:\n  outcome: absorb\n```\n";
         let (out2, notes2) = gate_records_text(guarded);
         assert!(out2.is_none());
         assert!(notes2.iter().any(|n| n.contains("review")), "{notes2:?}");
+        // AC6-HP: the six moved keys splice into an existing fence byte for
+        // byte, the newest url stays as a scalar pr_url, and a re-run is a no-op.
+        let moved = "kill_criteria:\n  - name: iteration_ceiling\n    predicate: iteration > 15\n    reason: r\ncode_index:\n  main_sha: ee5e0754ad\n  providers: []\ndone_probes:\n  - \"true\"\nurls:\n- https://github.com/o/r/pull/1\n- https://github.com/o/r/pull/2\nsession_ids: [s-1]\nsources:\n  - a.md";
+        let text = format!("---\nstatus: ready\n{moved}\npriority: p2\n---\n\n# T\n\n## Gate records\n\n```yaml\nconsolidation:\n  outcome: absorb\n```\n\n## After\n\ntail\n");
+        let before = crate::plan_doc::doc::load_plan_text(&text).unwrap();
+        let (out3, notes3) = gate_records_text(&text);
+        let out3 = out3.unwrap_or_else(|| panic!("{notes3:?}"));
+        assert!(
+            out3.starts_with(
+                "---\nstatus: ready\npriority: p2\npr_url: https://github.com/o/r/pull/2\n---\n"
+            ),
+            "{out3}"
+        );
+        assert!(
+            out3.contains(&format!(
+                "```yaml\nconsolidation:\n  outcome: absorb\n{moved}\n```\n\n## After\n\ntail\n"
+            )),
+            "{out3}"
+        );
+        let after = crate::plan_doc::doc::load_plan_text(&out3).unwrap();
+        let lifted = after.validation_map().unwrap();
+        for key in [
+            "kill_criteria",
+            "code_index",
+            "done_probes",
+            "urls",
+            "session_ids",
+            "sources",
+        ] {
+            assert_eq!(lifted.get(key), before.frontmatter.get(key), "{key}");
+        }
+        assert!(gate_records_text(&out3).0.is_none());
     }
 }

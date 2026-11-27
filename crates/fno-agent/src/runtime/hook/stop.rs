@@ -12,7 +12,6 @@
 
 use crate::harness::Harness;
 use serde_json::Value;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -43,14 +42,9 @@ pub fn run(args: &[String]) -> i32 {
         .and_then(|i| args.get(i + 1))
         .cloned();
     let sandbox_dirty = args.iter().any(|a| a == "--sandbox-dirty");
-    let mut payload = String::new();
-    if std::io::stdin().read_to_string(&mut payload).is_err() {
-        // An unreadable payload is not a verdict for an owner, but the shell
-        // treated it as an empty read and continued; with no identity, the
-        // ownership evaluation answers no-owner and the stop allows.
-        eprintln!("target stop-hook: unreadable payload; allowing");
-        return 0;
-    }
+    // An unreadable payload reads as empty: with no identity, the ownership
+    // evaluation answers no-owner and the stop allows.
+    let payload = super::read_stdin();
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
@@ -976,9 +970,9 @@ fn emit_block_for_harness(session_id: &str, reason: &str) -> i32 {
     ]
     .iter()
     .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
-    if claude && !foreign {
+    if (claude && !foreign) || super::capturing() {
         let out = serde_json::json!({ "decision": "block", "reason": reason });
-        println!("{out}");
+        super::emit_line(&out.to_string());
         return 0;
     }
     eprintln!("target stop-hook: {reason}");
@@ -1264,14 +1258,46 @@ fn correction_gate(cwd: &Path, fire: &Fire) -> Option<String> {
     let turn = crate::operator_turns::corrections_in(&outcome)
         .into_iter()
         .next()?;
+    let law = correction_law(crate::decision_index::default_store_live().ok());
     Some(format!(
-        "operator turn {} reads as a {} and is undispositioned: \"{}\". A correction or request \
-         the user types is a product change for every fno user (decision user-corrections-are-\
-         product-fixes): record it with `fno backlog idea --source-kind operator_request`, \
-         `fno backlog capture add`, or `fno inbox decisions set`, then run `fno inbox operator ack {} \
+        "operator turn {} reads as a {} and is undispositioned: \"{}\". {law} Record it with \
+         `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or \
+         `fno inbox decisions set`, then run `fno inbox operator ack {} \
          --outcome law:<id>|capture:<fu-id>|node:<id>|nothing` before this turn ends.",
         turn.turn_id, turn.kind, turn.excerpt, turn.turn_id
     ))
+}
+
+const CORRECTION_SUBJECT: &str = "user-corrections-are-product-fixes";
+
+/// The live law the correction gate stands on, read from the store at the
+/// refusal so a superseded copy never speaks for it. An unreadable store
+/// names the subject and the read command instead.
+/// The three decision-row fields the correction refusal reads.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct LawRow {
+    subject: String,
+    ts: String,
+    decision: String,
+}
+
+fn correction_law(store: Option<crate::decision_index::Index>) -> String {
+    let newest = store.and_then(|index| {
+        index
+            .rows
+            .into_iter()
+            .filter_map(|r| serde_json::from_value::<LawRow>(r).ok())
+            .filter(|r| r.subject == CORRECTION_SUBJECT && !r.decision.is_empty())
+            .max_by(|a, b| a.ts.cmp(&b.ts))
+    });
+    match newest {
+        Some(row) => format!("The live law ({CORRECTION_SUBJECT}): {}", row.decision),
+        None => format!(
+            "The live law sits under decision {CORRECTION_SUBJECT}; read it with \
+             `fno backlog decisions {CORRECTION_SUBJECT}`."
+        ),
+    }
 }
 
 /// The node id from the resident manifest, when THIS stop's session is the
@@ -1554,7 +1580,10 @@ fn mtime_secs(p: &Path) -> Option<u64> {
 
 /// First non-empty, non-`null` value among `keys`, first matching line wins,
 /// quotes and whitespace stripped. Mirrors the shim's `grep | sed | tr` chain.
-fn first_raw_field(content: &str, keys: &[&str]) -> Option<String> {
+/// The raw value of the first line whose trimmed key is named, quotes
+/// stripped, `null` and empty read as absent. Shared with the relocation
+/// hook's manifest claim, which reads the same manifest shape.
+pub(crate) fn first_raw_field(content: &str, keys: &[&str]) -> Option<String> {
     for line in content.lines() {
         let Some((key, value)) = line.split_once(':') else {
             continue;
@@ -1603,6 +1632,27 @@ fn git_delivery_prefix(repo_root: &Path) -> PathBuf {
 mod tests {
     use super::goal_arbitration::StopDecisionEvent;
     use super::*;
+
+    #[test]
+    fn the_correction_refusal_quotes_the_live_law_or_names_the_read() {
+        let row = |ts: &str, text: &str| serde_json::json!({"subject": CORRECTION_SUBJECT, "ts": ts, "decision": text});
+        let index = crate::decision_index::Index {
+            rows: vec![
+                row("2026-11-09T00:00:00Z", "old copy"),
+                row("2026-11-10T00:00:00Z", "Fix the delivery gap."),
+            ],
+            damaged: 0,
+        };
+        let live = correction_law(Some(index));
+        assert!(live.contains("Fix the delivery gap."), "{live}");
+        assert!(!live.contains("old copy"), "{live}");
+        assert!(!live.contains("is a product change for every fno user"));
+        let unread = correction_law(None);
+        assert!(
+            unread.contains("fno backlog decisions user-corrections-are-product-fixes"),
+            "{unread}"
+        );
+    }
 
     #[test]
     fn promise_ending_turn_stamps_no_waiting_on_user() {

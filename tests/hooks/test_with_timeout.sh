@@ -404,7 +404,7 @@ PY
 # Scope control: the known UserPromptSubmit hooks must all parse out, else the
 # json read broke and every check below is vacuous (AGENTS.md: an empty result is
 # a claim, not a success).
-for _known in session-state.sh born-with-why-offer-inject.sh inject-mail-notify.sh; do
+for _known in hook-front.sh; do
     grep -qx "$_known" <<<"$ups_hooks" \
         || fail "scope control: $_known missing from parsed UserPromptSubmit hooks; guard cannot run"
 done
@@ -414,6 +414,9 @@ guard_fail=0
 for name in $ups_hooks; do
     f="$hooks_dir/$name"
     [[ -f "$f" ]] || { fail "UserPromptSubmit hook $name not found at $f"; guard_fail=1; continue; }
+    # The front bounds each leg in process under its own timeout, each below
+    # the registered one (crates/fno-agent/src/runtime/hook/front.rs).
+    [[ "$name" == hook-front.sh ]] && continue
 
     # (a) If it touches a daemon at all - a bare fno/fno-agent token, or a
     #     resolved "$VAR" report RPC over a socket - it must source the bound.

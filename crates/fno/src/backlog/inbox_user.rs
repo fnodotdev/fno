@@ -161,14 +161,14 @@ pub fn classify_inbox_day(args: &[OsString]) -> Option<Vec<OsString>> {
         return None;
     }
     let kind = args[2].to_str()?;
-    if !matches!(kind, "start" | "end") {
+    if !matches!(kind, "start" | "end" | "away") {
         return None;
     }
-    Some(vec![
-        OsString::from("--kind"),
-        OsString::from(kind),
-        OsString::from("--commit"),
-    ])
+    let mut argv = vec![OsString::from("--kind"), OsString::from(kind)];
+    if kind != "away" {
+        argv.push(OsString::from("--commit"));
+    }
+    Some(argv)
 }
 
 /// What `fno inbox` prints when no native command claims the words: a help

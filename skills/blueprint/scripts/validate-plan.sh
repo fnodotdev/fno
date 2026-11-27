@@ -22,18 +22,40 @@ _fm_has() {
         | grep -E "$1" >/dev/null
 }
 
+# The two homes of the record keys, frontmatter first, then the lines of the
+# `## Gate records` fence. Both put keys at column 0, so one anchored pattern
+# reads either form. A heading quoted inside another fence is body, as in the
+# binary's section split.
+_meta_text() {
+    awk '
+        function lead(s) { sub(/^[[:space:]]*/, "", s); return s }
+        c < 2 && /^---/ { c++; next }
+        c == 1 { print; next }
+        c < 1 { next }
+        rec == 2 { if (lead($0) ~ /^```+[[:space:]]*$/) exit; print; next }
+        rec == 1 { if ($0 ~ /^## /) exit; if (lead($0) ~ /^```yaml[[:space:]]*$/) rec = 2; next }
+        outer != "" { t = lead($0); if (index(t, outer) == 1 && t ~ /^(`+|~+)[[:space:]]*$/) outer = ""; next }
+        { t = lead($0) }
+        t ~ /^(```|~~~)/ { match(t, /^(`+|~+)/); outer = substr(t, 1, RLENGTH); next }
+        /^## Gate records[[:space:]]*$/ { rec = 1 }
+    ' "${1:-$PLAN_DIR}" 2>/dev/null
+}
+
+_meta_has() {
+    _meta_text "${2:-$PLAN_DIR}" | grep -E "$1" >/dev/null
+}
+
 # Probe list entries, raw: one line per done_probes/close_probes item (block
 # list) or the whole inline bracket line. Read by the portability gate.
 _probe_scan() {
-    awk '
-        /^---/{c++; if(c==2) exit; next}
-        c==1 {
+    _meta_text "$1" | awk '
+        {
             if ($0 ~ /^(done_probes|close_probes):[[:space:]]*\[/) { print; next }
             if ($0 ~ /^(done_probes|close_probes):[[:space:]]*$/) { inlist=1; next }
             if (inlist && $0 ~ /^[[:space:]]*-[[:space:]]/) { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next }
             if (inlist && $0 ~ /^[[:space:]]*[^[:space:]#-]/) { inlist=0 }
         }
-    ' "$1" 2>/dev/null
+    '
 }
 
 _is_quick_plan() {
@@ -485,10 +507,10 @@ if [[ -f "$PLAN_DIR" ]]; then
         # activity alone (PR open, CI green, reviewed) with nothing checking the
         # goal itself. loop-check holds DonePRGreen on the same absence. A docs
         # or research plan opts out by its domain.
-        if _fm_has '^[[:space:]]*done_probes:[[:space:]]*\[[[:space:]]*\]' \
+        if _meta_has '^[[:space:]]*done_probes:[[:space:]]*\[[[:space:]]*\]' \
             && _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
             error "code plan declares an empty done_probes list; add a probe that proves the goal, not the activity"
-        elif _fm_has '^[[:space:]]*done_probes:'; then
+        elif _meta_has '^[[:space:]]*done_probes:'; then
             ok "declares done_probes (runtime evidence bound at ship)"
         elif _fm_has '^[[:space:]]*domain:[[:space:]]*code'; then
             error "code plan declares no done_probes; add a probe that proves the goal, not the activity (a docs or research plan sets domain: docs|research instead)"
@@ -916,14 +938,10 @@ check_kill_criteria_file() {
     local file="$1"
     local label="$2"     # display name for error messages
     local block=""
-    # kill_criteria always lives in the plan frontmatter (the heading form is
-    # no longer authored - G1). Extract lines inside the top-level frontmatter
-    # (between the first two ---) then the kill_criteria: block up to the next
-    # top-level key.
-    block=$(awk '
-        /^---/ { c++; if (c==2) exit; next }
-        c==1 { print }
-    ' "$file" | awk '
+    # kill_criteria lives in the ## Gate records fence, or in legacy
+    # frontmatter (the heading form is no longer authored). Read both homes,
+    # then the kill_criteria: block up to the next top-level key.
+    block=$(_meta_text "$file" | awk '
         /^kill_criteria:/ { in_block=1; next }
         in_block && /^[A-Za-z_][A-Za-z0-9_-]*:/ { in_block=0 }
         in_block { print }
@@ -962,10 +980,21 @@ check_kill_criteria_file() {
     ok "$label: kill_criteria has $count entr$([[ $count -eq 1 ]] && echo y || echo ies)"
 }
 
-# kill_criteria always lives in the single-doc plan's own frontmatter (the
-# heading form is no longer authored - G1).
+# kill_criteria lives in the single-doc plan's own ## Gate records fence or
+# legacy frontmatter (the heading form is no longer authored).
 if [[ -f "$PLAN_DIR" ]]; then
     check_kill_criteria_file "$PLAN_DIR" "$(basename "$PLAN_DIR")"
+    # A moved key still in frontmatter is legacy: it validates today, and one
+    # WARN names the migration that moves it into the fence.
+    _legacy_keys=""
+    for _k in kill_criteria done_probes code_index urls session_ids sources; do
+        if _fm_has "^${_k}:"; then
+            _legacy_keys+="${_legacy_keys:+, }$_k"
+        fi
+    done
+    if [[ -n "$_legacy_keys" ]]; then
+        warn "$(basename "$PLAN_DIR"): $_legacy_keys in frontmatter - run fno do plan migrate-keys --gate-records --apply to move them into ## Gate records"
+    fi
 fi
 
 # -------------------------------------------------------------------
@@ -1617,10 +1646,7 @@ check_code_index_file() {
     [[ -n "$repo_root" ]] || repo_root="$(cd "$base" && pwd)"
     detection=$(bash "$detect_script" "$repo_root" 2>/dev/null)
 
-    block=$(awk '
-        /^---/ { c++; next }
-        c == 1 { print }
-    ' "$file" | awk '
+    block=$(_meta_text "$file" | awk '
         /^code_index:/ { inblk = 1; print; next }
         inblk && /^[^[:space:]#-]/ { inblk = 0 }
         inblk { print }
@@ -1628,7 +1654,7 @@ check_code_index_file() {
 
     local findings=()
     if [[ -z "$block" ]]; then
-        findings+=("frontmatter carries no code_index: block - run the planner's step 2-index, then record main_sha (the origin/main sha you read) and providers (one entry per index, or [])")
+        findings+=("the plan carries no code_index: block in ## Gate records - run the planner's step 2-index, then record main_sha (the origin/main sha you read) and providers (one entry per index, or [])")
     else
         if ! grep -Eq '^[[:space:]]*main_sha:[[:space:]]*[0-9a-f]{7,40}[[:space:]]*$' <<< "$block"; then
             findings+=("code_index.main_sha is missing or not a 7-to-40-hex sha - write the origin/main sha the plan read, e.g. main_sha: 9817805bf5e8")

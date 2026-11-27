@@ -6,7 +6,7 @@
 //! never fires and the only turn signal is PreToolUse on every goal-leg
 //! tool call. That shape is pinned by the codex-pre-tool-use fixture.
 
-use super::{effort_field, str_field, HookEvent};
+use super::{effort_field, permission_message, str_field, HookEvent};
 use serde_json::Value;
 
 /// How far back into a rollout the turn_context scan reads. A turn_context
@@ -26,12 +26,7 @@ pub(crate) fn normalize_with_root(
 ) -> HookEvent {
     let session_id = str_field(payload, "session_id");
     let tool = str_field(payload, "tool_name");
-    let message = match str_field(payload, "message") {
-        m if m.is_empty() && event == "PermissionRequest" && !tool.is_empty() => {
-            format!("waiting on approval to run {tool}")
-        }
-        m => m,
-    };
+    let message = permission_message(event, &tool, str_field(payload, "message"));
     let mut model = str_field(payload, "to_model");
     let mut effort = effort_field(payload);
     // The payload wins when it carries the axes; a Stop fire with none reads

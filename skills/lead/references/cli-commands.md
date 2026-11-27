@@ -64,7 +64,7 @@ Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (ro
 
 | You are trying to | The trap |
 |---|---|
-| Name the vendor | `--model` alone never does. It is exact passthrough to the harness's own CLI. `--route zai/glm-5.3` names the vendor. `-P/--provider` is retired on spawn and exits 2. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
+| Name the vendor | `--model` alone never does. It is exact passthrough to the harness's own CLI. `--route zai/glm-5.3` names the vendor. `-P/--provider` is retired on spawn and exits 2. `--route` fails closed on an unknown vendor or a missing key. It runs on claude, and on codex with `--as headless`. |
 | Name the CLI binary | That is `-H/--harness`. `-P` is not it, and `-H` no longer means headless. |
 | Fire a one-shot | `-p` off spawn is a refusal, not a synonym. `--as headless` or `--once` is the one-shot. |
 | Escape an inherited tier remap | `ANTHROPIC_DEFAULT_SONNET_MODEL` and its siblings remap a tier for the whole inherited environment, so a `sonnet` spawn can land on another vendor's model. `env -u` escapes. Pinned by `cli/tests/unit/test_model_routing.py`. |
