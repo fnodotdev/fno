@@ -559,8 +559,9 @@ struct InvocationFold {
     /// The newest assistant or user timestamp before the line being read.
     last_activity: Option<String>,
     session: Option<String>,
-    /// The first node that a typed command of this session named.
-    session_node: Option<String>,
+    /// The node that the newest typed command named. A row with no node of
+    /// its own ran inside that command's turn.
+    command_node: Option<String>,
 }
 
 impl InvocationFold {
@@ -644,7 +645,7 @@ impl InvocationFold {
             kind,
             name: name.to_string(),
             session: self.session(),
-            node: node.or_else(|| self.session_node.clone()),
+            node: node.or_else(|| self.command_node.clone()),
             start: timestamp.clone(),
             end: None,
             outcome: None,
@@ -809,15 +810,13 @@ impl InvocationFold {
         };
         let node = xml_block(text, "<command-args>", "</command-args>")
             .and_then(crate::rules_source::node_in_text);
-        if self.session_node.is_none() {
-            self.session_node = node.clone();
-        }
+        self.command_node = node.clone();
         self.open_command = Some(self.rows.len());
         self.rows.push(Invocation {
             kind: InvocationKind::Command,
             name: name.trim_start_matches('/').to_string(),
             session: self.session(),
-            node: node.or_else(|| self.session_node.clone()),
+            node: node.or_else(|| self.command_node.clone()),
             start: timestamp,
             end: None,
             outcome: None,
@@ -837,10 +836,11 @@ impl InvocationFold {
     fn finish(mut self) -> Vec<Invocation> {
         self.close_command();
         // A goal's set record is written before the command line that names its
-        // node, so a goal row takes the session node when the pass ends.
+        // node, so a goal row takes the newest command's node when the pass
+        // ends.
         for row in self.rows.iter_mut() {
             if row.kind == InvocationKind::Goal && row.node.is_none() {
-                row.node = self.session_node.clone();
+                row.node = self.command_node.clone();
             }
         }
         self.rows
@@ -2113,7 +2113,8 @@ mod tests {
     /// A typed command is one row, from its line to the last activity before
     /// the operator's next turn. A result, a notification, a mail and a
     /// compaction summary stay inside the turn, and a summary that quotes both
-    /// tags opens no command.
+    /// tags opens no command. A row with no node of its own takes the node of
+    /// the newest typed command.
     #[test]
     fn command_fixture_spans_the_turn() {
         let rows = fold(&[
@@ -2150,8 +2151,13 @@ mod tests {
                 "2026-11-24T06:10:00.000Z",
                 "<local-command-stdout>compacted</local-command-stdout>",
             ),
+            user_line(
+                "2026-11-24T07:00:00.000Z",
+                r#"<command-message>fno:fix</command-message>\n<command-name>/fno:fix</command-name>\n<command-args>x-bbbb</command-args>"#,
+            ),
+            call_line("2026-11-24T07:00:05.000Z", "call_s", "Skill", r#"{"skill":"fno:tdd"}"#),
         ]);
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 3);
         let command = &rows[0];
         assert_eq!(command.kind, InvocationKind::Command);
         assert_eq!(command.name, "fno:target");
@@ -2159,6 +2165,11 @@ mod tests {
         assert_eq!(command.start.as_deref(), Some("2026-11-24T04:51:25.957Z"));
         assert_eq!(command.end.as_deref(), Some("2026-11-24T05:40:00.000Z"));
         assert_eq!(command.outcome, None);
+        // A row with no node of its own takes the node of the newest typed
+        // command, not of the first one.
+        assert_eq!(rows[1].name, "fno:fix");
+        assert_eq!(rows[2].kind, InvocationKind::Skill);
+        assert_eq!(rows[2].node.as_deref(), Some("x-bbbb"));
     }
 
     /// An Agent call whose result is a launch reads `launched` with no end. A
