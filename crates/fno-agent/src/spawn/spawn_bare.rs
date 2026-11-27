@@ -839,7 +839,7 @@ pub fn pre_gate(
         None,
         cwd,
         None,
-        params.get("role").and_then(Value::as_str),
+        params.pointer("/role").and_then(Value::as_str),
     )
     .map_err(|e| {
         eprintln!("fno agent spawn: {e}");

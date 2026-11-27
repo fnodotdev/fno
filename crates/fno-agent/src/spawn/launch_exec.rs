@@ -54,7 +54,7 @@ fn write_lane_settings(
         None,
         cwd,
         payload.pointer("/node").and_then(Value::as_str),
-        payload.get("role").and_then(Value::as_str),
+        payload.pointer("/role").and_then(Value::as_str),
     )
 }
 
