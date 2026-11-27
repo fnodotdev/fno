@@ -84,6 +84,13 @@
      }
     },
     {
+     "name": "allow_rules",
+     "default": {
+      "default": true,
+      "roles": {}
+     }
+    },
+    {
      "name": "sandbox",
      "default": {
       "on_unavailable": "refuse"
@@ -979,6 +986,19 @@
     {
      "name": "tool_boundary_ordinary",
      "default": false
+    }
+   ]
+  },
+  "AllowRulesBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "default",
+     "default": true
+    },
+    {
+     "name": "roles",
+     "default": {}
     }
    ]
   },
@@ -3581,6 +3601,8 @@
   "user.timezone",
   "user.working_hours",
   "user.auto_approve_routine",
+  "allow_rules.default",
+  "allow_rules.roles",
   "join.sandbox",
   "sandbox.on_unavailable",
   "sandbox.provider",

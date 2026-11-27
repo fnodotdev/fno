@@ -110,7 +110,7 @@ pub fn route_seam(
     }
     match resolve_target(route, cwd, env_get) {
         Err(line) => RouteSeam::Refuse(line),
-        Ok(target) => settled(&|reason| refused(route, reason), target, cwd),
+        Ok(target) => settled(&|reason| refused(route, reason), target, cwd, None),
     }
 }
 
@@ -249,7 +249,12 @@ pub fn resolve_target(
 
 /// Write the route's `--settings` file and hand the lane its route. A write
 /// failure refuses in the caller's own line, `refuse(reason)`.
-fn settled(refuse: &dyn Fn(&str) -> String, target: Target, cwd: &Path) -> RouteSeam {
+fn settled(
+    refuse: &dyn Fn(&str) -> String,
+    target: Target,
+    cwd: &Path,
+    role: Option<&str>,
+) -> RouteSeam {
     let route_env: Map<String, Value> = target
         .env
         .iter()
@@ -263,6 +268,7 @@ fn settled(refuse: &dyn Fn(&str) -> String, target: Target, cwd: &Path) -> Route
         None,
         cwd,
         None,
+        role,
     ) {
         Ok(Some(path)) => path,
         Ok(None) => return RouteSeam::Refuse(refuse("the route wrote no settings file")),
@@ -320,6 +326,7 @@ pub fn role_seam(
             },
             target,
             cwd,
+            Some(role),
         ),
     }
 }

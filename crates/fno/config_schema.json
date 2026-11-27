@@ -52,6 +52,26 @@
     "title": "AppBlock",
     "type": "object"
    },
+   "AllowRulesBlock": {
+    "description": "fno's allow rules ride each Claude Code spawn (user ruling D3653).",
+    "properties": {
+     "default": {
+      "default": true,
+      "title": "Default",
+      "type": "boolean"
+     },
+     "roles": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "default": {},
+      "title": "Roles",
+      "type": "object"
+     }
+    },
+    "title": "AllowRulesBlock",
+    "type": "object"
+   },
    "BuddyBlock": {
     "description": "Buddy mod settings (nested under 'config.buddy').\n\nThe buddy mod (plugins/buddy) reads the section once per session with `fno config get buddy` and falls back to the same defaults when fno is missing or the binary predates the section. The keys own the mod's fixed numbers: the reroll economy (bank cap, ships per earned reroll, the daily reroll), the event-reaction model-line cooldown and model alias, and the fleet read interval.",
     "properties": {
@@ -4195,6 +4215,9 @@
    "user": {
     "$ref": "#/$defs/UserBlock"
    },
+   "allow_rules": {
+    "$ref": "#/$defs/AllowRulesBlock"
+   },
    "sandbox": {
     "$ref": "#/$defs/SandboxBlock"
    },
@@ -4809,6 +4832,28 @@
    "default_source": "default",
    "doc": "Auto-approve routine worker file work: while true, a new spawn gets Claude Code permission rules that allow reads and edits in its own worktree and plan folder. Claude Code still applies deny and ask rules first, and secret and settings names keep their prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in an interactive terminal. A command with no terminal cannot set it. That check slows an agent down and does not stop one with a Bash tool, so the Bash permission is the real guard.",
    "edit": "toggle"
+  },
+  {
+   "path": "allow_rules.default",
+   "label": "Ride fno's allow rules with each spawn",
+   "type": "bool",
+   "default": true,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Ride fno's allow rules with each spawn (user ruling D3653): every Claude Code spawn composes a settings file whose permissions.allow carries fno's must-enable command rows, so a worker never waits on a classifier prompt for fno's own commands. On by default. A value that is missing or mistyped reads as on; only an explicit false turns the ride-along off. Claude Code still applies deny and ask rules first, so a rule here never grants past your own settings.",
+   "edit": "toggle"
+  },
+  {
+   "path": "allow_rules.roles",
+   "label": "Per-role override",
+   "type": "dict[str, bool]",
+   "default": {},
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Per-role override of allow_rules.default keyed by the spawn's --role (for example allow_rules.roles.lead = false). The role value wins over the default; a role with no row uses the default.",
+   "edit": "editor"
   },
   {
    "path": "sandbox.on_unavailable",

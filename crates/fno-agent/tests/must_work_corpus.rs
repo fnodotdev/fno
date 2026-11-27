@@ -14,6 +14,80 @@ const TABLE: &str = include_str!(concat!(
     "/../fno/src/setup/must_enable.toml"
 ));
 
+/// The spawn-side vendored copy `auto_approve` ships. Byte-identical to the
+/// canonical table, pinned below, so a drift can never land quietly.
+const VENDORED: &str = include_str!("../src/spawn/must_enable.toml");
+
+/// The rows of the vendored table, rendered the way `auto_approve`
+/// renders them for a spawn's `permissions.allow`.
+fn vendored_rows() -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Word {
+        One(String),
+        Any(Vec<String>),
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        prefix: Vec<Word>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RuleTable {
+        #[serde(default)]
+        rule: Vec<Row>,
+    }
+    let table: RuleTable = toml::from_str(VENDORED).expect("the vendored table parses");
+    table
+        .rule
+        .iter()
+        .flat_map(|row| {
+            let mut out: Vec<Vec<String>> = vec![Vec::new()];
+            for word in &row.prefix {
+                let alts: Vec<&String> = match word {
+                    Word::One(w) => vec![w],
+                    Word::Any(ws) => ws.iter().collect(),
+                };
+                out = out
+                    .iter()
+                    .flat_map(|head| {
+                        alts.iter().map(move |w| {
+                            let mut next = head.clone();
+                            next.push((*w).clone());
+                            next
+                        })
+                    })
+                    .collect();
+            }
+            out
+        })
+        .map(|words| format!("Bash({} *)", words.join(" ")))
+        .collect()
+}
+
+fn row_admits(rule: &str, seg: &[&str]) -> bool {
+    let Some(prefix) = rule
+        .strip_prefix("Bash(")
+        .and_then(|r| r.strip_suffix(" *)"))
+    else {
+        return false;
+    };
+    let cmd = seg.join(" ");
+    cmd == prefix || cmd.starts_with(&format!("{prefix} "))
+}
+
+/// The plain-word segments of a compound command, split where all three
+/// harnesses split one: `&&`, `||`, `;` and `|` (crate fno's `segments`).
+fn segments(command: &str) -> Vec<Vec<&str>> {
+    command
+        .split("&&")
+        .flat_map(|s| s.split("||"))
+        .flat_map(|s| s.split(';'))
+        .flat_map(|s| s.split('|'))
+        .map(|s| s.split_whitespace().collect::<Vec<_>>())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
 fn refusal(command: &str, preset: &str) -> Option<String> {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
@@ -85,6 +159,24 @@ fn every_must_work_command_passes_the_bash_guards_under_both_presets() {
         .expect("must_enable.toml parses")
         .corpus;
     assert!(corpus.len() > 10, "the corpus shrank to {}", corpus.len());
+    // The vendored spawn copy pins byte-identical to crate fno's canonical
+    // table: a drift here breaks the rules the workers launch with.
+    assert_eq!(
+        TABLE, VENDORED,
+        "the vendored must-enable copy drifted from crates/fno/src/setup/must_enable.toml"
+    );
+    // The spawn renderer admits every corpus command: the same contract
+    // crate fno's renderer test pins, held against this side's copy.
+    let rows = vendored_rows();
+    for command in &corpus {
+        for seg in segments(command) {
+            assert!(
+                rows.iter().any(|r| row_admits(r, &seg)),
+                "no vendored row admits `{command}` segment `{}`",
+                seg.join(" ")
+            );
+        }
+    }
     let mut refused = Vec::new();
     for preset in ["standard", "strict"] {
         for command in &corpus {

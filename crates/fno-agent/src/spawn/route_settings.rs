@@ -378,8 +378,9 @@ pub fn write_composed(
     session: Option<&str>,
     cwd: &Path,
     node: Option<&str>,
+    role: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let rules = crate::spawn::auto_approve::rules_for(cwd, node);
+    let rules = crate::spawn::auto_approve::rules_for(cwd, node, role);
     let Some(env) = env_for_write(route_env, account_env, sandbox.is_some(), !rules.is_empty())
     else {
         return Ok(None);
@@ -670,6 +671,7 @@ mod tests {
             Some(SESSION_ID),
             root.path(),
             None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -717,6 +719,7 @@ mod tests {
             Some(SESSION_ID),
             root.path(),
             None,
+            None,
         )
         .unwrap()
         .unwrap();
@@ -727,6 +730,7 @@ mod tests {
             None,
             Some(SESSION_ID),
             root.path(),
+            None,
             None,
         )
         .unwrap()

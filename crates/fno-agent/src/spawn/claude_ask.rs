@@ -1738,13 +1738,19 @@ pub fn bg_create(
             }
         }
     }
-    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+    let rules = crate::spawn::auto_approve::command_rules(None);
+    if let Some(slot) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
         // the same argv position Python's bg_create puts it. A sandbox file
-        // already folds the scrub floor.
-        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
-    } else if !floor.is_empty() {
-        match crate::model_env_scrub::write_scrub_settings(&floor) {
+        // already folds the scrub floor, and both file writers fold fno's
+        // command rules (D3653).
+        argv.splice(4..4, ["--settings".to_string(), slot.to_string()]);
+    } else if !floor.is_empty() || !rules.is_empty() {
+        // The plain unrouted lane owns no settings file yet, so this floor
+        // file is where fno's command rules ride (D3653) beside the model
+        // floor. A rules-only file (an empty floor) writes when the config
+        // override leaves the rules on.
+        match crate::model_env_scrub::write_scrub_settings(&floor, &rules) {
             Ok(path) => {
                 let p = path.display().to_string();
                 argv.splice(4..4, ["--settings".to_string(), p]);
