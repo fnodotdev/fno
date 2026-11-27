@@ -37,14 +37,14 @@ pub fn fold_away(
         };
         let title = text(entry, "title").unwrap_or("");
         if in_window(text(entry, "completed_at"), from, to) {
-            let pr = entry.get("pr_number").and_then(Value::as_i64);
+            let pr = entry.pointer("/pr_number").and_then(Value::as_i64);
             closed.push(json!({"node": id, "title": title, "project": text(entry, "project"), "pr_number": pr}));
             if let Some(pr) = pr.filter(|_| text(entry, "merge_status") == Some("merged")) {
                 merged.push(json!({"pr_number": pr, "pr_url": text(entry, "pr_url"), "node": id, "title": title}));
             }
         }
         let began = entry
-            .get("sessions")
+            .pointer("/sessions")
             .and_then(Value::as_array)
             .is_some_and(|sessions| {
                 sessions
@@ -64,7 +64,7 @@ pub fn fold_away(
         {
             continue;
         }
-        let Some(data) = row.get("data") else {
+        let Some(data) = row.pointer("/data") else {
             continue;
         };
         rulings.push(json!({
@@ -121,8 +121,14 @@ pub fn render(payload: &Value) -> String {
     let list = |key: &str| away[key].as_array().cloned().unwrap_or_default();
     let mut out = vec![format!(
         "# Away report: {} to {}",
-        payload["window"]["from"].as_str().unwrap_or(""),
-        payload["window"]["to"].as_str().unwrap_or("")
+        payload
+            .pointer("/window/from")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        payload
+            .pointer("/window/to")
+            .and_then(Value::as_str)
+            .unwrap_or("")
     )];
     section(&mut out, "Waiting on you", &list("waiting"), |q| {
         let action = if s(q, "action").is_empty() {
@@ -181,10 +187,18 @@ mod tests {
             at("2026-11-26T00:00:00Z"),
             at("2026-11-26T09:00:00Z"),
         );
-        assert_eq!(out["merged"].as_array().unwrap().len(), 1);
-        assert_eq!(out["closed"][0]["node"], "x-1");
-        assert_eq!(out["started"][0]["node"], "x-3");
-        assert_eq!(out["rulings"][0]["id"], "D1");
-        assert_eq!(out["waiting"][0]["action"], "run fno do pr merge 9");
+        assert_eq!(
+            out.pointer("/merged")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(out.pointer("/closed/0/node"), Some(&json!("x-1")));
+        assert_eq!(out.pointer("/started/0/node"), Some(&json!("x-3")));
+        assert_eq!(out.pointer("/rulings/0/id"), Some(&json!("D1")));
+        assert_eq!(
+            out.pointer("/waiting/0/action"),
+            Some(&json!("run fno do pr merge 9"))
+        );
     }
 }

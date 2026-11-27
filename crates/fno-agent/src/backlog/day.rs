@@ -629,7 +629,7 @@ pub fn run_day(rest: &[String], home: &crate::paths::AgentsHome) -> i32 {
                 i += 1;
             }
             "--since" if i + 1 < rest.len() => {
-                since = Some(rest[i + 1].clone());
+                since = rest.get(i + 1).cloned();
                 i += 2;
             }
             "--commit" => {
