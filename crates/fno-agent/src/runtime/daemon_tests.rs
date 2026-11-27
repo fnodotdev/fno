@@ -267,7 +267,7 @@ fn stop_refusal_names_a_pane_kill_the_mux_parser_accepts() {
     // The fno crate's twin test feeds this one command to parse_pane_args.
     assert_eq!(
         format!("fno mux pane kill {selector}"),
-        pane_kill_command("main", 76)
+        stop_refusal_detail::pane_kill_command("main", 76)
     );
 }
 

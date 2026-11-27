@@ -1269,7 +1269,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "clap",
- "crossterm",
  "fno-homes",
  "fno-mail",
  "fno-proto",

@@ -118,10 +118,6 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 # is the measured cost, so working hours must resolve the user's zone, not
 # guess an offset.
 chrono-tz = "0.10"
-# Grid: client-side TUI compositor that tiles N watcher panes and
-# promotes one to driver on Enter. Crossterm gives raw-mode, key events, cursor
-# moves, and a SIGWINCH-aware resize event.
-crossterm = { version = "0.29", features = ["event-stream"] }
 toml = "0.8"
 # Format-preserving edits of the accounts config: comments survive a write.
 toml_edit = "0.22"
