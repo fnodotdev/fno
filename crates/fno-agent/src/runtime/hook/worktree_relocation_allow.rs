@@ -688,6 +688,34 @@ mod tests {
         ));
     }
 
+    /// Point `FNO_STATE_DIR` at `state` for the scope. [`crate::claims::test_env_lock`]
+    /// serializes the pin, so a parallel test's state-root resolution never
+    /// flips mid-read, and the previous value survives a panicking assert.
+    struct StateDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl StateDirGuard {
+        fn set(state: &Path) -> Self {
+            let _lock = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("FNO_STATE_DIR");
+            std::env::set_var("FNO_STATE_DIR", state);
+            Self { previous, _lock }
+        }
+    }
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+                None => std::env::remove_var("FNO_STATE_DIR"),
+            }
+        }
+    }
+
     #[test]
     fn the_live_claim_admits_the_entered_tree_for_its_holder() {
         let tmp = tempfile::tempdir().unwrap();
@@ -697,6 +725,11 @@ mod tests {
         let wt = checkout(&base, &repo, "renamed", "x-claim", true);
         let real = wt.canonicalize().unwrap();
         let root = tmp.path().join("claims-root");
+        // The leg's bases(cwd) resolves the state root from the ambient
+        // pins, so the pin names this test's own state dir; without it the
+        // candidate walk would scan the machine's real bases and miss the
+        // tmp tree.
+        let _state = StateDirGuard::set(&state);
 
         // Admit arm: the holder's own live claim admits the recorded tree.
         seed_claim(&root, "x-claim", "target-session:s-claim", 900_000);
