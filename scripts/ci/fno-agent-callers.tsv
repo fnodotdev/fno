@@ -4,8 +4,10 @@
 # Spell a new call as its fno command (fno agent ...). The rows left are executable
 # callers and generated copies; the client's retirement moves them.
 .github/workflows/cli-ci.yml	3
+.github/workflows/crates-publish.yml	1
 .github/workflows/guards.yml	3
 .github/workflows/harness-launch-docs.yml	1
+.github/workflows/release.yml	1
 .github/workflows/review-coverage-gate.yml	1
 .github/workflows/rust-ci.yml	1
 cli/src/fno/setup/assets/opencode/footnote.js	3
@@ -46,7 +48,6 @@ evals/bank/golden-worktree-first.yaml	1
 evals/bank/golden-write-docs-for-board-items.yaml	1
 evals/fixtures/metrics/golden-review-cap-spent.yaml	1
 evals/fixtures/metrics/golden-test-changed-only.yaml	4
-evals/harness-fit/bank/replay-x-5978.yaml	1
 generated-artifacts.tsv	4
 hooks/agy-session-state-pre-invocation.sh	1
 hooks/agy-team-inject.sh	2

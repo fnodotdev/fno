@@ -283,7 +283,7 @@ fn the_mux_exit_codes_and_keeper_version_match_the_agent_copies() {
 /// parser demanded a bare number.
 #[test]
 fn the_stop_refusal_pane_kill_parses_in_the_mux() {
-    let printed = fno_agent::daemon::pane_kill_command("main", 76);
+    let printed = fno_agent::daemon::stop_refusal_detail::pane_kill_command("main", 76);
     let selector = printed
         .strip_prefix("fno mux pane kill ")
         .expect("the printed command is the pane kill command");

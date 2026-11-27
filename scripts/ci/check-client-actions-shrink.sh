@@ -100,9 +100,13 @@ tokens_from() {
     '
 }
 
-# A base cut before the fno-agent rename holds the file under crates/fno-agents/.
+# A base cut before the client moved into the library holds the file at
+# src/bin/client.rs, and one cut before the fno-agent rename under
+# crates/fno-agents/.
+OLD_PATH="crates/fno-agent/src/bin/client.rs"
 BASE_TEXT="$(git show "$BASE:$CONST_PATH" 2>/dev/null \
-    || git show "$BASE:${CONST_PATH/fno-agent\//fno-agents/}" 2>/dev/null)" || {
+    || git show "$BASE:$OLD_PATH" 2>/dev/null \
+    || git show "$BASE:${OLD_PATH/fno-agent\//fno-agents/}" 2>/dev/null)" || {
     echo "check-client-actions-shrink: base $BASE has no $CONST_PATH" >&2
     exit 2
 }
