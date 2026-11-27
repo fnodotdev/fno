@@ -264,8 +264,10 @@ pub async fn run_hold(reason: &str, json: bool) -> i32 {
         eprintln!("fno-agent restart: cannot write the hold marker: {e}");
         return 1;
     }
+    use crate::client::DaemonStop;
     let (stopped, code) = match crate::client::stop_daemon(&home).await {
-        Ok(pid) => (pid, 0),
+        Ok(DaemonStop::Exited { pid } | DaemonStop::Escalated { pid }) => (Some(pid), 0),
+        Ok(DaemonStop::WasDown) => (None, 0),
         Err(e) => {
             eprintln!("fno-agent restart: hold placed, but the stop failed: {e}");
             (None, 1)
