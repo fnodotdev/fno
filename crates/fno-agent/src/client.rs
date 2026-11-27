@@ -1197,7 +1197,14 @@ pub async fn stop_daemon(home: &AgentsHome) -> Result<Option<u32>, RestartError>
         Err(e) => return Err(RestartError::Client(e)),
     };
     let Some(result) = result else {
-        return Ok(None);
+        if daemon_lock_is_free(home) {
+            return Ok(None);
+        }
+        return Err(RestartError::DaemonStatusError {
+            message: "a daemon holds the lock but did not answer agent.status; the hold stands, \
+                      so retry the stop or use `fno agent restart --force`"
+                .into(),
+        });
     };
     let daemon = result.get("daemon");
     let old_pid = daemon
