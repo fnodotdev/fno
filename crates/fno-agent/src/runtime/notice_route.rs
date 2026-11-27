@@ -393,7 +393,7 @@ fn route_groups(
 ) -> (u64, std::collections::BTreeSet<String>) {
     let mut acted = 0u64;
     let mut terminal = std::collections::BTreeSet::new();
-    let mut runner: crate::burn_watch::Runner = &mut crate::burn_watch::run_command;
+    let runner: crate::burn_watch::Runner = &mut crate::burn_watch::run_command;
     for (key, group) in groups {
         let unsent = unsent_of(&group, sent, now);
         if unsent.is_empty() {
@@ -2126,8 +2126,8 @@ mod tests {
 
         // A changed blocker text mints a key the store lacks: it rides.
         let mut changed = warnings.clone();
-        changed[0].cause =
-            "last sweep held n-7 open on the promise gate: short zero ships".to_string();
+        let first = changed.first_mut().expect("two warnings");
+        first.cause = "last sweep held n-7 open on the promise gate: short zero ships".to_string();
         let changed_unsent = unsent_of(
             &OwnerGroup {
                 owner: group.owner.clone(),
@@ -2137,6 +2137,9 @@ mod tests {
             now,
         );
         assert_eq!(changed_unsent.len(), 1);
-        assert_eq!(changed_unsent[0].node.as_deref(), Some("n-7"));
+        assert_eq!(
+            changed_unsent.first().and_then(|w| w.node.as_deref()),
+            Some("n-7")
+        );
     }
 }
