@@ -16,13 +16,18 @@
 //! Everything else prints `{}`, which leaves the prompt in place for the
 //! human.
 //!
-//! The claim has two sources, tried in order. A spawned worker's registry
+//! The claim has three sources, tried in order. A spawned worker's registry
 //! row names its node. A session that ran `fno do target init` holds a
 //! target manifest instead, whose `harness_session_id` names the session;
 //! an interactive session's enter is the case that used to prompt every
-//! time. Both sources admit the same shape: one recorded worktree of this
-//! repo, verified by the record round-trip below. A sibling, an outside
-//! dir, or a session neither source names keeps its ask.
+//! time. The third source is the claims store: a live `node:<id>` claim
+//! whose holder names this session admits the entered
+//! `<base>/<folder>/<id>`. Init claims as `target-session:<harness session
+//! id>` on every run, so a redirected or respawned worker - whose registry
+//! row names a stale node and whose manifest id the owned-identity
+//! collision refused to `null` - still resolves its own tree, including one
+//! the record round-trip cannot yet verify. A sibling, an outside dir, or a
+//! session no source names keeps its ask.
 //!
 //! Paths are canonicalized before the compare, so a symlink cannot point the
 //! session elsewhere.
@@ -61,12 +66,14 @@ pub fn run(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
     let payload: Payload = serde_json::from_str(raw.trim()).unwrap_or_default();
     let cwd = payload_cwd(&payload);
-    let own = own_worktree(&payload.session_id, &cwd);
+    let own = own_worktree(&payload.session_id, &cwd)
+        .or_else(|| claims_leg(&payload.session_id, &cwd, &payload.tool_input.path));
     let own_ref = own.as_ref().map(|(p, s)| (p.as_path(), *s));
     let Some((decision, reason)) = classify(&payload, own_ref) else {
         return super::emit_allow();
     };
-    super::emit_guard_row_reason(&cwd, GUARD, "EnterWorktree", decision, reason);
+    let reason = row_reason(&payload, decision, reason);
+    super::emit_guard_row_reason(&cwd, GUARD, "EnterWorktree", decision, &reason);
     match decision {
         "allow" => {
             let out = json!({
@@ -121,6 +128,58 @@ fn own_worktree(session: &str, cwd: &Path) -> Option<(PathBuf, &'static str)> {
     registry_claim(session, cwd)
         .map(|p| (p, "own_worktree"))
         .or_else(|| manifest_claim(session, cwd).map(|p| (p, "own_manifest")))
+}
+
+/// The claims-store leg: the live `node:<id>` claim whose holder names this
+/// session admits the entered `<base>/<folder>/<id>`. The entered path names
+/// the node; the pid-probed claim only authorizes it. No record round-trip
+/// here on purpose: a killed `worktree add` leaves a dir no record can
+/// verify, and that construction site is exactly what a re-run worker must
+/// enter. A sibling, an outside dir, or another session's claim keeps its
+/// ask.
+fn claims_leg(session: &str, cwd: &Path, raw: &str) -> Option<(PathBuf, &'static str)> {
+    claims_leg_in(session, cwd, raw, None)
+}
+
+/// [`claims_leg`] with the claims root as a parameter, so the tests seed a
+/// private store instead of the ambient one.
+fn claims_leg_in(
+    session: &str,
+    cwd: &Path,
+    raw: &str,
+    root: Option<&Path>,
+) -> Option<(PathBuf, &'static str)> {
+    if session.is_empty() || raw.is_empty() {
+        return None;
+    }
+    let real = cwd.join(raw).canonicalize().ok()?;
+    let (candidate, node) = candidate_under(&bases(cwd), &real)?;
+    let key = format!("node:{node}");
+    let (state, record) = crate::claims::status(&key, root);
+    if !matches!(
+        state,
+        crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+    ) {
+        return None;
+    }
+    let holder = record?.holder;
+    (holder == format!("target-session:{session}")).then_some((candidate, "own_claim"))
+}
+
+/// The ask row names the session and the target, so the next parked worker is
+/// one events query to diagnose instead of one transcript crawl. Allow and
+/// deny rows keep their bare tags: the deny already names the path in its
+/// worker-facing message, and the allow tags are the source diagnosis.
+fn row_reason(payload: &Payload, decision: &str, reason: &str) -> String {
+    if decision != "ask" {
+        return reason.to_string();
+    }
+    let target = path_call(payload).unwrap_or_default();
+    format!(
+        "{reason} session={} target={}",
+        payload.session_id.chars().take(12).collect::<String>(),
+        target.chars().take(120).collect::<String>()
+    )
 }
 
 /// The registry-row claim: `<base>/<repo>/<node>` for the node the spawn
@@ -412,6 +471,10 @@ mod tests {
             Some(("allow", "own_manifest"))
         );
         assert_eq!(
+            classify(&inside, Some((wt.as_path(), "own_claim"))),
+            Some(("allow", "own_claim"))
+        );
+        assert_eq!(
             classify(&declined, Some((wt.as_path(), "own_manifest"))),
             Some(("ask", "not_own"))
         );
@@ -603,5 +666,137 @@ mod tests {
         let spaces = tmp.path().join("spaces-f");
         std::fs::create_dir_all(&spaces).unwrap();
         assert_eq!(manifest_claim_in("s-a", &spaces, &all, &repo), None);
+    }
+
+    /// One claim in a private claims root, held by `holder`. With
+    /// `unavailable`, the row carries no pid, so its verdict reads from the
+    /// TTL alone and the clock arm can expire it cleanly. Claims live in
+    /// the store the read path opens, so the seed goes through the store's
+    /// own acquire, never a hand-written lockfile.
+    fn seed_claim(root: &Path, node: &str, holder: &str, unavailable: bool) {
+        let opts = crate::claims::AcquireOpts {
+            pid: (!unavailable).then(std::process::id),
+            pid_unavailable: unavailable,
+            ttl_ms: Some(900_000),
+            reason: Some("test window".into()),
+            root: Some(root.to_path_buf()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            crate::claims::acquire(&format!("node:{node}"), holder, opts),
+            crate::claims::AcquireOutcome::Acquired(_)
+        ));
+    }
+
+    /// Point `FNO_STATE_DIR` at `state` for the scope. [`crate::claims::test_env_lock`]
+    /// serializes the pin, so a parallel test's state-root resolution never
+    /// flips mid-read, and the previous value survives a panicking assert.
+    struct StateDirGuard {
+        previous: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl StateDirGuard {
+        fn set(state: &Path) -> Self {
+            let _lock = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let previous = std::env::var_os("FNO_STATE_DIR");
+            std::env::set_var("FNO_STATE_DIR", state);
+            Self { previous, _lock }
+        }
+    }
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+                None => std::env::remove_var("FNO_STATE_DIR"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_live_claim_admits_the_entered_tree_for_its_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("checkout");
+        let state = tmp.path().join("state");
+        let base = crate::paths_cli::legacy_worktrees_base(&state);
+        let wt = checkout(&base, &repo, "renamed", "x-claim", true);
+        let real = wt.canonicalize().unwrap();
+        let root = tmp.path().join("claims-root");
+        // The leg's bases(cwd) resolves the state root from the ambient
+        // pins, so the pin names this test's own state dir; without it the
+        // candidate walk would scan the machine's real bases and miss the
+        // tmp tree.
+        let _state = StateDirGuard::set(&state);
+
+        // Admit arm: the holder's own live claim admits the recorded tree.
+        seed_claim(&root, "x-claim", "target-session:s-claim", false);
+        assert_eq!(
+            claims_leg_in("s-claim", &repo, &wt.to_string_lossy(), Some(&root)),
+            Some((real, "own_claim"))
+        );
+
+        // The half-laid arm is the point: no .git file, no record, a bare
+        // dir a killed worktree add left behind - the claim still admits it.
+        let half = base.join("renamed").join("x-half");
+        std::fs::create_dir_all(&half).unwrap();
+        seed_claim(&root, "x-half", "target-session:s-claim", false);
+        assert_eq!(
+            claims_leg_in("s-claim", &repo, &half.to_string_lossy(), Some(&root)),
+            Some((half.canonicalize().unwrap(), "own_claim"))
+        );
+
+        // Withhold arm, another session's claim: the holder must name the
+        // asking session. A fresh node, because the store never overwrites
+        // a live row with a different holder.
+        let other = checkout(&base, &repo, "renamed", "x-other", true);
+        seed_claim(&root, "x-other", "target-session:s-other", false);
+        assert_eq!(
+            claims_leg_in("s-claim", &repo, &other.to_string_lossy(), Some(&root)),
+            None
+        );
+
+        // Withhold arm, expired claim: a stale TTL admits nobody. Acquire
+        // refuses a sub-minimum ttl, so the seed acquires normally and then
+        // drives the row's expiry into the past on the same store.
+        let expired = checkout(&base, &repo, "renamed", "x-expired", true);
+        seed_claim(&root, "x-expired", "target-session:s-claim", true);
+        {
+            let dir = crate::claims_root::claims_dir("node:x-expired", Some(&root)).unwrap();
+            let conn = crate::claim_store::open_directory(&dir).unwrap();
+            conn.execute(
+                "UPDATE claims SET expires_at = acquired_at - 1000 WHERE key = 'node:x-expired'",
+                [],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            claims_leg_in("s-claim", &repo, &expired.to_string_lossy(), Some(&root)),
+            None
+        );
+
+        // Withhold arm, no claim at all.
+        assert_eq!(
+            claims_leg_in("s-unclaimed", &repo, &wt.to_string_lossy(), Some(&root)),
+            None
+        );
+
+        // Withhold arms, empty session or empty path: never admit.
+        assert_eq!(
+            claims_leg_in("", &repo, &wt.to_string_lossy(), Some(&root)),
+            None
+        );
+        assert_eq!(claims_leg_in("s-claim", &repo, "", Some(&root)), None);
+
+        // Withhold arm, a path outside any base: no candidate, no claim ask.
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        seed_claim(&root, "x-claim", "target-session:s-claim", false);
+        assert_eq!(
+            claims_leg_in("s-claim", &repo, &outside.to_string_lossy(), Some(&root)),
+            None
+        );
     }
 }
