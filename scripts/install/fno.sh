@@ -240,13 +240,6 @@ place_binaries() {
 		cp "$1/$_b" "$FNO_BIN/.$_b.new" && chmod 755 "$FNO_BIN/.$_b.new" && mv -f "$FNO_BIN/.$_b.new" "$FNO_BIN/$_b" || return 1
 		ln -sf "$FNO_BIN/$_b" "$FNO_LINK_DIR/.$_b.new" && mv -f "$FNO_LINK_DIR/.$_b.new" "$FNO_LINK_DIR/$_b" || return 1
 	done
-	# fno-app rides the macOS tarballs only: place and link it when carried.
-	# The required-4 loop above stays the gate, so a linux tarball installs
-	# exactly as before.
-	if [ -x "$1/fno-app" ]; then
-		cp "$1/fno-app" "$FNO_BIN/.fno-app.new" && chmod 755 "$FNO_BIN/.fno-app.new" && mv -f "$FNO_BIN/.fno-app.new" "$FNO_BIN/fno-app" || return 1
-		ln -sf "$FNO_BIN/fno-app" "$FNO_LINK_DIR/.fno-app.new" && mv -f "$FNO_LINK_DIR/.fno-app.new" "$FNO_LINK_DIR/fno-app" || return 1
-	fi
 	# The old fno-agents names answer for one release.
 	for _b in fno-agent fno-agent-daemon fno-agent-worker; do
 		_old="fno-agents${_b#fno-agent}"

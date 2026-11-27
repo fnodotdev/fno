@@ -7,7 +7,7 @@
 #
 #   1. `sh scripts/install/fno.sh` installs and reports success,
 #   2. the four core binaries land in ~/.fno/install/bin and are linked into
-#      the PATH dir (the macOS tarball's fno-app joins them, checked below),
+#      the PATH dir,
 #   3. `fno --version`, `fno mux ls` and `fno-agent --version` answer,
 #   4. no uv and no Python CLI is involved,
 #   5. a tampered .sha256 refuses, names both digests, and installs nothing,
@@ -31,13 +31,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INSTALLER="$REPO_ROOT/scripts/install/fno.sh"
 [ -f "$INSTALLER" ] || { echo "FAIL[input] installer not found at $INSTALLER"; exit 1; }
-
-# fno-app rides the macOS tarballs only: derive the leg from the tarball
-# name, so the linux legs keep today's assertions and pass unchanged.
-case "$TARBALL" in
-  *macos*) MACOS_LEG=1 ;;
-  *) MACOS_LEG=0 ;;
-esac
 
 fail=0
 pass() { printf 'PASS[%s] %s\n' "$1" "$2"; }
@@ -81,17 +74,6 @@ for b in fno fno-agent fno-agent-daemon fno-agent-worker; do
   if [ -x "$BIN/$b" ] && [ -x "$LINKS/$b" ]; then pass "binary:$b" "in $BIN and linked into $LINKS"
   else miss "binary:$b" "absent from $BIN or $LINKS"; fi
 done
-
-# macOS tarballs carry fno-app beside the core four: the link must exist and
-# the binary must answer, mirroring the fno-agent check above. Linux legs
-# never see these rows.
-if [ "$MACOS_LEG" -eq 1 ]; then
-  if [ -x "$BIN/fno-app" ] && [ -x "$LINKS/fno-app" ]; then pass "binary:fno-app" "in $BIN and linked into $LINKS"
-  else miss "binary:fno-app" "absent from $BIN or $LINKS"; fi
-  run_capture "$LINKS/fno-app" --version
-  if [ "$RC" -eq 0 ]; then pass "fno-app" "fno-app --version answers"
-  else miss "fno-app" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"; fi
-fi
 
 # --- check 3: the front door and fno-agent answer ---
 run_capture "$LINKS/fno" --version
