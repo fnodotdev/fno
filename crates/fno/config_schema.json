@@ -90,7 +90,7 @@
     "type": "object"
    },
    "ProviderCapBlock": {
-    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  sleep_hours            - HH:MM-HH:MM window in which ask mode moves without a question.\n  sleep_timezone         - IANA zone for sleep_hours (empty = local).\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
+    "description": "Provider usage-cap actor settings (nested under 'config.provider_cap').\n\nA provider's usage cap arms this actor, independent of recovery.watchdog. It alone decides whether a cap may move sessions. A malformed value reads as its default.\n\nKnobs:\n  enabled                - arm the actor (default on).\n  mode                   - park (default), triage, ask or auto.\n  destinations           - route lanes a moving member tries, in order.\n  min_wait_minutes       - a reset closer than this is waited out.\n  canary_survive_minutes - minutes a canary lives before parked members resume.\n  quorum                 - members on one lane needed to open a cap.",
     "properties": {
      "enabled": {
       "default": true,
@@ -121,16 +121,6 @@
       "minimum": 0,
       "title": "Min Wait Minutes",
       "type": "integer"
-     },
-     "sleep_hours": {
-      "default": "",
-      "title": "Sleep Hours",
-      "type": "string"
-     },
-     "sleep_timezone": {
-      "default": "",
-      "title": "Sleep Timezone",
-      "type": "string"
      },
      "canary_survive_minutes": {
       "default": 15,
@@ -664,7 +654,7 @@
     "type": "object"
    },
    "BacklogBlock": {
-    "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). Schema defaults are the LEGACY values - an absent\n``id_prefix`` (``None``) falls back to ``ab-`` at the accessor, and the width\ndefaults to 8 - so an existing ``config.backlog`` block with no id keys is\nbyte-identical. The setup wizard OFFERS width 4 for new installs; that is the\nwizard's default, not the schema default (AC3-FR).",
+    "description": "Backlog hygiene settings (nested under 'config.backlog').\n\n``id_prefix`` / ``id_hex_width`` configure the node-ID minting scheme\n(``<prefix><hex>``). The width defaults to 8 at the accessor. An absent\n``id_prefix`` resolves to the documented fresh-install default ``x`` (one\nresolver, never the legacy ``ab-``; old ``ab-`` ids stay resolvable). The\nsetup wizard OFFERS width 4 for new installs; that is the wizard's default,\nnot the schema default (AC3-FR).",
     "properties": {
      "maintain": {
       "$ref": "#/$defs/MaintainBlock"
@@ -835,11 +825,16 @@
     "type": "object"
    },
    "BuildBlock": {
-    "description": "Build-freeze switch (nested under 'config.build').",
+    "description": "Build switches (nested under 'config.build').",
     "properties": {
      "agent_freeze": {
       "default": false,
       "title": "Agent Freeze",
+      "type": "boolean"
+     },
+     "sccache": {
+      "default": false,
+      "title": "Sccache",
       "type": "boolean"
      }
     },
@@ -2924,6 +2919,23 @@
       "title": "Github Approval Satisfies",
       "type": "boolean"
      },
+     "human": {
+      "anyOf": [
+       {
+        "enum": [
+         "never",
+         "ui",
+         "always"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Human"
+     },
      "max_rounds": {
       "default": 2,
       "minimum": 1,
@@ -3101,7 +3113,7 @@
     "type": "object"
    },
    "SandboxBlock": {
-    "description": "Confinement fallback policy (nested under ``config.sandbox``).",
+    "description": "Sandboxed workers and the confinement fallback policy (nested under ``config.sandbox``).",
     "properties": {
      "on_unavailable": {
       "default": "refuse",
@@ -3111,6 +3123,42 @@
       ],
       "title": "On Unavailable",
       "type": "string"
+     },
+     "provider": {
+      "default": "none",
+      "enum": [
+       "none",
+       "docker",
+       "podman",
+       "apple",
+       "devcontainer"
+      ],
+      "title": "Provider",
+      "type": "string"
+     },
+     "image": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Image"
+     },
+     "host": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Host"
      }
     },
     "title": "SandboxBlock",
@@ -3735,6 +3783,11 @@
    "UserBlock": {
     "description": "How the machine addresses the human (nested under ``config.user``).\n\n``name`` is a form of address, never an identity and never an authority.\nEmpty is the unset state; the native birth read (backlog/birth.rs\n``display_name``) falls back to ``git config user.name`` so a fresh\ninstall already says something better than a role noun.",
     "properties": {
+     "auto_approve_routine": {
+      "default": false,
+      "title": "Auto Approve Routine",
+      "type": "boolean"
+     },
      "favorite_skills": {
       "items": {
        "type": "string"
@@ -3746,6 +3799,29 @@
       "default": "",
       "title": "Name",
       "type": "string"
+     },
+     "timezone": {
+      "default": "",
+      "title": "Timezone",
+      "type": "string"
+     },
+     "working_hours": {
+      "anyOf": [
+       {
+        "additionalProperties": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Working Hours"
      }
     },
     "title": "UserBlock",
@@ -4394,6 +4470,17 @@
    "edit": "toggle"
   },
   {
+   "path": "build.sccache",
+   "label": "Shared compile cache",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.",
+   "edit": "toggle"
+  },
+  {
    "path": "paths.ledger_json",
    "label": "Run history and cost file",
    "type": "str (optional)",
@@ -4691,6 +4778,39 @@
    "edit": "editor"
   },
   {
+   "path": "user.timezone",
+   "label": "Timezone",
+   "type": "str",
+   "default": "",
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "IANA zone for working_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
+   "edit": "editor"
+  },
+  {
+   "path": "user.working_hours",
+   "label": "Working hours",
+   "type": "typing.Optional[dict[str, list[str]]]",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.",
+   "edit": "editor"
+  },
+  {
+   "path": "user.auto_approve_routine",
+   "label": "Auto approve routine",
+   "type": "bool",
+   "default": false,
+   "wizard": "never",
+   "question": "",
+   "default_source": "default",
+   "doc": "Auto-approve routine worker file work: while true, a new spawn gets Claude Code permission rules that allow reads and edits in its own worktree and plan folder. Claude Code still applies deny and ask rules first, and secret and settings names keep their prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in an interactive terminal. A command with no terminal cannot set it. That check slows an agent down and does not stop one with a Bash tool, so the Bash permission is the real guard.",
+   "edit": "toggle"
+  },
+  {
    "path": "sandbox.on_unavailable",
    "label": "When no sandbox is available",
    "type": "typing.Literal['refuse', 'warn']",
@@ -4710,6 +4830,61 @@
      "doc": ""
     }
    ]
+  },
+  {
+   "path": "sandbox.provider",
+   "label": "Sandboxed worker engine",
+   "type": "typing.Literal['none', 'docker', 'podman', 'apple', 'devcontainer']",
+   "default": "none",
+   "wizard": "advanced",
+   "question": "Run headless workers in a container sandbox, and on which engine?",
+   "default_source": "default",
+   "doc": "Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider.",
+   "edit": "cycle",
+   "choices": [
+    {
+     "value": "none",
+     "doc": ""
+    },
+    {
+     "value": "docker",
+     "doc": ""
+    },
+    {
+     "value": "podman",
+     "doc": ""
+    },
+    {
+     "value": "apple",
+     "doc": ""
+    },
+    {
+     "value": "devcontainer",
+     "doc": ""
+    }
+   ]
+  },
+  {
+   "path": "sandbox.image",
+   "label": "Sandbox image",
+   "type": "typing.Optional[str]",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.",
+   "edit": "editor"
+  },
+  {
+   "path": "sandbox.host",
+   "label": "Sandbox VM",
+   "type": "typing.Optional[str]",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Runs the sandbox engine on a Linux VM you own, as ssh://[user@]host[:port]. The engine CLI reaches the VM's docker or podman over ssh; the relay and the claim stay on this host, and the VM gets no GitHub token and no route back. The host must be in known_hosts, and an ssh config that forwards the agent or a port refuses. Unset runs the engine locally. Read from global config only.",
+   "edit": "editor"
   },
   {
    "path": "blueprint.max_prs_per_epic",
@@ -4807,7 +4982,7 @@
    "wizard": "always",
    "question": "Backlog node-ID prefix?",
    "default_source": "repo-slug",
-   "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).",
+   "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable.",
    "edit": "editor"
   },
   {
@@ -5424,6 +5599,17 @@
    "default_source": "",
    "doc": "When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.",
    "edit": "toggle"
+  },
+  {
+   "path": "review.human",
+   "label": "Human approval required",
+   "type": "string",
+   "default": null,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "The person gate (never | ui | always). never = no person is owed. ui = a non-author person's GitHub approval of the PR head is owed; a person can give it from the terminal (`fno mux app approve <pr>`, or `--repo <owner/name>` outside the checkout) or on the PR's GitHub page. always = the same approval owed on GitHub. In both owed values fno do pr status reads not ready and the merge refuses until one lands (an APPROVED review by a login that is not the PR author, fresh at the head), and the review-round cap does not discharge it (the lever back off is this key). With no key set, no person is owed (today's stock-install behavior). GitHub refuses an author's approval of their own PR, so the approving identity must differ from the author identity. Validated at write: never, ui or always.",
+   "edit": "editor"
   },
   {
    "path": "review.max_rounds",
@@ -8075,7 +8261,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "default",
-   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).",
+   "doc": "What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; while you are away it moves without a question) | auto (every member moves without a question).",
    "edit": "cycle",
    "choices": [
     {
@@ -8116,28 +8302,6 @@
    "question": "",
    "default_source": "default",
    "doc": "A reset closer than this many minutes is waited out and never moved (default 30).",
-   "edit": "editor"
-  },
-  {
-   "path": "provider_cap.sleep_hours",
-   "label": "Sleep hours",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "default",
-   "doc": "Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.",
-   "edit": "editor"
-  },
-  {
-   "path": "provider_cap.sleep_timezone",
-   "label": "Sleep hours timezone",
-   "type": "str",
-   "default": "",
-   "wizard": "never",
-   "question": "",
-   "default_source": "default",
-   "doc": "IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.",
    "edit": "editor"
   },
   {

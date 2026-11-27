@@ -4,11 +4,12 @@
 
 use std::path::{Path, PathBuf};
 
-/// The pid file for THE drive loop, in its own subfolder: nothing writes at
-/// the top level of the state root. One process heals every root, so one
-/// pid file: the in-flight guard sees the loop whatever root asked.
+/// The pid file for THE drive loop, in the `heal` folder the layout table
+/// places: nothing writes at the top level of the state root. One process
+/// heals every root, so one pid file: the in-flight guard sees the loop
+/// whatever root asked.
 pub fn pid_file(events_dir: &Path) -> PathBuf {
-    events_dir.join("heal").join("pr-heal.pid")
+    crate::state_layout::place_in(events_dir, "heal", "pr-heal.pid")
 }
 
 /// Test-only reader since the guard switched to live pids.
@@ -40,8 +41,8 @@ fn pid_names_a_healer(pid: u32) -> bool {
     out.contains("pr-heal") || out.contains("fno-agent")
 }
 
-/// Live pids across every `pr-heal.*.pid` file in `events_dir` and its
-/// `heal/` subfolder. The pid lives in the file CONTENT, read as an integer;
+/// Live pids across every `pr-heal.*.pid` file in `events_dir`, its placed
+/// `heal` folder and the legacy `heal/` spelling. The pid lives in the file CONTENT, read as an integer;
 /// EPERM counts alive. The glob also sweeps the old per-root
 /// `pr-heal.<tag>.pid` files; a file whose pid is dead is the family's own
 /// litter and is deleted here (the reader is the deleter: nothing else owns
@@ -49,7 +50,12 @@ fn pid_names_a_healer(pid: u32) -> bool {
 /// skips without deleting.
 pub fn live_pids(events_dir: &Path) -> Vec<u32> {
     let mut out = Vec::new();
-    for scan_dir in [events_dir.join("heal"), events_dir.to_path_buf()] {
+    let placed = crate::state_layout::place_dir(events_dir, "heal");
+    let legacy = Some(events_dir.join("heal")).filter(|dir| Some(dir) != placed.as_ref());
+    for scan_dir in [placed, legacy, Some(events_dir.to_path_buf())]
+        .into_iter()
+        .flatten()
+    {
         let Ok(entries) = std::fs::read_dir(&scan_dir) else {
             continue;
         };

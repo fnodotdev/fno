@@ -51,6 +51,9 @@ struct Watch {
     name: Option<String>,
     called_at_ms: i64,
     child_session: Option<String>,
+    /// The head the launch's own output named. It proves `claude --bg`
+    /// started a session, never that the session adopted or still runs.
+    launch_short_id: Option<String>,
     /// The worker row this launch matched, as (created_at, name), so a later
     /// launch from the same caller cannot take it.
     row: Option<(String, String)>,
@@ -114,6 +117,7 @@ fn from_record(r: &Record) -> Watch {
         name: r.launch.name.clone(),
         called_at_ms: r.launched_at_ms,
         child_session: r.child_session.clone(),
+        launch_short_id: r.launch_short_id.clone(),
         ..Default::default()
     }
 }
@@ -221,8 +225,16 @@ fn adopt(home: &AgentsHome, now: i64) {
                 child_session: record.child_session.clone(),
                 ..w
             },
+            Ok(Some(w)) if w.launch_short_id.is_none() && record.launch_short_id.is_some() => w,
             // Unchanged, or unreadable: the judge loop reports a bad file.
             _ => continue,
+        };
+        let watch = Watch {
+            launch_short_id: watch
+                .launch_short_id
+                .clone()
+                .or_else(|| record.launch_short_id.clone()),
+            ..watch
         };
         if let Err(e) = state::write_json_atomic(&path, &watch) {
             eprintln!("spawn-watch: {}: {e}", path.display());
@@ -520,6 +532,14 @@ fn stage(
             format!(
                 "worker row {} exists ({:?}) with no harness session id",
                 row.name, row.status
+            ),
+        );
+    }
+    if let Some(short) = &watch.launch_short_id {
+        return (
+            "adopt",
+            format!(
+                "launch head {short} was printed, but no SessionStart adopt and no live process followed. The worker may have died at boot"
             ),
         );
     }

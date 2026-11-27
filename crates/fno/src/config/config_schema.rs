@@ -621,7 +621,7 @@ mod setting_spec_tests {
     #[test]
     fn every_leaf_declares_an_edit_mode_and_choices_where_they_edit() {
         let specs = setting_specs();
-        assert_eq!(specs.len(), 402);
+        assert_eq!(specs.len(), 408);
         for spec in &specs {
             // The Config tab paints this label; a leaf with none would fall
             // back to its key title-cased, the shape the user turned down.

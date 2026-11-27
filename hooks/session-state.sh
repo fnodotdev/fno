@@ -12,9 +12,21 @@ set -u
 # A footnote session reports its own state in its session record, and its
 # loop fires this plugin hook under the claude label. Stay out of its way.
 [[ "${FNO_HARNESS_NAME:-}" == "footnote" ]] && exit 0
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A zcode session loads this plugin verbatim, so its Stop (and PreToolUse,
+# where wired) fires land here carrying claude's label in "$1". zcode fires
+# no SessionStart, so the session report rides this event instead; the
+# launcher's provider-config env is the discriminator, and no claude session
+# carries it - a claude marker present means the env arrived some other way,
+# and the session keeps its normal leg. The guard costs one env read and
+# calls nothing for every harness that is not zcode.
+if [[ -n "${ZCODE_BUILTIN_PROVIDER_CONFIG_FILE:-}${ZCODE_PERSONAL_PROVIDER_CONFIG_FILE:-}" \
+    && -z "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+    "$HOOK_DIR/zcode-session-report.sh"
+    exit 0
+fi
 PATH="${PATH:+$PATH:}/usr/bin:/bin"
 export PATH
-HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Fail closed like the producer it replaces: a missing helper makes this
 # fire-and-forget hook exit 0 instead of blocking unbounded.
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0

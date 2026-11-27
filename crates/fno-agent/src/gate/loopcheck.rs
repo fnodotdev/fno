@@ -315,7 +315,7 @@ use settings::{
     PeerEntry,
 };
 pub(crate) use settings::{
-    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, Settings,
+    ledger_file_rows, scan_manifest_field, session_cost_from_ledger, ReviewHuman, Settings,
 };
 #[cfg(test)]
 use settings::{MALFORMED_REVIEWERS_SENTINEL, UNPARSEABLE_SETTINGS_SENTINEL};
@@ -1664,8 +1664,15 @@ pub(crate) fn decide_with_payload(
         // (gemini/agy) stays unfloored: the floor would demand an attestation no
         // command there produces, wedging the loop; route 3 (a spawned reviewer) is
         // those harnesses' path and is deferred.
-        let floor_applies =
-            self_review_floor_applies(author_harness.as_deref(), inputs.author_harness_pinned_none);
+        // A sandbox has no attest op, so a floor there would wedge the loop;
+        // its review comes from outside, and `review_required` below stays
+        // true so a green PR ends DoneUnreviewed, never DonePRGreen.
+        let sandboxed = crate::sandbox::origin().is_some();
+        let floor_applies = !sandboxed
+            && self_review_floor_applies(
+                author_harness.as_deref(),
+                inputs.author_harness_pinned_none,
+            );
         // The manifest node's own PR pins the terminal read (merged, deleted
         // and detached heads stay readable); an absent node or PR keeps the
         // branch-resolved read exactly as before. The chosen row's url also
@@ -1694,7 +1701,7 @@ pub(crate) fn decide_with_payload(
         // install that opts out (self_review_required=false AND no lane, or a
         // harness with no self-review command) has zero coverage as its configured
         // state, not a defect - those green PRs still reach DonePRGreen.
-        let review_required = lane_configured || self_review_floor.is_some();
+        let review_required = lane_configured || self_review_floor.is_some() || sandboxed;
 
         // Run done() for code units
         let done_gh_bin = if intent == Intent::Promise {
@@ -1723,6 +1730,7 @@ pub(crate) fn decide_with_payload(
             &repo_slug,
             manifest.harness_session_id.as_deref(),
             settings.github_approval_satisfies.unwrap_or(true),
+            ReviewHuman::owed(settings.human),
             settings.max_rounds.unwrap_or(2).max(1),
             carry_interdiff_lines_resolved(&settings),
             Some(&resolve_posture_config(&settings)),
@@ -2563,6 +2571,16 @@ pub(crate) fn decide_with_payload(
             Err(read_err) => {
                 let failed_read = read_err.read.clone();
                 let failed_stderr = read_err.stderr_tail.clone();
+                // Every failed-read fire row: fp_read_failed, PR state unknown.
+                let failed_fire_row = |decision: &str| {
+                    let name = if intent == Intent::Promise {
+                        "promise"
+                    } else {
+                        "none"
+                    };
+                    let unknown = serde_json::json!({"pr_state": "unknown", "ci": "unknown", "reviewed": false});
+                    fire_row(decision, name, true, unknown);
+                };
                 // An unauthenticated gh cannot recover inside the loop - no
                 // fire logs in - so the block-and-retry below would re-wake
                 // the session on every stop until a cap, each wake failing
@@ -2590,20 +2608,7 @@ pub(crate) fn decide_with_payload(
                         }),
                     );
                     term_row("HeldOnQuestion", &reason);
-                    fire_row(
-                        "allow",
-                        if intent == Intent::Promise {
-                            "promise"
-                        } else {
-                            "none"
-                        },
-                        true,
-                        serde_json::json!({
-                            "pr_state": "unknown",
-                            "ci": "unknown",
-                            "reviewed": false
-                        }),
-                    );
+                    failed_fire_row("allow");
                     return terminal("allow", Some(TerminationReason::HeldOnQuestion), &reason);
                 }
                 // US4 (locked decision 6, REVERSES the wedge's behavior): a
@@ -2721,44 +2726,15 @@ pub(crate) fn decide_with_payload(
                         ledger_core_reset_in_s,
                         now.timestamp(),
                     ) {
-                        const QUOTA_PARK_MAX_MS: i64 = 2 * 60 * 60_000;
                         // saturating: a corrupt ledger reset must not
                         // overflow the multiply before the clamp applies.
                         let park_ms = park_s
                             .saturating_mul(1000)
                             .max(60_000)
-                            .min(QUOTA_PARK_MAX_MS);
+                            .min(watch_lease::PARK_MAX_MS);
                         let expires_at_ms =
                             now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
-                        // A parked session keeps its node: renew the claim
-                        // lease over the window, as the build park does.
-                        if let Some((key, holder)) = watch_lease::claim_pair(&manifest_content) {
-                            let _ = crate::claims::renew(
-                                &key,
-                                &holder,
-                                park_ms + 2 * watch_lease::WATCH_SLACK_MS,
-                                None,
-                            );
-                        }
-                        // The fire row lands BEFORE the watch-idle row: a
-                        // later `loop_check` row with a non-watching intent
-                        // would mark the watch superseded
-                        // (`is_current_watch`) and the daemon would never
-                        // wake the parked session.
-                        fire_row(
-                            "allow",
-                            if intent == Intent::Promise {
-                                "promise"
-                            } else {
-                                "none"
-                            },
-                            true,
-                            serde_json::json!({
-                                "pr_state": "unknown",
-                                "ci": "unknown",
-                                "reviewed": false
-                            }),
-                        );
+                        failed_fire_row("allow");
                         emit(
                             "loop_check_gh_error",
                             serde_json::json!({
@@ -2774,25 +2750,16 @@ pub(crate) fn decide_with_payload(
                                 "rate_limit_class": "primary"
                             }),
                         );
-                        let idle_row = serde_json::json!({
-                            "session_id": session_id,
-                            "pr": null,
-                            "blocker": "quota",
-                            "reason": "quota",
-                            "expires_at_ms": expires_at_ms,
-                            "harness": scan_manifest_field(&manifest_content, "harness"),
-                            "cwd": &cwd,
-                        });
-                        if let Err(e) = fire_history::emit_to_both_checked(
+                        watch_lease::arm_failed_read_park(
+                            "quota",
+                            park_ms,
+                            expires_at_ms,
+                            &manifest_content,
+                            &session_id,
+                            &cwd,
                             &project_events,
                             &global_events,
-                            "loop_check_watch_idle",
-                            idle_row,
-                        ) {
-                            eprintln!(
-                                "loop-check: quota park not recorded ({e}); no daemon wake is armed"
-                            );
-                        }
+                        );
                         let bucket = if is_graphql_read { "GraphQL" } else { "core" };
                         let mins = park_ms / 60_000;
                         let reason = format!(
@@ -2809,34 +2776,70 @@ pub(crate) fn decide_with_payload(
                         );
                     }
                 }
-                emit(
-                    "loop_check_gh_error",
-                    serde_json::json!({
-                        "session_id": session_id,
-                        "read": failed_read,
-                        "outcome": read_err.outcome(),
-                        "stderr_tail": failed_stderr,
-                        "waited_on": read_err.waited_on(),
-                        "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
-                        "graphql_remaining": quota.as_ref().map(|q| q.remaining),
-                        "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
-                        "rate_limit_class": secondary.then_some("secondary")
-                    }),
-                );
-                fire_row(
-                    "block",
-                    if intent == Intent::Promise {
-                        "promise"
-                    } else {
-                        "none"
-                    },
-                    true,
-                    serde_json::json!({
-                        "pr_state": "unknown",
-                        "ci": "unknown",
-                        "reviewed": false
-                    }),
-                );
+                // The origin remote is a local fact: when it is absent, every
+                // origin-resolved PR read fails with the same owner/repo
+                // refusal and no retry can clear it. Gate the wording on the
+                // read's own cause, not the remote's absence: a node whose PR
+                // row pins an owner/repo reads fine without an origin, so a
+                // network blip there must keep its ordinary retry wording.
+                let remoteless_pr = failed_read.starts_with("pr_")
+                    && failed_stderr.contains("could not resolve owner/repo");
+                let transient = read_failure_is_transient(read_err.kind, &failed_read);
+                let mut gh_error = serde_json::json!({
+                    "session_id": session_id,
+                    "read": failed_read,
+                    "outcome": read_err.outcome(),
+                    "stderr_tail": failed_stderr,
+                    "waited_on": read_err.waited_on(),
+                    "elapsed_s": read_err.elapsed.map(|d| d.as_secs_f64()),
+                    "graphql_remaining": quota.as_ref().map(|q| q.remaining),
+                    "graphql_reset": quota.as_ref().map(|q| q.reset_epoch),
+                    "rate_limit_class": secondary.then_some("secondary")
+                });
+                // A transient read parks like the quota arm: a block re-woke
+                // the session into "not work for you" text on every stop. The
+                // park doubles per failed fire in a row, so an outage costs
+                // one wake per window. A permanent failure, a remoteless PR,
+                // and a harness the daemon cannot wake keep the block.
+                if transient
+                    && !remoteless_pr
+                    && harness_can_idle(author_harness.as_deref(), is_loop_run_child)
+                {
+                    let streak =
+                        fire_history::failed_read_streak(fire_rows.as_deref(), &session_id);
+                    let park_ms = watch_lease::gh_read_park_ms(streak);
+                    let expires_at_ms =
+                        now.timestamp_millis() + park_ms + watch_lease::WATCH_SLACK_MS;
+                    if let Some(row) = gh_error.as_object_mut() {
+                        row.insert("parked".into(), true.into());
+                        row.insert("park_until_ms".into(), expires_at_ms.into());
+                    }
+                    emit("loop_check_gh_error", gh_error);
+                    failed_fire_row("allow");
+                    watch_lease::arm_failed_read_park(
+                        "gh_read",
+                        park_ms,
+                        expires_at_ms,
+                        &manifest_content,
+                        &session_id,
+                        &cwd,
+                        &project_events,
+                        &global_events,
+                    );
+                    let reason = format!(
+                        "gh read '{failed_read}' {}. The session is PARKED, not blocked: \
+                         end the turn; the fno daemon re-wakes this session in ~{}m and \
+                         the gate re-reads then. Do not retry or debug the read.",
+                        read_err.outcome(),
+                        park_ms / 60_000
+                    );
+                    return (
+                        0,
+                        allow_output("allow", None, &reason, this_fire, Some(fingerprint)),
+                    );
+                }
+                emit("loop_check_gh_error", gh_error);
+                failed_fire_row("block");
                 // Checked BEFORE the primary-quota branch and independent of
                 // it: a secondary (burst/concurrency) refusal can fire with
                 // the primary quota reading thousands remaining (measured
@@ -2852,14 +2855,6 @@ pub(crate) fn decide_with_payload(
                 // through the ordinary failed-read wording: the two demand
                 // opposite operator responses, and the quota probe below must
                 // not label a killed child as a quota problem either.
-                // The origin remote is a local fact: when it is absent, every
-                // origin-resolved PR read fails with the same owner/repo
-                // refusal and no retry can clear it. Gate the wording on the
-                // read's own cause, not the remote's absence: a node whose PR
-                // row pins an owner/repo reads fine without an origin, so a
-                // network blip there must keep its ordinary retry wording.
-                let remoteless_pr = failed_read.starts_with("pr_")
-                    && failed_stderr.contains("could not resolve owner/repo");
                 let reason = if remoteless_pr {
                     remoteless_pr_read_reason(&failed_read, &failed_stderr)
                 } else if read_err.kind == ReadErrorKind::TimedOut {
@@ -2888,7 +2883,7 @@ pub(crate) fn decide_with_payload(
                 // never does.
                 let reason = if remoteless_pr {
                     reason
-                } else if read_failure_is_transient(read_err.kind, &failed_read) {
+                } else if transient {
                     format!(
                         "{reason}{}",
                         failed_read_wait_directive(&failed_read, read_err.outcome())
@@ -2905,8 +2900,11 @@ pub(crate) fn decide_with_payload(
     }
 
     // ── Step 5: no intent, no backstop -> block, record fingerprint ───────────
+    // A provider goal owns plain continuation: allow, and still record the
+    // fingerprint. Every done read and the backstop ran above.
+    let goal_owned = parsed.continuation_owner == "goal";
     fire_row(
-        "block",
+        if goal_owned { "allow" } else { "block" },
         "none",
         false,
         serde_json::json!({
@@ -2915,6 +2913,12 @@ pub(crate) fn decide_with_payload(
             "reviewed": false
         }),
     );
+    if goal_owned {
+        return (
+            0,
+            allow_output("allow", None, "", this_fire, Some(fingerprint)),
+        );
+    }
 
     // P2: the dominant loop-yield boundary. Enrich the continue
     // message with a one-line inbox nudge so an autonomous loop surfaces mail.
@@ -2987,6 +2991,10 @@ fn run_done(
     repo_slug: &str,
     author_session: Option<&str>,
     github_approval_satisfies: bool,
+    // config.review.human = always: a person's GitHub approval is owed at the
+    // head, so the loop's reviewed conjunct ANDs the satisfier and the
+    // external review read stays on even with no login lane configured.
+    human_required: bool,
     max_rounds: i64,
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
@@ -3026,6 +3034,7 @@ fn run_done(
             selector,
             None,
             github_approval_satisfies,
+            human_required,
             max_rounds,
             carry_interdiff_lines,
             posture,

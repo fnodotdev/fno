@@ -992,9 +992,11 @@ mod tests {
         assert!(!direct(&plan, one("status", "done")));
         assert_eq!(s(&fields_of(&plan), "status"), "ready");
         // Every wave shipped: the projection lands done with a done_at.
-        let (target, mut fields, rest) = codec::read_plan_file(&plan).unwrap();
+        // The urls sit in the body form, the `## Gate records` fence.
+        let (target, fields, rest) = codec::read_plan_file(&plan).unwrap();
         let urls = vec!["u1".to_string(), "u2".to_string(), "u3".to_string()];
-        fields.insert("urls", codec::Value::List(urls));
+        let block = super::super::records::list_block("urls", &urls);
+        let rest = super::super::records::set_blocks(&rest, &[("urls", block)]).unwrap();
         codec::write_plan_file(&target, &fields, &rest).unwrap();
         assert!(direct(&plan, one("status", "done")));
         let f = fields_of(&plan);

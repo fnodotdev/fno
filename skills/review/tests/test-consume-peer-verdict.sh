@@ -110,6 +110,14 @@ run_case() {
 }
 
 run_case clean 0 pass $'No findings.\nfno-peer-verdict: {"verdict":"clean","blocking_findings":0}\n'
+# The caller's fresh stamp, pinned on the clean case whose row the
+# independent rung reads. run_case truncates the log per case, so the
+# grep must follow the clean case directly.
+grep -q "reviewer_context\\\":\\\"fresh" "$FNO_TEST_LOG" || {
+  echo "clean: expected reviewer_context=fresh on the emitted row" >&2
+  cat "$FNO_TEST_LOG" >&2
+  exit 1
+}
 run_case blocked 1 fail $'P1 src/lib.rs:9 - panic - handle the error\nfno-peer-verdict: {"verdict":"blocked","blocking_findings":1}\n'
 run_case contradictory 1 fail $'P1 src/lib.rs:9 - panic - handle the error\nfno-peer-verdict: {"verdict":"clean","blocking_findings":0}\n'
 run_case malformed 1 fail $'Looks fine.\nverdict: clean\n'

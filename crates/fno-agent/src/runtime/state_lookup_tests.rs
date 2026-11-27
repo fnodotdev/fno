@@ -28,6 +28,7 @@ fn entry(name: &str, harness: &str, sid: Option<&str>) -> RegistryEntry {
         related_session_id: None,
         transcript_path: None,
         start_source: None,
+        sandbox_transcript: None,
         node: None,
         node_reason: None,
         pending_session_row: None,

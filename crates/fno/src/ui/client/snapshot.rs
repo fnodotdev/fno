@@ -1457,16 +1457,10 @@ fn feed_shot(
     kind: Option<&ViewKind>,
 ) -> Result<(), ShotError> {
     // The `e` key's state flip plus the fold the live panel's run
-    // loop kicks, run inline: one Head page lands, newest first.
+    // loop kicks, run inline: the whole history lands.
     view.feed = Some(super::feed_view::open_overlay(None, 0));
-    if let Some(f) = view.feed.as_mut() {
-        f.want = true;
-    }
-    let outcome = runtime.block_on(crate::feed_overlay::fetch_page(
-        crate::feed_overlay::PageReq::Head,
-        None,
-    ));
-    super::feed_view::apply_fold(view, 0, outcome);
+    let outcome = runtime.block_on(crate::feed_overlay::fetch_history());
+    super::feed_view::apply_fold(view, 0, outcome.map(crate::feed_overlay::Land::Rows));
     // A fresh root has no feed rows, so the changed view rendered
     // with nothing to judge. Refuse the shot.
     if view.feed.as_ref().is_none_or(|f| f.win.items.is_empty()) {

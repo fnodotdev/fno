@@ -13,7 +13,6 @@ use super::settings;
 use super::workflows::{archived_entry, text_at};
 use crate::graph_store;
 use crate::spawn_context::session_identity_key;
-use crate::worktree::OWNERSHIP_LIVE_STATUSES;
 
 const POINTER_WORDS: usize = 20;
 const SEND_TIMEOUT_SECONDS: u64 = 30;
@@ -139,7 +138,7 @@ fn row_name(row: &Value) -> &str {
 fn row_live(row: &Value) -> bool {
     row.get("status")
         .and_then(Value::as_str)
-        .is_some_and(|s| OWNERSHIP_LIVE_STATUSES.contains(&s))
+        .is_some_and(|s| crate::AgentStatus::LIVE_STATUSES.contains(&s))
 }
 
 /// The agent behind a claim holder, or None: a role holder is a marker, not an

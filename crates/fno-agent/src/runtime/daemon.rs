@@ -1120,7 +1120,6 @@ pub async fn bind_supervisor_socket(
     };
 
     paths::set_file_mode_0600(&sock)?;
-    sandbox_host::publish_sandbox_sock(home);
 
     // fstat-verify the invariant; refuse to serve if either perm is wrong.
     #[cfg(unix)]
@@ -1647,7 +1646,6 @@ mod report;
 pub(crate) mod sandbox_host;
 mod status;
 mod thread_row_status;
-pub(crate) mod transcript_push;
 use codex_thread_lane::{lane_name_collision_verdict, spawn_codex_thread_lane};
 use codex_thread_resume::{ensure_codex_thread_handle, schedule_codex_thread_recovery};
 pub(crate) use report::{find_uuid_backfill_row, UuidBackfill};
@@ -1820,9 +1818,7 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // status reads the in-memory drive table for the active-drives count, so
         // it stays on the async runtime rather than the blocking pool.
         Some("status") => status::handle_status(ctx, req).await,
-        // The sandbox launch plan: mounts + env for one worktree under the
-        // configured provider (`none` answers the empty plan). Lived in
-        // sandbox_host; the dispatch line is paid by the handle_status move.
+        // The sandbox launch plan for one worktree: provider, image, pins.
         Some(crate::sandbox_launch::SANDBOX_PLAN_COMMAND) => {
             run_blocking(ctx, req, sandbox_host::handle_sandbox_plan).await
         }
@@ -1838,11 +1834,6 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
         // Inside-leg state push (E3.2): a per-turn hook stores the latest
         // {working|blocked|done} on the matching claude row. Pure flock + CPU.
         Some("report") => run_blocking(ctx, req, handle_report).await,
-        // The sandboxed-session transcript lane: a turn hook pushes raw
-        // transcript lines; the store is judged and idempotent.
-        Some(transcript_push::TRANSCRIPT_APPEND_COMMAND) => {
-            run_blocking(ctx, req, transcript_push::handle_transcript_append).await
-        }
         // SessionStart report: a per-harness hook posts the raw payload.
         Some(crate::session_report::SESSION_REPORT_COMMAND) => {
             run_blocking(ctx, req, |ctx: &Ctx, req: &Request| {
@@ -1974,18 +1965,12 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
             .and_then(|v| v.as_str())
             .unwrap_or(crate::state::CLAUDE_MODE_STREAM_JSON);
         if claude_mode != crate::state::CLAUDE_MODE_INTERACTIVE {
-            let explicit_argv = p.get("argv").and_then(|v| v.as_array()).map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect::<Vec<String>>()
-            });
             return spawn_claude_stream_lane(
                 ctx,
                 req,
                 &name,
                 &cwd,
                 resume_id.as_deref(),
-                explicit_argv,
                 provenance.as_ref(),
             )
             .await;
@@ -2244,7 +2229,6 @@ async fn spawn_claude_stream_lane(
     name: &str,
     cwd: &std::path::Path,
     resume_id: Option<&str>,
-    explicit_argv: Option<Vec<String>>,
     provenance: Option<&crate::spawn_contract::SpawnProvenance>,
 ) -> Response {
     // 1. Adoption requires a resume target. A fresh `host --provider claude`
@@ -2298,21 +2282,17 @@ async fn spawn_claude_stream_lane(
     // 2b. Build the child argv BEFORE the claim: an adopt of a session the
     //    lane cannot carry (a recorded route, a non-default account, or a
     //    model no default-endpoint resume serves) must refuse before any
-    //    claim or spawn, not strand a session:<uuid> hold. The explicit-argv
-    //    escape hatch lets tests substitute a fake stream emitter so CI never
-    //    spawns a real `claude -p` (Test discipline / Locked Decision 1).
-    let child_argv = match explicit_argv {
-        Some(argv) => argv,
-        None => match crate::claude_stream_entry::stream_child_argv(uuid, &registry) {
-            Ok(argv) => argv,
-            Err(reason) => {
-                let _ = ctx.emitter.emit(
-                    "agent_spawn_failed",
-                    &json!({"name": name, "reason": "resume_unpinned"}),
-                );
-                return Response::err(req.id, ErrorCode::InvalidParams, reason);
-            }
-        },
+    //    claim or spawn, not strand a session:<uuid> hold. No request field
+    //    names the argv: a socket client never chooses a host command.
+    let child_argv = match crate::claude_stream_entry::stream_child_argv(uuid, &registry) {
+        Ok(argv) => argv,
+        Err(reason) => {
+            let _ = ctx.emitter.emit(
+                "agent_spawn_failed",
+                &json!({"name": name, "reason": "resume_unpinned"}),
+            );
+            return Response::err(req.id, ErrorCode::InvalidParams, reason);
+        }
     };
 
     // 3. Acquire the single-writer claim BEFORE spawning (Locked Decision 5). A

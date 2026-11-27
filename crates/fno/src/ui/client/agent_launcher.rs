@@ -21,6 +21,7 @@ use crate::proto::agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchSt
 mod bang;
 pub(crate) mod card;
 pub(crate) mod grammar;
+pub(crate) mod projects;
 pub(crate) mod sets;
 pub(crate) mod will_run;
 
@@ -641,8 +642,8 @@ impl LaunchDraft {
         // A routing-row pick rides its ROUTE pin: a route owns the model, so
         // model and provider never join it. codex and opencode are the
         // carve-outs: their rows are slugs/ids their own CLI consumes, so the
-        // id rides as --model (a derived openai/... route is claude-only at
-        // the door).
+        // id rides as --model (the door takes a codex route on the headless
+        // lane only, and this launcher opens threads and panes).
         let native_model_pin = matches!(
             self.harness().as_harness(),
             Harness::Codex | Harness::Opencode
@@ -2891,6 +2892,25 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
             catalog.as_ref(),
             &|env, file| crate::provider_key::key_present(env, file),
         );
+        // The launcher opens codex threads, and a codex thread takes no
+        // route (one shared app-server), so a routed codex row runs from the
+        // CLI's headless lane instead.
+        let ready = if row.name.as_harness() == Harness::Codex {
+            let (routed, own): (Vec<_>, Vec<_>) =
+                ready.into_iter().partition(|m| !m.route.is_empty());
+            more.extend(routed.into_iter().map(|mut m| {
+                m.state = ModelState::Unreachable {
+                    reason: format!(
+                        "a codex thread takes no route; run fno agent spawn -H codex --as headless --route {}",
+                        m.route
+                    ),
+                };
+                m
+            }));
+            own
+        } else {
+            ready
+        };
         let (ready, native_more) = match reach
             .harness
             .get(&row.name)

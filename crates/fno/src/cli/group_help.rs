@@ -32,7 +32,7 @@ const DO: &[(&str, &str)] = &[
     ("ci", "CI runs for a PR"),
     ("delivery", "evaluate a plan's delivery evidence"),
     ("diff", "the diff a review reads"),
-    ("docs", "tie doc pages to releases: bind, surface, gate"),
+    ("docs", "tie doc pages to releases: link, surface, gate"),
     ("feedback", "review feedback on a PR"),
     ("phase", "phase handoff artifacts"),
     ("plan", "plan files: path, parse, validate"),

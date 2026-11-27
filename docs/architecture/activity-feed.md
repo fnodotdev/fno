@@ -42,15 +42,13 @@ Every row carries an `area`: a pure function of the kind. The column renders in 
 
 `worker_stalled` derives from a `worker_silent` event (the handle and its silent age). `help_emitted` derives from a `blocked` event (the distress kind and its reason). A spawn-gate refusal keeps the `session_spawn_refused` kind and carries the gate axis as its `reason`. The update trio folds into `update_started` and `update_finished`.
 
-## Paging, and the window
+## Paging, and the panel's one read
 
 The projection orders rows by a total key: parsed time, then kind, node, session, ref and title. Every row carries a `cursor` - that key as one opaque string. The client never parses anything else to page.
 
 `fno agent fleet feed --json --limit 200` reads the newest page. `--before <cursor>` reads the page strictly below a cursor. `--after <cursor>` reads the page strictly above one. Rows sharing a timestamp still page cleanly. Pages concatenate with no row read twice or skipped.
 
-The panel holds a bounded window of at most 600 rows, three pages. Scrolling back near the oldest loaded row arms an Older page. If the cap must hold, the window drops its far end after prepending. Scrolling forward past a detached head arms a Newer page. Rows arrive live at the top. They never jump the view while you are scrolled back. The footer shows `↑ N new`. A click on that marker, or `g`, or the Home key, returns you to the top. Memory stays flat over a long scroll.
-
-A page costs one projection run. The questions leg reads its kinds typed. The owner rollup indexes the graph once. The whole projection runs under a second where it ran over two.
+The cursor pages the command. The panel does not page: each fold reads the whole history in one run (`--limit 10000000`) and replaces the rows it holds. Sort, filter and group then read every row, never a loaded page. A fold runs off the UI loop, and the last good rows stay on screen while it runs.
 
 ## The command and the panel
 
@@ -58,11 +56,13 @@ A page costs one projection run. The questions leg reads its kinds typed. The ow
 
 The filter flags AND together, and the values inside one flag are comma-OR. `--kind` matches by prefix, so an exact kind is its own prefix. An empty flag value is ignored. An unknown area returns an empty answer, not an error. Both epoch bounds reach every event-store leg as real store bounds.
 
-`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. A narrow panel drops lead, then harness, then area, then session. Time, kind, node and summary never drop. The border drags to a width that persists.
+The live panel holds no history. Opening it starts `fno agent fleet feed --serve`, a held reader that holds the whole history's rows and reads them again every 15 seconds. Each read runs in a child process, so the projection's working set is the child's and leaves with it. When the new rows start to stream, the reader drops its old rows. Two copies never coexist. An answer that lands in that parse waits on a lock and then reads the new rows. After a failed parse the empty window lasts one child read, because the reader reads again at once. The panel sends one JSON request per line: the view, the query, and the window it paints. The reader answers one JSON line: the slot list, the rows of that window, and the value lists a filter picker reads. The grammar, the row and the table live once, in `fno_proto::feed`, and both sides run that copy. The panel keeps the rows within 600 slots of its top row. Closing the panel closes the reader's stdin, and the reader exits. A shot or a test holds its own rows and evaluates them in process.
 
-The panel holds a bounded window of at most 600 rows (three pages). Rows arrive live at the top and never jump the view while you are scrolled back. The footer shows `↑ N new`, and a click on that marker (or `g`, or the Home key) returns you to the top and clears the marker.
+`e` in the mux client toggles the full-height panel on the right edge. Rows render newest first as a table: time, area, harness, kind, node, session tail, lead, summary. Time, kind and summary never drop, and the summary keeps at least 12 columns. A short panel gives width in one order. Kind narrows to 6 columns with an ellipsis. Then the summary floor drops to 10, which keeps node. Then node goes. A wide panel dates every row older than today. At any width, the first row of each day shows its date, so a day boundary never reads as time running backward. A narrow panel shows that date in place of the time, so the time column keeps its width and node keeps its place. Past that, the panel adds node, then lead, harness, area and session as width allows. The border drags to a width that persists.
 
-The bottom row carries the hints and the status. The hints are the `↑ N new` marker, the active query and the keys. The status is the row count, `end of history`, a scan note, or the typed error. The header is a title only.
+A refresh never moves the reader. The row under the cursor and the top row stay where they were. Rows newer than the newest one held count while you sit away from the top, and the footer shows `↑ N new`. A click on that marker, or `g`, returns you to the top and clears it.
+
+The title row counts the rows: `activity feed · 3`, or `12 of 340` under a query or a filter. Focused, it also names the sort, the group and the filter count. The filter count stays down to a narrow panel, so a filter on a hidden column is still named. The bottom row carries the `↑ N new` marker, the active query, the keys, and the typed error with `r retry`.
 
 ### Keys
 
@@ -73,23 +73,41 @@ Focus with `E`. An unfocused panel takes no keys at all.
 | Up, Down | select a row |
 | Left, Right | pan the summary in display columns |
 | PageUp, PageDown | select a viewport at a time |
-| `g` or Home | jump to the top; on a detached head it arms a fresh Head |
-| `G` or End | jump to the oldest visible row |
-| `o` | toggle grouped/recent order |
+| `g` | jump to the first slot and clear the `↑ N new` marker |
+| `G` | jump to the last slot |
+| `o` | open the sort picker |
+| `W` | open the group picker |
+| `f` | open the filter picker |
+| `x` | clear every column filter; the query stays |
+| `z` | fold every group, or unfold them all when all are folded |
+| `r` | read the history again now |
 | `?` | toggle the keys overlay |
 | `/` | open the search bar |
-| Enter | open the row's provenance |
-| Esc | release the keyboard; the overlay unwinds first if it is open |
+| Enter | open the row's provenance; on a group header, fold it |
+| Space | fold or unfold the group header under the cursor |
+| Esc | close the picker or overlay in front, else close the panel |
 
 `?` toggles the `feed keys` overlay. The panel's keys, as it renders them:
 
-- `up/down row - enter details - o order`
-- `g home (newest) - G oldest - arrows pan`
+- `up/down row or group - enter details or fold`
+- `o sort - W group - f filter - x clear filters`
+- `z fold all - r retry`
+- `g first - G last - arrows pan`
 - `/ search - ? keys - esc close`
+
+## Sort, filter and group
+
+The panel is a table over every row it holds. One view decides what shows: one sort column, a filter per column, one grouping, and the folded groups. The view saves to the mux view store as `feed_view`, by name, so it survives a restart. A name a later build drops reads as that one choice's default. A client with no saved view reads the old `feed_order` once: `recent` opens ungrouped.
+
+Sort. `o` lists all eight columns, hidden ones too. The active one wears its arrow. Picking it again flips the direction. A new column starts newest first for time and A to Z for the rest. An empty value sorts last in both directions. Ties fall to newest first. A click on a column title sorts by it the same way.
+
+Filter. `f` lists the columns, with a dot and a count on each one that filters. Enter opens that column's values with their row counts, over the rows the query and the other filters leave. Typing narrows the list, case-blind. Space ticks a value. Enter makes the ticks the column's filter. With nothing ticked and no tick changed, it takes the value under the cursor. After a change, Enter applies the ticks exactly, so unticking every value clears that column. Values inside one column OR. Columns AND, and they AND with the query. A filtered column's title wears a dot and its value count, so color is never the only signal. The time column filters by local day, and the session column by the whole id.
+
+Group. `W` lists `none`, `lead or epic` (the default) and the eight columns. `lead or epic` puts the teams band first, then one group per owner by its newest row, then `other`. A column groups by its value. Rows with no value group last, under `no <column>`, for example `no harness`. Picking the active grouping again flips the group order. A header shows a caret and its row count. Enter, Space or a click folds it, and `z` folds them all.
 
 ### Search
 
-`/` opens a query bar on the footer line. The bar speaks the shared search grammar - the one parser the feed, the mux backlog search and the web board share. Space ANDs, comma ORs inside a key, `|` ORs across terms, and a leading `-` negates. A term the grammar cannot read shows the refusal in the footer verbatim and fetches nothing.
+`/` opens a query bar on the footer line. The bar speaks the shared search grammar - the one parser the feed, the mux backlog search and the web board share. Space ANDs, comma ORs inside a key, `|` ORs across terms, and a leading `-` negates. A term the grammar cannot read shows the refusal in the footer verbatim and leaves the rows as they were.
 
 The query keys the feed answers, as the `?` overlay renders them:
 
@@ -119,9 +137,9 @@ The query keys the feed answers, as the `?` overlay renders them:
 
 Worked examples: `n-1234` (a bare node id), `h:codex k:node stall`, `sid:00bde302`, `-k:question h:claude`, `h:codex | h:claude k:pr`, `ts:>=2026-10-01`. `s:ready` refuses here: `s:` is node-only.
 
-If the parsed query is plain positive terms on pushable keys, the client sends them as projection flags. The store does the filtering. Anything richer matches client-side over each landed page. Free text, `|` and a negation all land there. The scan caps at five pages per scroll gesture. The footer names how far back it reached.
+The query matches in the client, over every row the panel holds. It reads nothing: a settled query only re-slots the rows. The projection's flags stay for the command line.
 
-Tab completes the token before the cursor. A key prefix completes from the shared table's keys. A value after `id:`, `sid:`, `a:`, `h:`, `k:` or `l:` completes from the distinct values in the loaded window. Esc in the bar clears the query and refolds unfiltered. The panel stays open.
+Tab completes the token before the cursor. A key prefix completes from the shared table's keys. A value after `id:`, `sid:`, `a:`, `h:`, `k:` or `l:` completes from the distinct values the panel holds. Esc in the bar clears the query and shows every row again. The panel stays open.
 
 ## Day boundaries
 
@@ -207,3 +225,27 @@ One risk to know: the OTLP spec does not require a server to accept the JSON enc
 The feed reads the durable stores and the graph for lifecycle. No writer is added.
 
 When you want to surface a new operator-facing event, add it to a store that passes the test above. A typed row in db/events.db or the agents journal qualifies - give the type a required data shape and the projection a derived kind. So does a stamped graph field beside the row that produced it, and so does a durable receipt store. Never emit it into events.jsonl expecting the feed to mine the rotating file.
+
+## Measuring the panel on a real store
+
+The panel holds the whole history in the client. Read its memory and its reslot time on a real store, never on a fixture. Read them on a private copy. Take the copy with `sqlite3 .backup`, and delete it after the read. A binary built in a feature worktree refuses the live store.
+
+The client logs one line per reslot to `$FNO_MUX_DIR/client.log`: `feed reslot rows=<n> slots=<n> ms=<n>`. A row count above 0 tells you the feed landed. Read the client's RSS with `ps -o rss=` before the feed key, at its peak, and 30 seconds after the line lands. Read the held reader the same way, and read its footprint beside the RSS with `footprint -p <pid>`. On macOS the footprint is the true figure. libmalloc keeps freed pages resident. So `ps` RSS climbs about 7 MB per refresh, while `heap` shows the same malloc node count and the footprint stays flat.
+
+Drive the client in a pty that you own. macOS `script` fails under a harness with `tcgetattr/ioctl: Operation not supported on socket`, so open the pty from code. A runner needs four things, or the read is wrong:
+
+- Unset every harness identity variable before the server starts, as `scripts/ops/mux-demo-snapshot.sh` does, and set `FNO_OWNER_PID` to the runner's pid. With a session id still set, the server sees its sandbox owner gone and shuts down after the first read.
+- Set the pty size before the client starts. Set it on the child side before exec, for example 100x40.
+- Answer the terminal queries. The client waits for a reply to each query in this table. Without the replies the client paints only its splash. Then `client.log` reads `error attach-no-paint` after 5 seconds.
+
+| Query | Sent as | Reply |
+|---|---|---|
+| DA1 | `ESC [ c` | `ESC [ ? 62 ; 22 c` |
+| DSR | `ESC [ 5 n` | `ESC [ 0 n` |
+| cell size | `ESC [ 16 t` | `ESC [ 6 ; 16 ; 8 t` |
+| OSC 11 background | `ESC ] 11 ; ? ST` | `ESC ] 11 ; rgb:1414/1414/1414 ST` |
+
+The client also sends a kitty graphics query. It needs no reply. Spaces in the table are for reading only. Send the bytes with no spaces.
+- Open the feed with Ctrl-b (0x02) then `e`.
+
+Take a read only with no shot rig running on the machine and the 1-minute load under 8. Throw out a read whose window spans a pause of another process. Kill only the pids the runner started, by pid.

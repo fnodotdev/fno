@@ -17,7 +17,29 @@ You must run the loop only against plans you have read or trust the author of. S
 - **Plans from the footnote repository's `examples/` folder:** reviewed and safe.
 - **Plans from random contributors, bug reports, gists, or untrusted sources:** read them carefully before running. The loop will execute them with your credentials.
 
-The devcontainer sandbox is shared-state protection, not a security boundary. It keeps a headless worker from writing shared state, and it does not contain a malicious plan. Multi-tenant isolation remains out of scope.
+## What a sandboxed worker cannot do
+
+`[sandbox] provider` runs each headless worker in a container with no mount and no network ([sandbox host](architecture/sandbox-host.md)). The attacker in that model is the sandboxed process: it controls its container and forges every byte it sends. The host user, the daemon, the fno binary and the engine are trusted.
+
+- It cannot see the host login, keychain, home, engine socket or another spawn's route key. Nothing is mounted, and keys cross exec stdin to this sandbox only.
+- It cannot spawn, ask, stop, remove, rename or list other workers. The guest passes status, report, session report and the typed loop ops only. The host stamps who sent them.
+- In the target loop it cannot merge, attest its own review, decide or update the backlog. It cannot name another node, branch, repo or recipient: the host binds them at spawn. Mail goes to its spawner only, labelled sandbox origin.
+- It cannot push to a default branch, rewrite the bound branch or push a workflow or action edit. The push is fast-forward only, with hooks off.
+- Its PR text cannot act as authority. Before the host posts, it breaks markers, mentions, closing words and other node ids. The host writes the owners line and the closure trailer itself.
+- Its Stop cannot end on a forged fact. The host runs the one Stop decision from GitHub and the export. A sandbox run is no-merge and ends `DoneUnreviewed` at best, so a person or an outside reviewer reviews and merges.
+- It cannot write the host worktree or `.git`. Its commits land under `refs/sandbox/<id>/head`, fetched with hooks off. No host branch moves, and the host never applies its dirty work.
+- It cannot reach host loopback, the LAN, a tailnet, cloud metadata or a host-owned address. The proxy refuses every private range and every port but 80 and 443.
+- It cannot turn the sandbox off from a project file. A project layer can only raise the sandbox.
+- Its transcript cannot become a user turn, a law witness, operator capture or an account cap. Only display readers read it, labelled as sandbox origin.
+
+What remains:
+
+- A person who checks out a sandbox ref runs untrusted code. Read it first.
+- The sandbox can send its own key and the source out through a public host.
+- Transcript prose, notes, mail and PR text can still mislead a person who reads them.
+- Host-side gates act with your GitHub scope, on the bound branch and PR only. Branch code that CI runs still runs under your repository's CI policy.
+- With `sandbox.host`, the VM's owner is trusted. The VM holds no GitHub token and no route back to the fno host.
+- Engine and kernel escapes, multi-tenant isolation and resource quotas are out of scope.
 
 ## What the loop WILL do, given a plan
 

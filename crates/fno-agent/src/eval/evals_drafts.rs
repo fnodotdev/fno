@@ -194,7 +194,7 @@ pub(crate) fn pass(journal: &Path, dir: &Path, now: SystemTime) -> Result<Value,
 }
 
 fn drafts_dir(state: &Path) -> PathBuf {
-    state.join("evals").join("golden-drafts")
+    crate::evals::state_evals_dir(state).join("golden-drafts")
 }
 
 /// `fno-agent evals drafts`: run the pass now and print its counts.

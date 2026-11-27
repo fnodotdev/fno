@@ -18,7 +18,7 @@ use serde_json::json;
 /// The audit-only delivery value: the bytes already reached the recipient
 /// over the harness's native cross-session transport. Mirrors
 /// `bus.log.CROSS_SESSION_DELIVERY` and the drain gates
-/// (`mail_control_drain::AUDIT_ONLY_DELIVERIES`).
+/// (`bus_read::AUDIT_ONLY_DELIVERIES`).
 pub const CROSS_SESSION_DELIVERY: &str = "cross-session";
 
 /// The transport label the row's meta carries: the provenance string the

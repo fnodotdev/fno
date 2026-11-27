@@ -119,6 +119,7 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
             .map(|r| r.entries)
             .unwrap_or_default();
     let mut names: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
+    names.extend(handover_worker_names(None));
     let mut args = args;
     if let Some(line) = resume_route_pin(&mut args, &entries) {
         eprintln!("{line}");
@@ -306,6 +307,22 @@ fn resume_route_refusal(
         quote(row_harness),
         route_or_model,
     )
+}
+
+/// Worker names that a live `spawn-handover:<name>` window claim holds on a
+/// node. The name reservation below dies with its client and the registry row
+/// lands seconds later, so a second spawn in that gap reads the name free and
+/// writes the same holder on its own node. The window claim outlives both.
+pub(crate) fn handover_worker_names(root: Option<&Path>) -> HashSet<String> {
+    crate::claims::list(Some("node:"), root, false)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|r| {
+            r.holder
+                .strip_prefix(crate::spawn_guard::HANDOVER_HOLDER_PREFIX)
+        })
+        .map(str::to_string)
+        .collect()
 }
 
 /// Reserve a worker name while this spawn client runs. The registry holds no
@@ -567,12 +584,21 @@ pub(crate) fn granted_dirs(cwd: &Path, sealed: bool) -> Vec<String> {
     }
 }
 
-/// The eval sandbox's Claude config root: `<state dir>/evals/claude-config`.
+/// The eval sandbox's Claude config root: `<state dir>/db/evals/claude-config`,
+/// or the legacy `<state dir>/evals/claude-config` while it exists. The
+/// sealed login is a Keychain item keyed by this path, so the mover leaves
+/// the legacy folder in place and this read keeps naming it.
 /// A sealed claude eval worker pins this root, so the harness's own state
 /// writes (transcripts, history, config) land under the fno eval dir instead
 /// of the user's `~/.claude`. `None` when no state dir resolves.
 pub fn evals_claude_config_dir() -> Option<PathBuf> {
-    crate::backlog::settings::state_dir().map(|state| state.join("evals").join("claude-config"))
+    let state = crate::backlog::settings::state_dir()?;
+    let legacy = state.join("evals").join("claude-config");
+    if legacy.is_dir() {
+        return Some(legacy);
+    }
+    let evals = crate::state_layout::place_dir(&state, "evals")?;
+    Some(evals.join("claude-config"))
 }
 
 /// Stage the sandbox so a pinned worker keeps its ambient context while its
@@ -788,6 +814,16 @@ mod tests {
         child.wait().unwrap();
         let _ = crate::claims::acquire("spawn-name:t-gone", "spawn-cli:2", rival(dead));
         assert_eq!(reserve_name("t-gone", Some(tmp.path())), Ok(()));
+        // The node's window claim outlives that client: its worker name
+        // stays taken, so a sibling spawn mints the next suffix.
+        let window = crate::claims::AcquireOpts {
+            pid_unavailable: true,
+            ttl_ms: Some(900_000),
+            root: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        };
+        let _ = crate::claims::acquire("node:x-win", "spawn-handover:t-gone", window);
+        assert!(handover_worker_names(Some(tmp.path())).contains("t-gone"));
     }
 
     #[test]
@@ -1035,7 +1071,7 @@ mod tests {
         unsafe { std::env::set_var("FNO_STATE_DIR", state.path()) };
         assert_eq!(
             evals_claude_config_dir(),
-            Some(state.path().join("evals").join("claude-config"))
+            Some(state.path().join("db/evals/claude-config"))
         );
         match previous {
             Some(v) => unsafe { std::env::set_var("FNO_STATE_DIR", v) },
@@ -1065,7 +1101,7 @@ mod tests {
             std::env::set_var("CLAUDE_CONFIG_DIR", ambient.path());
         }
         let staged = stage_evals_claude_config().expect("staged sandbox");
-        assert_eq!(staged, state.path().join("evals").join("claude-config"));
+        assert_eq!(staged, state.path().join("db/evals/claude-config"));
         // An abandoned temp from a dead runner sweeps on a later stage; a
         // fresh temp (a live stage) survives.
         let orphan = staged.join(".claude.json.stage-dead");

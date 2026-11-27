@@ -327,6 +327,13 @@ pub(crate) fn question(kind: &str) -> Value {
         }}),
         "is_ask" => json!({"type": "noul",
             "instructions": "Does this message ask the user for a decision or an answer?"}),
+        "rule_obeyed" => json!({"type": "choice",
+        "instructions": "Did the reply obey the decision in state.rules?",
+        "criteria": {
+            "obeys": "The reply does what the decision says.",
+            "breaks": "The reply does what the decision forbids, or skips what it requires.",
+            "not_applicable": "The decision does not bear on this reply."
+        }}),
         "agent_mail" => json!({"type": "choice",
         "instructions": "What does this agent mail do with the message before it?",
         "criteria": {

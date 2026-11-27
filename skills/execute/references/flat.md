@@ -38,7 +38,7 @@ If no frontend-craft executor is installed, plain execution is fine.
 
 ## 2. Execute Changes
 
-**Before each numbered change**: the plan's `kill_criteria:` frontmatter block is the thing to evaluate (frontmatter only - the body never carries it). That frontmatter is the parser's only source - a `## Kill Criteria` section in the body is invisible to it. On a fired predicate, stop, emit `<aborted reason="{name}">MISSION ABORTED: {reason}</aborted>`, and make no further changes:
+**Before each numbered change**: the plan's `kill_criteria:` block is the thing to evaluate. It sits in the `## Gate records` fence, or in frontmatter on a legacy plan. `fno do phase kill-check` reads both. On a fired predicate, stop, emit `<aborted reason="{name}">MISSION ABORTED: {reason}</aborted>`, and make no further changes:
 
 ```bash
 PLAN_PATH="$1"   # the .md file path passed to /execute
@@ -62,7 +62,7 @@ if [[ -n "$PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
 fi
 ```
 
-Backward compat: plans without `kill_criteria:` frontmatter (most focused
+Backward compat: plans without a `kill_criteria:` block (most focused
 plans will not have one) return exit 0 (no abort). Malformed predicates
 log WARN to stderr and are skipped.
 

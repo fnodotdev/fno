@@ -130,7 +130,9 @@ pub(crate) struct Retarget {
 
 /// The rest of `line` after a `retarget` keyword, mirroring
 /// `closure_line_rest`: keyword + colon or whitespace, glued text is prose.
-fn retarget_line_rest(line: &str) -> Option<&str> {
+/// The style checker reads the same grammar to leave a well-formed line
+/// alone.
+pub(crate) fn retarget_line_rest(line: &str) -> Option<&str> {
     let kw = "retarget";
     if line.len() >= kw.len()
         && line

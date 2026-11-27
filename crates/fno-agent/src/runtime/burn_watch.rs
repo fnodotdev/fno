@@ -1462,7 +1462,7 @@ fn run_pass(
     );
     let live_entries =
         match crate::spawn_gate::live_rows_checked(&home.registry_json(), &mut warnings) {
-            LiveRead::Rows(rows) => rows,
+            LiveRead::Rows { rows, .. } => rows,
             LiveRead::RegistryUnreadable(e) => {
                 // A degraded read must not erase what it failed to see: hold
                 // the sweep so ladders and once-notes survive the glitch.

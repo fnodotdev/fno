@@ -16,6 +16,7 @@ use crate::session_truth::{
 };
 use crate::state::{MuxRef, RegistryEntry};
 use crate::wake_read::python_json_default;
+use crate::AgentStatus;
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -29,9 +30,6 @@ const EXIT_UNSUPPORTED: i32 = 1;
 const EXIT_NOT_FOUND: i32 = 13;
 
 const STATUS_KINDS: [&str; 4] = ["task_started", "task_done", "blocked", "run_summary"];
-
-/// Registry statuses that claim a running worker.
-const LIVE_STATUSES: [&str; 6] = ["spawning", "ready", "idle", "busy", "live", "restarting"];
 
 const HELP: &str = "\
 Usage: fno agent session peek [OPTIONS] [HANDLE]
@@ -47,6 +45,9 @@ Options:
   -n, --lines INTEGER  Show the last N transcript records (default 15; 0 for
                        none).
   -f, --follow         Stream new records as the peer emits them (read-only).
+  --ask                With --follow, send each line typed on stdin to the
+                       peer as `fno-agent ask <handle> <line>`. The one
+                       option that writes: it resumes the session by name.
   --grep TEXT          Only records carrying this token, within the --lines
                        window.
   -A, --all            Search every registry session with a transcript instead
@@ -66,6 +67,7 @@ struct Args {
     handle: Option<String>,
     lines: usize,
     follow: bool,
+    ask: bool,
     grep: Option<String>,
     all: bool,
     json: bool,
@@ -77,6 +79,7 @@ fn parse(args: &[String]) -> Result<Args, i32> {
         handle: None,
         lines: 15,
         follow: false,
+        ask: false,
         grep: None,
         all: false,
         json: false,
@@ -89,6 +92,7 @@ fn parse(args: &[String]) -> Result<Args, i32> {
                 return Err(0);
             }
             "--follow" | "-f" => out.follow = true,
+            "--ask" => out.ask = true,
             "--all" | "-A" => out.all = true,
             "--json" | "-J" => out.json = true,
             "--lines" | "-n" | "--grep" => {
@@ -129,6 +133,10 @@ fn parse(args: &[String]) -> Result<Args, i32> {
     }
     if !out.all && out.handle.is_none() {
         eprintln!("usage: fno agent session peek <handle>  (or --all)");
+        return Err(2);
+    }
+    if out.ask && (!out.follow || out.json) {
+        eprintln!("--ask needs --follow and takes no --json: it prints a prompt");
         return Err(2);
     }
     if out.follow && (out.all || out.grep.is_some()) {
@@ -314,11 +322,10 @@ fn pane_of(row: &RegistryEntry) -> Option<&MuxRef> {
         .filter(|m| !m.session.trim().is_empty() && m.pane_id >= 1)
 }
 
-/// The last `n` lines of a mux pane's scrollback, through the shared pane
-/// reader; `None` when the mux does not answer or the pane is blank.
+/// The last `n` lines of a mux pane's visible text, through the in-process
+/// mux client; `None` when the mux does not answer or the pane is blank.
 fn read_pane(mux: &MuxRef, n: usize) -> Option<String> {
-    let bin = crate::scrape::fno_bin();
-    let text = crate::scrape::mux_pane_read(&bin, Some(&mux.session), mux.pane_id)?;
+    let text = crate::runtime::mux_client::pane_read(Some(&mux.session), mux.pane_id)?;
     let lines: Vec<&str> = text.trim_end().lines().collect();
     let tail = lines[lines.len().saturating_sub(n)..].join("\n");
     (!tail.trim().is_empty()).then_some(tail)
@@ -466,12 +473,9 @@ fn peek_one(
         }
         let row = row_exact(rows, handle);
         if let Some(row) = row {
-            let status = serde_json::to_value(row.status)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
+            let status = row.status.as_str();
             let sid = row.harness_session_id.as_deref().unwrap_or("");
-            if LIVE_STATUSES.contains(&status.as_str()) && sid.is_empty() {
+            if AgentStatus::LIVE_STATUSES.contains(&status) && sid.is_empty() {
                 eprintln!(
                     "registry row {handle} exists with status={status} but harness_session_id \
                      is missing; worker identity is incomplete"
@@ -505,9 +509,18 @@ fn peek_one(
     };
     if !args.json {
         // `recorded_cwd`: the registry's launch-time snapshot, never a live pwd.
+        // A sandboxed worker's lines are sandbox content, and say so.
+        let origin = match session
+            .row
+            .as_ref()
+            .and_then(|r| r.sandbox_transcript.as_ref())
+        {
+            Some(_) => " origin=sandbox",
+            None => "",
+        };
         emit(
             out,
-            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}"),
+            &format!("peer {handle}: agent={agent} short_id={short_id} recorded_cwd={cwd}{origin}"),
         );
     }
 
@@ -605,8 +618,46 @@ fn peek_one(
         return EXIT_OK;
     };
     let _ = out.flush();
+    if args.ask {
+        spawn_ask_line(handle);
+    }
     follow_records(&path, parse, args.json, out);
     EXIT_OK
+}
+
+/// The follow view's input line: each non-empty stdin line becomes one
+/// `ask` on this peer, run to its end before the next is read, because a
+/// footnote session takes one turn at a time. The reply lands in the
+/// transcript the follow loop already prints, so the ask's own stdout is
+/// dropped.
+fn spawn_ask_line(handle: &str) {
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("--ask: cannot resolve this binary; input line off");
+        return;
+    };
+    let handle = handle.to_string();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        loop {
+            eprint!("ask> ");
+            line.clear();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            let message = line.trim();
+            if message.is_empty() {
+                continue;
+            }
+            let status = std::process::Command::new(&exe)
+                .args(["ask", &handle, message])
+                .stdout(std::process::Stdio::null())
+                .status();
+            if !status.is_ok_and(|s| s.success()) {
+                eprintln!("ask {handle}: the send failed; the line was not delivered");
+            }
+        }
+    });
 }
 
 /// Stream new parsed records as the transcript grows. Reads only complete

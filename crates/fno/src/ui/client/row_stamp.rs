@@ -251,13 +251,17 @@ pub(super) fn paint_notice_overlay(
         }
         for (i, ch) in text.chars().enumerate() {
             let idx = start + i;
+            // `cells` is the row below the tab bar: empty on a one-row
+            // terminal, so `idx < cols` alone does not prove the cell exists.
             if idx < cols {
-                cells[idx] = Cell {
-                    c: ch,
-                    fg: Color::Default,
-                    bg: Color::Default,
-                    flags: cell_flags::INVERSE,
-                };
+                if let Some(cell) = cells.get_mut(idx) {
+                    *cell = Cell {
+                        c: ch,
+                        fg: Color::Default,
+                        bg: Color::Default,
+                        flags: cell_flags::INVERSE,
+                    };
+                }
             }
         }
     }
@@ -427,6 +431,24 @@ mod tests {
             "the pinned header row never carries the stamp"
         );
     }
+    #[test]
+    fn compose_with_a_notice_survives_a_degenerate_terminal() {
+        // An expect-driven attach reports a 0x0 pty. The frame clamps to one
+        // row, so the notice row below the tab bar is empty and the paint
+        // must clip instead of indexing it.
+        for term in [(0, 0), (1, 1), (1, 40), (0, 40)] {
+            let mut view = two_pane_view();
+            view.term = term;
+            view.notice = Some(("stop corpse: timed out".into(), Instant::now()));
+            let frame = view.compose();
+            assert_eq!(
+                frame.cells.len(),
+                frame.rows as usize * frame.cols as usize,
+                "{term:?} paints a whole frame"
+            );
+        }
+    }
+
     #[test]
     fn notice_names_row_requires_a_token_boundary() {
         // The name must stand alone: a substring of a longer word is not

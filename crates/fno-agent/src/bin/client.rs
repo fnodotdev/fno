@@ -283,6 +283,12 @@ fn run_transport_doors(args: &[String]) {
             &args[1..],
         ));
     }
+    // `user-hours`: refusal-or-ok JSON read of `[user.working_hours]`.
+    if args.first().map(String::as_str) == Some("user-hours") {
+        fno_agent::usage_events::exit_cli(fno_agent::agents_config::run_user_hours(
+            args.get(1..).unwrap_or_default(),
+        ));
+    }
     // `terminals`: the delivered-terminal vocabulary JSON read; Python's
     // ledger promotion gate and scoreboard fold read it like the roster.
     if args.first().map(String::as_str) == Some("terminals") {
@@ -1619,7 +1625,7 @@ fn client_spawn(
     )?;
     if seed.sandboxed {
         if let Err((code, reason)) = fno_agent::sandbox_launch::arm(home, &seed.cwd) {
-            eprintln!("fno-agent spawn: [sandbox] devcontainer refused: {reason}");
+            eprintln!("fno-agent spawn: [sandbox] refused: {reason}");
             if let Some(g) = gate_guard.as_mut() {
                 g.release();
             }
@@ -2466,9 +2472,10 @@ fn launch_codex_headless(call: &SpawnCall<'_>) -> Option<i32> {
         false,
         call.timeout,
         None,
-        None,
+        call.route.and_then(|r| r.effort.as_deref()),
         None,
         call.harness_args,
+        call.route.and_then(|r| r.codex.as_ref()),
     );
     if let Some(receipt) = daemon_receipt.as_ref() {
         fno_agent::codex_ask::append_daemon_receipt(&mut outcome, receipt);

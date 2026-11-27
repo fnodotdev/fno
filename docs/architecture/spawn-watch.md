@@ -10,12 +10,13 @@ When an agent types a spawn or a native launch line, the PreToolUse Bash hook wr
 
 Only a detached launch is watched: a `claude --bg` line, a spawn command, a pane run, or a dispatcher's record. A one-shot such as `codex exec` or `pi -p` is not watched. The caller's own Bash call waits for it and gets its answer there. A spawn with no launch record is not watched either. The mux composer has its own answer: its caller is the human, who sees Launched, Refused or Unknown. A daemon or advance dispatch that no agent typed writes no record either.
 
-## The four stages
+## The five stages
 
 Each pass reads the world and names the furthest stage it can prove.
 
 - **gate**: no worker row, and the gate holds no `worker:<name>` admission. A refused or abandoned call reads the same way.
 - **launch**: the gate admitted the spawn, and no worker row exists yet.
+- **adopt**: the launch printed its `backgrounded` head line, and no SessionStart adopt and no live roster row followed. The head proves `claude --bg` started a session. It does not prove the session still runs. The stage names the missing adopt, so a dead worker reads as one.
 - **harness boot**: a worker row exists, and it has no harness session id yet.
 - **first prompt**: the session started, and its transcript holds no assistant line yet.
 
@@ -50,3 +51,11 @@ A first turn proves the launch, not the run. On 2026-10-22 a thread worker waite
 Each pass reads `claude agents --json --all` under every claude account root. A row with a live process and a `waitingFor` that names a permission prompt is waiting. The listing gives no start time for the wait. So the first sighting is written to `<agents home>/prompt-wait/<short id>.json`. A clean listing without the row deletes that file, so the next prompt counts from its own start. A partial or failed listing deletes nothing.
 
 Five minutes after the first sighting, the arm mails once, from `fno/prompt-wait`. The spawner hears it, then the nearest ancestor that holds a lead role. The worker row names the spawner. With no row, this watch's file names it. The mail names the host and the remedy: `claude attach <short id>`, then pick an option. With no spawner on record, the arm files one fleet task instead. The lead check-in reads the same files and prints one `WAITING ON APPROVAL` line per overdue worker.
+
+A prompt never waits forever. Thirty minutes after the first sighting, the arm denies the prompt itself. While the user is away it denies at the first sighting. Away means outside `[user.working_hours]` in `[user].timezone`. Nobody is there to answer, so the prompt is not held. The arm types the deny key through the same menu reader as `fno agent ask --answer deny`. It never types an allow key. A macOS grant screen has no deny key and stays for a person. After a denial the arm mails the spawner and lead. It also files one fleet task named `prompt denied <short id>`, so the item is on the board in the morning. Claude Code answers a denial with a tool result that tells the model to stop and wait for the user. So a denied worker idles. The arm then types one follow-up turn with `fno agent mail send --raw`. The line is `/fno:target <node>` plus a note that the prompt was denied. If the worker's screen reads as an idle, empty prompt, the arm sends it. Until then the arm tries again on each pass. It restarts the worker's own node, and the worker takes a route that needs no approval or moves to other ready work. A worker with no node on its registry row gets no follow-up. A live probe confirmed it. A scratch thread called `EnterWorktree` on a worktree outside the fno base, which raises a prompt that no permission mode skips. After `fno agent ask --answer deny` the transcript read "Request interrupted by user for tool use" and the worker sat idle. The `--raw` lane then reported an injection path to it.
+
+The same action denied twice for one node gets no more follow-up turns. The arm counts denials per node and prompt screen over 24 hours, whether or not the deny key was confirmed. A counter file it cannot read reads as at the limit. On the second it sends nothing and files one board task, `prompt repeated <node>`, so the worker stays idle until a person decides.
+
+### Reaching the user from the phone
+
+The parked-prompt line already rides the attention path, so a configured ntfy sink delivers it to the phone. Answering from the phone is not verified. Remote Control carries `--permission-mode` into the sessions it spawns, and it has a permission nudge event. No source in the vault says a phone can approve or deny a prompt on a `claude --bg` daemon thread. Proving it needs a phone and a Remote Control session, so it stays open until someone runs that check.

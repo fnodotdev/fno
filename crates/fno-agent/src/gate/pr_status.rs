@@ -271,7 +271,7 @@ fn probe_json<P: GhProbe>(probe: &P, cwd: &Path, path: &str) -> Result<Value, Re
         Err(why) => return Err(RestReason::new(why, "")),
     };
     if !ok {
-        return Err(rest_reason(probe, cwd, &stderr));
+        return Err(rest_reason_for(probe, cwd, &stderr, read_label(path)));
     }
     serde_json::from_str::<Value>(&stdout).map_err(|e| {
         RestReason::new(
@@ -289,6 +289,30 @@ fn probe_json<P: GhProbe>(probe: &P, cwd: &Path, path: &str) -> Result<Value, Re
 /// record_refusal`) lands with the cache port, where the gh_budget door is
 /// already in scope.
 pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> RestReason {
+    rest_reason_for(probe, cwd, stderr, "PR")
+}
+
+/// Which read of the PR a REST path is: the label a not-found refusal names.
+/// Only the `pulls/<n>` read says anything about the PR number.
+fn read_label(path: &str) -> &'static str {
+    let path = path.split('?').next().unwrap_or(path);
+    if path.contains("/check-runs") {
+        "check-runs"
+    } else if path.ends_with("/status") {
+        "status"
+    } else {
+        "PR"
+    }
+}
+
+/// [`rest_reason`] for a named read. A 404 on a read other than the PR itself
+/// is not about the PR number: the PR read already answered.
+pub(crate) fn rest_reason_for<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    stderr: &str,
+    read: &str,
+) -> RestReason {
     let lines: Vec<&str> = stderr
         .lines()
         .map(str::trim)
@@ -409,17 +433,21 @@ from this read is not content.",
         );
     }
     if text.to_lowercase().contains("not found") || text.split_whitespace().any(|w| w == "404") {
-        return RestReason::new(
+        let base = matched(&|l| {
+            l.to_lowercase().contains("not found") || l.split_whitespace().any(|w| w == "404")
+        });
+        let text = if read == "PR" {
             format!(
                 "{base} | not found. Check the PR number (and that this branch still has an \
-open PR); this is not a verdict about any PR.",
-                base = matched(&|l| {
-                    l.to_lowercase().contains("not found")
-                        || l.split_whitespace().any(|w| w == "404")
-                })
-            ),
-            "",
-        );
+open PR); this is not a verdict about any PR."
+            )
+        } else {
+            format!(
+                "{base} | not found on the {read} read for this PR's head commit. The PR read \
+answered, so the PR number is right; read again. This is not a verdict about any PR."
+            )
+        };
+        return RestReason::new(text, "");
     }
     RestReason::new(fallback, "")
 }

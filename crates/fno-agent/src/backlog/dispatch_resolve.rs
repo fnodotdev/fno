@@ -196,15 +196,143 @@ pub fn footnote_commands() -> BTreeSet<String> {
     commands
 }
 
-/// Where Claude resolves a BARE skill name: the user root and the project
-/// root (the Python probe's root set, deliberately short).
-fn claude_skill_roots() -> Vec<std::path::PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(Path::new(&home).join(".claude").join("skills"));
+/// The claude plugin table: qualified `plugin:skill` name -> the skill dir
+/// (SKILL.md verified at read time), plus whether the manifest itself was
+/// readable. An unreadable manifest must degrade open (`unverifiable`); a
+/// readable one missing the name is a real negative (`unavailable`).
+#[derive(Default)]
+struct ClaudePluginSkills {
+    skills: BTreeMap<String, std::path::PathBuf>,
+    /// Some once the manifest existed and parsed; None names an absent or
+    /// unreadable one (the degrade-open half).
+    manifest: Option<std::path::PathBuf>,
+}
+
+/// One installed claude plugin's newest install row: the manifest shape the
+/// app reader reads (crates/fno-app/src/skills.rs:118-148), narrowed to the
+/// field the probe needs.
+#[derive(serde::Deserialize, Default)]
+struct InstalledPluginsManifest {
+    #[serde(default)]
+    plugins: BTreeMap<String, Vec<PluginInstallRow>>,
+}
+
+#[derive(serde::Deserialize)]
+struct PluginInstallRow {
+    #[serde(rename = "installPath")]
+    install_path: String,
+}
+
+/// The claude settings keys the probe reads: `enabledPlugins` maps
+/// `plugin@market` to a bool and only an explicit `false` disables one.
+/// The tolerant leaf keeps the whole-file parse alive on a garbage row,
+/// byte-matched to the app reader (crates/fno-app/src/skills.rs:100-116).
+#[derive(serde::Deserialize, Default)]
+struct ClaudeSettingsFile {
+    #[serde(rename = "enabledPlugins", default)]
+    enabled_plugins: BTreeMap<String, serde_json::Value>,
+}
+
+/// The plugins settings.json turns off: only an explicit
+/// `enabledPlugins.<key> == false` counts.
+fn disabled_plugins(settings: &Path) -> Vec<String> {
+    let parsed: ClaudeSettingsFile = std::fs::read_to_string(settings)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    parsed
+        .enabled_plugins
+        .into_iter()
+        .filter(|(_, v)| v.as_bool() == Some(false))
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// The claude plugin table, read once per call: `installed_plugins.json`
+/// names each plugin's install rows (newest last, mirroring the app
+/// reader), `settings.json` may turn a plugin off, and a skill counts only
+/// with a SKILL.md on disk.
+fn claude_plugin_skills(home: &Path) -> ClaudePluginSkills {
+    let manifest = home
+        .join(".claude")
+        .join("plugins")
+        .join("installed_plugins.json");
+    let mut table = ClaudePluginSkills::default();
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return table;
+    };
+    let Ok(parsed) = serde_json::from_str::<InstalledPluginsManifest>(&text) else {
+        return table;
+    };
+    table.manifest = Some(manifest);
+    let off = disabled_plugins(&home.join(".claude").join("settings.json"));
+    for (key, installs) in parsed.plugins {
+        if off.contains(&key) {
+            continue;
+        }
+        let plugin = key.split('@').next().unwrap_or(&key);
+        let Some(row) = installs.last() else {
+            continue;
+        };
+        let Ok(entries) = std::fs::read_dir(Path::new(&row.install_path).join("skills")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() || !dir.join("SKILL.md").is_file() {
+                continue;
+            }
+            let Some(skill) = dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            table.skills.insert(format!("{plugin}:{skill}"), dir);
+        }
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        roots.push(cwd.join(".claude").join("skills"));
+    table
+}
+
+/// The opencode config dir: `OPENCODE_CONFIG_DIR` moves it (the installer's
+/// own seam, crates/fno-agent/src/spawn/opencode_install.rs:52-62), else
+/// the HOME fallback.
+fn opencode_config_dir(home: Option<&Path>) -> Option<std::path::PathBuf> {
+    std::env::var_os("OPENCODE_CONFIG_DIR")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| home.map(|home| home.join(".config").join("opencode")))
+}
+
+/// Where each harness resolves a BARE skill name, with HOME, the process
+/// cwd and the opencode config dir injected so tests run without mutating
+/// the environment. An unknown harness names no roots (the probe's
+/// unverifiable arm).
+fn harness_skill_roots_in(
+    harness: &str,
+    home: Option<&Path>,
+    cwd: Option<&Path>,
+    opencode_conf: Option<&Path>,
+) -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    match harness.as_harness() {
+        Harness::Claude => {
+            if let Some(home) = home {
+                roots.push(home.join(".claude").join("skills"));
+            }
+            if let Some(cwd) = cwd {
+                roots.push(cwd.join(".claude").join("skills"));
+            }
+        }
+        Harness::Codex => {
+            if let Some(home) = home {
+                roots.push(home.join(".codex").join("skills"));
+            }
+        }
+        Harness::Opencode => {
+            if let Some(conf) = opencode_conf {
+                roots.push(conf.join("skill"));
+                roots.push(conf.join("skills"));
+            }
+        }
+        Harness::Agy | Harness::Other(_) => {}
     }
     roots
 }
@@ -212,39 +340,85 @@ fn claude_skill_roots() -> Vec<std::path::PathBuf> {
 /// The shared skill-presence probe, byte-matched to the Python resolver's
 /// three outcomes: found -> satisfiable, absent with one root readable ->
 /// unavailable, unanswerable -> unverifiable (degrades rather than bricking
-/// a run). The harness gate lives HERE, so a codex dispatch probing Claude's
-/// roots answers `unverifiable` instead of `unavailable` - the dual this
-/// port collapses (the Python resolver gated on harness; the Rust one
-/// probed every harness).
+/// a run). Roots are per harness now, so a codex dispatch probes codex's
+/// own roots instead of answering `unverifiable` on Claude's.
 pub(crate) fn skill_presence(name: &str, harness: &str, context: &str) -> (&'static str, String) {
-    skill_presence_in(name, harness, context, claude_skill_roots())
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    let open_conf = opencode_config_dir(home.as_deref());
+    let roots = harness_skill_roots_in(
+        harness,
+        home.as_deref(),
+        std::env::current_dir().ok().as_deref(),
+        open_conf.as_deref(),
+    );
+    let plugins = match harness.as_harness() {
+        Harness::Claude => home
+            .as_deref()
+            .map(claude_plugin_skills)
+            .unwrap_or_default(),
+        _ => ClaudePluginSkills::default(),
+    };
+    skill_presence_in(name, harness, context, roots, &plugins)
 }
 
-/// The roots are injected so the absent/unverifiable boundary is testable
-/// without mutating HOME (cargo runs unit tests in parallel).
-pub(crate) fn skill_presence_in(
+/// The roots and the claude plugin table are injected so the
+/// absent/unverifiable boundary is testable without mutating HOME (cargo
+/// runs unit tests in parallel).
+fn skill_presence_in(
     name: &str,
     harness: &str,
     context: &str,
     roots: Vec<std::path::PathBuf>,
+    plugins: &ClaudePluginSkills,
 ) -> (&'static str, String) {
     let proceed = "Proceeding - if the gate does go unmet, run the skill by hand";
-    if harness.as_harness() != Harness::Claude {
-        return (
-            "unverifiable",
-            format!(
-                "needs a resolvable skill; footnote only knows Claude's skill \
-                 roots and this is harness={harness}. {proceed}"
-            ),
-        );
-    }
     if name.contains(':') {
+        if harness.as_harness() != Harness::Claude {
+            return (
+                "unverifiable",
+                format!(
+                    "{} is a plugin-qualified skill; footnote reads the \
+                     plugin layout for claude only and this is harness={harness}. {proceed}",
+                    py_repr(name)
+                ),
+            );
+        }
+        return match plugins.skills.get(name) {
+            Some(dir) => (
+                "satisfiable",
+                format!("plugin skill resolves at {}", dir.display()),
+            ),
+            None => match &plugins.manifest {
+                Some(manifest) => (
+                    "unavailable",
+                    format!(
+                        "plugin skill {} is not in the plugin manifest ({}); \
+                         install it there or change {}",
+                        py_repr(name),
+                        manifest.display(),
+                        context
+                    ),
+                ),
+                None => (
+                    "unverifiable",
+                    format!(
+                        "{} is a plugin-qualified skill; the claude plugin \
+                         manifest is absent or unreadable, so availability \
+                         cannot be verified. {proceed}",
+                        py_repr(name)
+                    ),
+                ),
+            },
+        };
+    }
+    if roots.is_empty() {
         return (
             "unverifiable",
             format!(
-                "{} is a plugin-qualified skill; footnote does not read the \
-                 plugin cache layout, so availability cannot be verified. {proceed}",
-                py_repr(name)
+                "needs a resolvable skill; footnote has no skill roots for \
+                 harness={harness}. {proceed}"
             ),
         );
     }
@@ -285,6 +459,207 @@ pub(crate) fn skill_presence_in(
             context
         ),
     )
+}
+
+/// One skill listing per harness: every skill name the harness can run,
+/// claude plugin skills included (qualified). The plural twin of
+/// `skill_presence` - the probe answers one name, this lists all - and the
+/// read side of the `capability skill-list` door.
+pub(crate) fn skills_for_harness(harness: &str) -> Vec<String> {
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    let open_conf = opencode_config_dir(home.as_deref());
+    let roots = harness_skill_roots_in(
+        harness,
+        home.as_deref(),
+        std::env::current_dir().ok().as_deref(),
+        open_conf.as_deref(),
+    );
+    let plugins = match harness.as_harness() {
+        Harness::Claude => home
+            .as_deref()
+            .map(claude_plugin_skills)
+            .unwrap_or_default(),
+        _ => ClaudePluginSkills::default(),
+    };
+    skills_for_harness_in(&roots, &plugins)
+}
+
+/// The injected-roots seam of `skills_for_harness`.
+fn skills_for_harness_in(
+    roots: &[std::path::PathBuf],
+    plugins: &ClaudePluginSkills,
+) -> Vec<String> {
+    let mut names = BTreeSet::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() || !dir.join("SKILL.md").is_file() {
+                continue;
+            }
+            let Some(name) = dir.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            names.insert(name.to_string());
+        }
+    }
+    for name in plugins.skills.keys() {
+        names.insert(name.clone());
+    }
+    names.into_iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn write_skill(root: &Path, name: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), "# skill\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn claude_bare_name_answers_found_absent_and_no_roots() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("project");
+        let skill = write_skill(&home.join(".claude").join("skills"), "target");
+        let roots = vec![
+            home.join(".claude").join("skills"),
+            project.join(".claude").join("skills"),
+        ];
+        let plugins = ClaudePluginSkills::default();
+        let (status, reason) =
+            skill_presence_in("target", "claude", "ctx", roots.clone(), &plugins);
+        assert_eq!(status, "satisfiable");
+        assert!(reason.contains(&skill.display().to_string()));
+        let (status, _) = skill_presence_in("nope", "claude", "ctx", roots.clone(), &plugins);
+        assert_eq!(status, "unavailable");
+        let empty = vec![tmp.path().join("missing-a"), tmp.path().join("missing-b")];
+        let (status, reason) = skill_presence_in("target", "claude", "ctx", empty, &plugins);
+        assert_eq!(status, "unverifiable");
+        assert!(reason.contains("no skill root exists on this host"));
+    }
+
+    #[test]
+    fn claude_plugin_qualified_name_reads_the_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let home = tmp.path().join("home");
+        let install = tmp.path().join("install");
+        write_skill(&install.join("skills"), "review-helper");
+        let manifest = home
+            .join(".claude")
+            .join("plugins")
+            .join("installed_plugins.json");
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(
+            &manifest,
+            format!(
+                r#"{{"plugins":{{"fno@m":[{{"installPath":"{}"}}]}}}}"#,
+                install.display()
+            ),
+        )
+        .unwrap();
+        let roots = vec![home.join(".claude").join("skills")];
+        let plugins = claude_plugin_skills(&home);
+        let (status, reason) = skill_presence_in(
+            "fno:review-helper",
+            "claude",
+            "ctx",
+            roots.clone(),
+            &plugins,
+        );
+        assert_eq!(status, "satisfiable");
+        assert!(reason.contains("plugin skill resolves at"));
+        fs::write(
+            home.join(".claude").join("settings.json"),
+            r#"{"enabledPlugins":{"fno@m":false}}"#,
+        )
+        .unwrap();
+        let plugins = claude_plugin_skills(&home);
+        let (status, _) = skill_presence_in("fno:review-helper", "claude", "ctx", roots, &plugins);
+        assert_eq!(status, "unavailable");
+    }
+
+    #[test]
+    fn unreadable_plugin_manifest_degrades_open() {
+        let tmp = TempDir::new().unwrap();
+        let roots = vec![tmp.path().join("home").join(".claude").join("skills")];
+        let plugins = ClaudePluginSkills::default();
+        let (status, reason) = skill_presence_in("fno:target", "claude", "ctx", roots, &plugins);
+        assert_eq!(status, "unverifiable");
+        assert!(reason.contains("absent or unreadable"));
+    }
+
+    #[test]
+    fn codex_and_opencode_bare_names_resolve_from_their_roots() {
+        let tmp = TempDir::new().unwrap();
+        let codex_root = tmp.path().join("home").join(".codex").join("skills");
+        write_skill(&codex_root, "review");
+        let (status, _) = skill_presence_in(
+            "review",
+            "codex",
+            "ctx",
+            vec![codex_root],
+            &ClaudePluginSkills::default(),
+        );
+        assert_eq!(status, "satisfiable");
+        let open_dir = tmp.path().join("opencode");
+        write_skill(&open_dir.join("skill"), "target");
+        let roots = vec![open_dir.join("skill"), open_dir.join("skills")];
+        let (status, _) = skill_presence_in(
+            "target",
+            "opencode",
+            "ctx",
+            roots,
+            &ClaudePluginSkills::default(),
+        );
+        assert_eq!(status, "satisfiable");
+    }
+
+    #[test]
+    fn unknown_harness_and_qualified_non_claude_degrade_open() {
+        let roots =
+            harness_skill_roots_in("gemini", Some(Path::new("/h")), Some(Path::new("/p")), None);
+        assert!(roots.is_empty());
+        let plugins = ClaudePluginSkills::default();
+        let (status, reason) = skill_presence_in("target", "gemini", "ctx", roots, &plugins);
+        assert_eq!(status, "unverifiable");
+        assert!(reason.contains("no skill roots for harness=gemini"));
+        let (status, reason) = skill_presence_in(
+            "fno:target",
+            "codex",
+            "ctx",
+            vec![PathBuf::from("/x")],
+            &plugins,
+        );
+        assert_eq!(status, "unverifiable");
+        assert!(reason.contains("harness=codex"));
+    }
+
+    #[test]
+    fn the_listing_unions_roots_and_plugins() {
+        let tmp = TempDir::new().unwrap();
+        let root_a = tmp.path().join("a");
+        let root_b = tmp.path().join("b");
+        write_skill(&root_a, "target");
+        write_skill(&root_b, "think");
+        let mut plugins = ClaudePluginSkills::default();
+        plugins
+            .skills
+            .insert("fno:review".to_string(), root_a.join("target"));
+        let listing = skills_for_harness_in(&[root_a, root_b], &plugins);
+        assert_eq!(listing, vec!["fno:review", "target", "think"]);
+    }
 }
 
 /// The dispatch-command registry's `requires == "skill"` gate: the shared

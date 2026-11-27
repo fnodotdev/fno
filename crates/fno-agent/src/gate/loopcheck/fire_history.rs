@@ -44,6 +44,20 @@ pub(super) fn loop_check_rows(events_path: &Path) -> Option<String> {
         .map(|lines| lines.join("\n"))
 }
 
+/// How many of this session's newest `loop_check` rows in a row recorded a
+/// failed read. The first clean read ends the run.
+pub(super) fn failed_read_streak(rows: Option<&str>, session_id: &str) -> u32 {
+    rows.unwrap_or_default()
+        .lines()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|val| val.pointer("/data/session_id").and_then(Value::as_str) == Some(session_id))
+        .take_while(|val| {
+            val.pointer("/data/fp_read_failed").and_then(Value::as_bool) == Some(true)
+        })
+        .count() as u32
+}
+
 /// Count prior loop_check events for this session_id in `rows`
 /// ([`loop_check_rows`]). Returns (total_fires, consecutive_unchanged_count, last_fingerprint_in_log,
 /// streak_window_secs).

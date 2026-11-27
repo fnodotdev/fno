@@ -127,6 +127,15 @@
       "doc": "When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined."
     },
     {
+      "path": "sandbox.provider",
+      "type": "typing.Literal['none', 'docker', 'podman', 'apple', 'devcontainer']",
+      "default": "none",
+      "tier": "advanced",
+      "question": "Run headless workers in a container sandbox, and on which engine?",
+      "default_source": "default",
+      "doc": "Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider."
+    },
+    {
       "path": "blueprint.max_prs_per_epic",
       "type": "int",
       "default": 4,
@@ -205,7 +214,7 @@
       "tier": "always",
       "question": "Backlog node-ID prefix?",
       "default_source": "repo-slug",
-      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-)."
+      "doc": "Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable."
     },
     {
       "path": "backlog.id_hex_width",
@@ -665,6 +674,15 @@
       "question": "",
       "default_source": "",
       "doc": "When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve."
+    },
+    {
+      "path": "review.human",
+      "type": "string",
+      "default": null,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "The person gate (never | ui | always). never = no person is owed. ui = a non-author person's GitHub approval of the PR head is owed; a person can give it from the terminal (`fno mux app approve <pr>`, or `--repo <owner/name>` outside the checkout) or on the PR's GitHub page. always = the same approval owed on GitHub. In both owed values fno do pr status reads not ready and the merge refuses until one lands (an APPROVED review by a login that is not the PR author, fresh at the head), and the review-round cap does not discharge it (the lever back off is this key). With no key set, no person is owed (today's stock-install behavior). GitHub refuses an author's approval of their own PR, so the approving identity must differ from the author identity. Validated at write: never, ui or always."
     },
     {
       "path": "review.max_rounds",

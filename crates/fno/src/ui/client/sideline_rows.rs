@@ -123,6 +123,8 @@ pub(super) enum ChromeHit {
     /// BY VALUE: a later fold replaces the row list, so an index would open
     /// the view onto a different event than the one clicked.
     OpenFeedDetail(crate::feed_overlay::FeedItem),
+    /// The feed panel's own chrome: a column title or a group header.
+    Feed(super::feed_view::FeedHit),
     /// Open the questions detail overlay on one block row. Carries the id,
     /// not the index: a fold between click and open must not retarget it.
     OpenQuestionDetail(String),
@@ -163,6 +165,7 @@ impl ChromeHit {
             ChromeHit::CycleDensity => "density",
             ChromeHit::OpenSidelineMenu { .. } => "menu_open",
             ChromeHit::OpenFeedDetail(_) => "feed_row",
+            ChromeHit::Feed(_) => "feed_chrome",
             ChromeHit::OpenQuestionDetail(_) => "question_row",
             ChromeHit::OpenNode(_) => "node_link",
             ChromeHit::OpenPr(_) => "pr_link",
@@ -232,5 +235,240 @@ impl View {
             rows.splice(at..at, ins).for_each(drop);
         }
         (rows, depths)
+    }
+}
+
+impl View {
+    /// The sideline's display order (4a-G2): each squad's squad/tab rows, that
+    /// squad's agent rows, then the `+ new workspace` footer, a catch-all
+    /// section for agents matched to no squad, and the work-queue lane. The
+    /// ONE row enumeration: painting, hover, mouse hit-testing, and
+    /// the prefix+w selector all index into it.
+    /// The sideline's rows for the CURRENT density - the one enumeration every
+    /// consumer indexes into (: painting, hover, hit-test, and the
+    /// selector share this index space in all three densities).
+    ///
+    /// A delegation to [`Self::display_rows_with_depths`]`.0`: one builder, so
+    /// the card expansion hooks two places, not three.
+    pub(super) fn display_rows(&self) -> Vec<DisplayRow<'_>> {
+        self.display_rows_with_depths().0
+    }
+
+    /// [`Self::display_rows`] plus the lineage depth of each rendered
+    /// row, aligned index-for-index. The depths come from the SAME pass that
+    /// builds the rows, so they are computed over exactly the set that paints:
+    /// an idle parent the fold removed, or an exited parent a LiveOnly section
+    /// hides, is ABSENT, and its child roots instead of indenting under a row
+    /// that never rendered. Non-agent rows (headers, sublines, spacers) carry
+    /// 0. Slim filters the pair exactly as it filters rows; Extended retains
+    /// the same lineage depths inside its agent-name cells.
+    pub(super) fn display_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+        let (rows, depths) = match self.density {
+            Density::Regular => {
+                let (rows, depths) = self.tree_rows_with_depths();
+                let (rows, depths) = self.sort_agent_runs(rows, depths);
+                let (rows, depths) = self.pin_needs(rows, depths);
+                self.card_rows(rows, depths)
+            }
+            Density::Slim => {
+                let (rows, depths) = self.tree_rows_with_depths();
+                // Small mode (q-334c5e9d option 1): one line per live agent,
+                // `glyph slug`, beside the workspace headers. Exited rows
+                // hide; the paint clips to the 16-column rail.
+                let mut kept_rows = Vec::with_capacity(rows.len());
+                let mut kept_depths = Vec::with_capacity(depths.len());
+                for (r, d) in rows.into_iter().zip(depths) {
+                    let keep = matches!(r, DisplayRow::Sel(s) if s.tab.is_none())
+                        || matches!(r, DisplayRow::Header { .. })
+                        || matches!(r, DisplayRow::Agent(a) if !a.exited);
+                    if keep {
+                        kept_rows.push(r);
+                        kept_depths.push(d);
+                    }
+                }
+                self.pin_needs(kept_rows, kept_depths)
+            }
+            Density::Extended => {
+                let (rows, depths) = self.table_rows_with_depths();
+                self.pin_needs(rows, depths)
+            }
+        };
+        self.with_draft_cards(rows, depths)
+    }
+
+    // The sideline tree, with the top-K idle cap applied. A PURE
+    // function of state: a squad shows its idle overflow only when the operator
+    // toggled its `+N more` row open (`idle_expanded`). No per-frame,
+    // selector-driven force-expand - that needs to know which row the selector
+    // rests on, but the selector is an index INTO this very output, so any
+    // attempt to resolve it here is circular: resolving against a rebuilt
+    // (capped or uncapped) enumeration mis-identifies the row once a fold sits
+    // above the cursor, and navigating onto a newly exposed overflow row then
+    // collapses under the next render (codex P1/P2 on #566/#568). The invariant
+    // that actually matters - the cursor never rests on a folded row - holds for
+    // free: folded rows are absent from this list, so selector navigation only
+    // ever lands on rendered rows. Overflow is reached by the fold row's own
+    // Enter/click toggle, which persists in `idle_expanded`.
+    /// This machine's tree rows with the per-row lineage depth beside it, computed over
+    /// the EMITTED set after every display filter, never re-derived in the painter.
+    /// [`Self::tree_rows_with_depths`] wraps them in the machine layer.
+    pub(super) fn local_rows_with_depths(&self) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+        if self.agent_group != AgentGroup::Workspace {
+            return agent_group::grouped_rows_with_depths(self);
+        }
+        let mut out = Vec::new();
+        // Display index -> lineage depth for agent rows, filled at emit time.
+        let mut agent_depth_at: HashMap<usize, usize> = HashMap::new();
+        // (US3) Section spacing only with more than one workspace: a
+        // single squad has no groups to separate (US3 verify: absent with 1
+        // squad).
+        let multi_squad = self.layout.squads.len() > 1;
+        for (idx, s) in self.layout.squads.iter().enumerate() {
+            // One spacer between consecutive workspace groups (never before the
+            // first, so no leading blank and never doubled).
+            if multi_squad && idx > 0 {
+                out.push(DisplayRow::Blank);
+            }
+            out.push(DisplayRow::Sel(SelRow {
+                squad: s.id,
+                tab: None,
+            }));
+            // Agents-first (Locked 4): the caret gates the squad's agent
+            // rows; tab rows are gone (tabs live in the top tab bar). A collapsed
+            // squad shows only its name row + the rollup glyph, so the
+            // rollup is the sole signal there - no more agent rows rendering
+            // unconditionally under a folded squad.
+            // Tri-state: `LiveOnly` drops the exited rows in place
+            // while the header's `✗N` rollup keeps them discoverable; live rows
+            // keep their original order. Display filtering only - nothing is
+            // reaped (that is).
+            let key = section_key(s);
+            let view = self.section_view(&key);
+            if view != SectionView::Collapsed {
+                let mut squad_agents: Vec<&AgentRow> = self
+                    .layout
+                    .agents
+                    .iter()
+                    .filter(|a| a.squad == Some(s.id))
+                    .filter(|a| view == SectionView::Expanded || !a.exited)
+                    .collect();
+                // Order by lineage: children render beneath their
+                // parent, pre-order. Keyed by row identity (input index), never
+                // display name - two panes can share a label. A squad with no
+                // parent edges keeps its input order (pane-tree, then
+                // name-sorted watch-only), so it paints byte-identical.
+                let (order, _) = lineage_layout(
+                    &squad_agents,
+                    |a| a.harness_session_id.as_deref(),
+                    |a| lineage_parent(a),
+                );
+                squad_agents = order.into_iter().map(|i| squad_agents[i]).collect();
+                // Top-K idle cap: attention rows (live, non-idle) always
+                // render; idle rows fill to SQUAD_ROW_CAP live rows total; the
+                // idle overflow folds into one `+N more` row. Dead rows (present
+                // only in Expanded) sit OUTSIDE the budget under the view's
+                // control, so `+N more` and the header's `✗N` never double-count.
+                let attention = squad_agents
+                    .iter()
+                    .filter(|&a| !a.exited && !is_idle_row(a))
+                    .count();
+                let idle_total = squad_agents.iter().filter(|&a| is_idle_row(a)).count();
+                let idle_budget = SQUAD_ROW_CAP.saturating_sub(attention);
+                let hidden = idle_total.saturating_sub(idle_budget);
+                // A squad shows all its idle rows only when the operator toggled
+                // its fold open (persisted for the session in `idle_expanded`).
+                let show_all_idle = self.idle_expanded.contains(&key);
+                let mut idle_shown = 0usize;
+                let mut emitted: Vec<&AgentRow> = Vec::with_capacity(squad_agents.len());
+                for &a in &squad_agents {
+                    if is_idle_row(a) && !show_all_idle {
+                        if idle_shown >= idle_budget {
+                            continue; // folded into the `+N more` row below
+                        }
+                        idle_shown += 1;
+                    }
+                    emitted.push(a);
+                }
+                // Depth over exactly the emitted set: an idle parent
+                // the fold removed is ABSENT, so its visible child roots
+                // instead of indenting under a row that never painted.
+                let (_, emitted_depths) = lineage_layout(
+                    &emitted,
+                    |a| a.harness_session_id.as_deref(),
+                    |a| lineage_parent(a),
+                );
+                for (a, depth) in emitted.iter().zip(emitted_depths) {
+                    agent_depth_at.insert(out.len(), depth);
+                    out.push(DisplayRow::Agent(a));
+                }
+                // Emit the fold row whenever there is idle overflow: `+N more`
+                // when folded, `- fewer` when shown (so the expansion reverses
+                // from the same spot). No row when nothing overflows (no `+0`).
+                if hidden > 0 {
+                    out.push(DisplayRow::IdleFold {
+                        key: key.clone(),
+                        hidden,
+                        expanded: show_all_idle,
+                    });
+                }
+            }
+        }
+        // One spacer sets the footer off from the workspace list above so the
+        // `+ new workspace` / menu row doesn't read as another workspace. Gated on
+        // `multi_squad` like the other US3 spacers (a lone workspace needs no
+        // separation, and single-squad layouts stay byte-identical).
+        if multi_squad {
+            out.push(DisplayRow::Blank);
+        }
+        // The `+` create-workspace affordance sits directly under the squad list
+        //, above the agents/work-queue sections.
+        out.push(DisplayRow::NewSquad);
+        let orphans = self.orphans();
+        if !orphans.is_empty() {
+            // Orphans (cwd matched no squad) keep one flat section in the same
+            // row grammar; the header reads `~ elsewhere` (Locked 6). One spacer
+            // precedes the header (US3), not doubled with the group
+            // separators above (the `+ new workspace` footer sits between).
+            if multi_squad {
+                out.push(DisplayRow::Blank);
+            }
+            let rollup = section_rollup(orphans.iter().map(|&a| agent_lattice_state(a)));
+            let view = self.section_view(&SectionKey::Elsewhere);
+            out.push(DisplayRow::Header {
+                label: "~ elsewhere".to_string(),
+                rollup,
+                key: SectionKey::Elsewhere,
+                view,
+            });
+            // Orphans keep their line-1 ` (basename)` suffix (every orphan is
+            // foreign by definition); a Sub row would double it, so the
+            // `~ elsewhere` section emits no sublines (US3).
+            if view != SectionView::Collapsed {
+                let visible: Vec<&AgentRow> = orphans
+                    .iter()
+                    .filter(|a| view == SectionView::Expanded || !a.exited)
+                    .copied()
+                    .collect();
+                // Same lineage ordering as the squad sections, over
+                // this section's own visible set: an orphan spawned by another
+                // orphan nests beneath it. Index-keyed, like the squads.
+                let (order, depths) = lineage_layout(
+                    &visible,
+                    |a| a.harness_session_id.as_deref(),
+                    |a| lineage_parent(a),
+                );
+                for &i in &order {
+                    agent_depth_at.insert(out.len(), depths[i]);
+                    out.push(DisplayRow::Agent(visible[i]));
+                }
+            }
+        }
+        // Materialize the aligned depth vec: agent rows carry the
+        // depth their emit site recorded (keyed by display index); every other
+        // row (headers, sublines, spacers, fold rows) indents nothing.
+        let out_depths = (0..out.len())
+            .map(|i| agent_depth_at.get(&i).copied().unwrap_or(0))
+            .collect();
+        (out, out_depths)
     }
 }

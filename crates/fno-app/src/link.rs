@@ -262,11 +262,49 @@ pub struct WarmedLink {
     pub rest: UnboundedReceiver<Event>,
 }
 
-/// Connect and poll until the first `Layout` arrives or `budget`
+/// The seat a shot takes in the session it photographs, as the dims its
+/// attach carries. The server reads `(0, 0)` as an observer and any other
+/// pair as a client that may drive the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seat {
+    /// The server births no squad for an observer, spawns it no shell, and
+    /// drops every message of its that would touch a pane.
+    Observer,
+    /// The world's one driving client: its attach births the world's squad
+    /// with a shell, which the overlay shots type into.
+    Driver,
+}
+
+impl Seat {
+    /// `Driver` only for a shot whose caller built the world the session
+    /// runs in and tears it down after.
+    pub fn for_shot(own_world: bool) -> Seat {
+        if own_world {
+            Seat::Driver
+        } else {
+            Seat::Observer
+        }
+    }
+
+    /// The `(rows, cols)` the attach carries. A driver keeps the shot's old pair.
+    pub fn dims(self) -> (u16, u16) {
+        match self {
+            Seat::Observer => (0, 0),
+            Seat::Driver => (80, 24),
+        }
+    }
+}
+
+/// Connect in `seat` and poll until the first `Layout` arrives or `budget`
 /// elapses. The reader thread fills the channel while the caller
 /// sleeps between polls, so no event is lost.
-pub fn connect_warmed(session: &str, budget: Duration) -> Result<WarmedLink, LinkError> {
-    let (link, mut rx) = Link::connect(session, 80, 24)?;
+pub fn connect_warmed(
+    session: &str,
+    budget: Duration,
+    seat: Seat,
+) -> Result<WarmedLink, LinkError> {
+    let (rows, cols) = seat.dims();
+    let (link, mut rx) = Link::connect(session, rows, cols)?;
     let deadline = std::time::Instant::now() + budget;
     let mut early = Vec::new();
     loop {
@@ -405,6 +443,21 @@ mod launch_arm_tests {
             Some(Event::Notice(text)) => assert_eq!(text, "hi"),
             other => panic!("expected a notice event, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod seat_tests {
+    use super::*;
+
+    #[test]
+    fn a_shot_drives_only_the_world_its_caller_built() {
+        // The server births a squad and a shell for every attach but an
+        // observer's, so these dims decide what a shot leaves behind.
+        assert_eq!(Seat::for_shot(false), Seat::Observer);
+        assert_eq!(Seat::Observer.dims(), (0, 0));
+        assert_eq!(Seat::for_shot(true), Seat::Driver);
+        assert_ne!(Seat::Driver.dims(), (0, 0));
     }
 }
 

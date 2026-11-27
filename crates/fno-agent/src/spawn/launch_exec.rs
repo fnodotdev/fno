@@ -53,6 +53,7 @@ fn write_lane_settings(
         alias,
         None,
         cwd,
+        payload.pointer("/node").and_then(Value::as_str),
     )
 }
 
@@ -122,14 +123,22 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     // the first `backgrounded \u{b7} <head> \u{b7} <name>` line names the session the
     // launch produced, and the launcher stamps it onto the pending record so
     // the claim binds by the launched session id, never by cwd or recency.
+    let mut head = None;
     if let Some(stdout) = child.stdout.take() {
         let mut out = std::io::stdout();
-        forward_scan(stdout, &mut out, &name, &home_for_dispatch().root());
+        head = forward_scan(stdout, &mut out, &name, &home_for_dispatch().root());
     }
     let status = child
         .wait()
         .map_err(|error| format!("wait {}: {error}", program))?;
-    Ok(status.code().unwrap_or(1))
+    let code = status.code().unwrap_or(1);
+    if code == 0 && head.is_none() {
+        return Err(format!(
+            "{program} exited 0 but printed no `backgrounded` line, so no harness session started for {name}; \
+             the pending record holds the lane until its window lapses"
+        ));
+    }
+    Ok(code)
 }
 
 /// The home the dispatch paths share. One binding so the spawn tail reads
@@ -263,9 +272,8 @@ fn forward_scan<R: std::io::Read, W: std::io::Write>(
                 if short.is_none() {
                     let text = String::from_utf8_lossy(&line);
                     if let Ok(found) = crate::claude_ask::parse_short_id(&text) {
-                        if crate::launch_record::amend_launch_short_id(root, name, &found) {
-                            short = Some(found);
-                        }
+                        crate::launch_record::amend_launch_short_id(root, name, &found);
+                        short = Some(found);
                     }
                 }
             }
@@ -335,8 +343,11 @@ mod tests {
     /// A `.fno/config.toml` carrying the one row the tests' provider/model
     /// axes resolve: its `launch` keeps the tests off the real claude.
     fn stage_row(dir: &Path) {
-        stage_row_with(dir, "exit 0");
+        stage_row_with(dir, &format!("{BACKGROUNDED}; exit 0"));
     }
+
+    /// The line a real `claude --bg` prints once the session exists.
+    const BACKGROUNDED: &str = "echo 'backgrounded \u{b7} 2ee23622 \u{b7} w'";
 
     fn stage_row_with(dir: &Path, exit: &str) {
         std::fs::create_dir_all(dir.join(".fno")).unwrap();
@@ -414,6 +425,27 @@ mod tests {
         assert_eq!(out, 3);
     }
 
+    /// A child that exits 0 without printing the `backgrounded` line started
+    /// no session: the door refuses and names it instead of reporting a launch.
+    #[test]
+    fn a_zero_exit_with_no_backgrounded_line_is_a_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let _env = EnvPin::take(dir.path());
+        std::env::set_var("FNO_AGENT_HOME", dir.path().join("agents-home"));
+        stage_row_with(dir.path(), "exit 0");
+        let error = exec_lane(&serde_json::json!({
+            "harness": "claude", "name": "w3",
+            "payload": "/x",
+            "launcher_session": "lead-1",
+            "provider": "zai", "model": "tm-1", "cwd": dir.path(),
+        }))
+        .unwrap_err();
+        assert!(
+            error.contains("no harness session started for w3"),
+            "{error}"
+        );
+    }
+
     /// The native lane carries the worker identity into the actual child but
     /// keeps the dispatch handover proof available for target init.
     #[test]
@@ -426,7 +458,10 @@ mod tests {
         std::env::remove_var("FNO_AGENT_SELF");
         std::env::remove_var("FNO_AGENT_HARNESS");
         std::env::remove_var("FNO_HARNESS_NAME");
-        stage_row_with(dir.path(), &format!("env > {}", capture.display()));
+        stage_row_with(
+            dir.path(),
+            &format!("env > {}; {BACKGROUNDED}", capture.display()),
+        );
 
         exec_lane(&serde_json::json!({
             "harness": "claude", "name": "w1",

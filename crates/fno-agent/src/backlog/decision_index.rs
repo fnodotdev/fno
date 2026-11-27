@@ -71,6 +71,93 @@ pub fn graph_journal(graph: &Path) -> PathBuf {
     root.join("decisions.jsonl")
 }
 
+/// The cold archive beside the journal: the same state root
+/// the journal sits in, named `decisions-archive.jsonl`. The default reads
+/// skip it. The citation gate reads it, so every stored id stays resolvable.
+pub fn graph_archive(graph: &Path) -> PathBuf {
+    graph_journal(graph).with_file_name("decisions-archive.jsonl")
+}
+
+/// The archive file for the machine's default store.
+pub fn default_archive_path() -> PathBuf {
+    default_state_path("decisions-archive.jsonl")
+}
+
+/// The archive's rows, flattened the same way the journal's are. A missing
+/// or unreadable archive is empty: the archive is a projection, and its
+/// absence never breaks a read (the fail-open posture of every reader).
+pub fn read_archive_rows(jsonl: &Path) -> (Vec<Value>, usize) {
+    let Ok(text) = std::fs::read_to_string(jsonl) else {
+        return (Vec::new(), 0);
+    };
+    flatten_envelopes(&text)
+}
+
+/// The archive's row keys: the set every default read skips.
+fn archive_skip_keys(jsonl: &Path) -> std::collections::HashSet<(String, String)> {
+    read_archive_rows(jsonl).0.iter().map(row_key).collect()
+}
+
+/// Apply the store's scope amendments: the newest amendment per target
+/// rewrites that row's `reach` stamp (never the legacy `scope` stamp, which
+/// carries audience values), then the amendment rows drop out, because they
+/// never render as rows. Pure over the given rows.
+pub fn apply_scope_amendments(rows: &mut Vec<Value>) {
+    let mut newest: BTreeMap<String, ((String, String), String)> = BTreeMap::new();
+    for row in rows.iter().filter(|r| {
+        r.get(de::EVENT_TYPE).and_then(Value::as_str)
+            == Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
+    }) {
+        let Some(target) = row.get(de::TARGET).and_then(Value::as_str) else {
+            continue;
+        };
+        if target.is_empty() {
+            continue;
+        }
+        let Some(reach) = row.get(de::REACH).and_then(Value::as_str) else {
+            continue;
+        };
+        if reach.is_empty() {
+            continue;
+        }
+        let rank = (
+            row.get(de::TS)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            row.get(de::AMENDMENT_ID)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        );
+        let key = target.to_lowercase();
+        if newest.get(&key).is_none_or(|(seen, _)| *seen < rank) {
+            newest.insert(key, (rank, reach.to_string()));
+        }
+    }
+    if !newest.is_empty() {
+        for row in rows.iter_mut() {
+            if row.get(de::EVENT_TYPE).and_then(Value::as_str) != Some("operator_decision") {
+                continue;
+            }
+            let id = row
+                .get(de::DECISION_ID)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase();
+            if let Some((_, reach)) = newest.get(&id) {
+                if let Some(obj) = row.as_object_mut() {
+                    obj.insert("reach".to_string(), json!(reach));
+                }
+            }
+        }
+    }
+    rows.retain(|row| {
+        row.get(de::EVENT_TYPE).and_then(Value::as_str)
+            != Some(crate::backlog::decisions::SCOPE_AMEND_EVENT)
+    });
+}
+
 /// The envelope flatten: JSONL text into flattened rows plus the damaged
 /// count. The index stores event ENVELOPES (`{type, ts, data}`) that the
 /// Python reader flattens (data fields at the top plus `_event_type` and
@@ -93,15 +180,20 @@ fn flatten_envelopes(text: &str) -> (Vec<Value>, usize) {
             damaged += 1;
             continue;
         };
-        if etype != "operator_decision" && etype != "decision_retracted" {
+        if etype != "operator_decision"
+            && etype != "decision_retracted"
+            && etype != crate::backlog::decisions::SCOPE_AMEND_EVENT
+        {
             continue;
         }
         // The Python reader marks an envelope whose required data field is
-        // empty as damaged (discarded), not as a live or retiring row.
-        let required = if etype == "operator_decision" {
-            "decision_id"
-        } else {
-            "target_decision_id"
+        // empty as damaged (discarded), not as a live or retiring row. A
+        // scope amend without its target applies to nothing, so its id is
+        // the damaged shape, like a retraction with no target.
+        let required = match etype {
+            "operator_decision" => "decision_id",
+            crate::backlog::decisions::SCOPE_AMEND_EVENT => "target_decision_id",
+            _ => "target_decision_id",
         };
         if data
             .get(required)
@@ -247,20 +339,62 @@ pub fn derive_live(text: &str) -> Index {
     derive_rows(rows, damaged)
 }
 
+/// The ways a decision-store read fails. One variant today: the store is
+/// unreadable, and the message names both legs. The type is what a caller
+/// matches (docs/rust-style.md R6); the plain read keeps its grandfathered
+/// signature.
+#[derive(Debug, thiserror::Error)]
+#[error("decision store read failed: {0}")]
+pub struct DecisionStoreError(pub String);
+
+impl From<String> for DecisionStoreError {
+    fn from(message: String) -> Self {
+        Self(message)
+    }
+}
+
+/// The decision-envelope field names, one definition each (the
+/// row_facts key-module pattern): new reads go through these, so a field
+/// name has one home and a typo refuses to compile.
+pub mod de {
+    pub const EVENT_TYPE: &str = "_event_type";
+    pub const TYPE: &str = "type";
+    pub const DATA: &str = "data";
+    pub const DECISION_ID: &str = "decision_id";
+    pub const SUBJECT: &str = "subject";
+    pub const SCOPE: &str = "scope";
+    pub const REACH: &str = "reach";
+    pub const PRIOR_REACH: &str = "prior_reach";
+    pub const DECISION: &str = "decision";
+    pub const AUTHORITY: &str = "authority_source";
+    pub const SUPERSEDES: &str = "supersedes";
+    pub const TARGET: &str = "target_decision_id";
+    pub const RETRACTION_ID: &str = "retraction_id";
+    pub const AMENDMENT_ID: &str = "amendment_id";
+    pub const TS: &str = "ts";
+}
+
 /// The row identity the Python merge uses (`decide/__init__.py:814-819`):
 /// event type, then the first non-empty of `decision_id`,
-/// `retraction_id`, `target_decision_id`.
-fn row_key(row: &Value) -> (String, String) {
+/// `retraction_id`, `amendment_id`, `target_decision_id`. The amendment id
+/// sits before the target: two amendments of one law must not share a key,
+/// or the journal-vs-db merge drops the newer one as a copy.
+pub(crate) fn row_key(row: &Value) -> (String, String) {
     let etype = row
-        .get("_event_type")
+        .get(de::EVENT_TYPE)
         .and_then(Value::as_str)
         .unwrap_or("operator_decision")
         .to_string();
-    let id = ["decision_id", "retraction_id", "target_decision_id"]
-        .iter()
-        .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
-        .unwrap_or("")
-        .to_string();
+    let id = [
+        "decision_id",
+        "retraction_id",
+        "amendment_id",
+        "target_decision_id",
+    ]
+    .iter()
+    .find_map(|k| row.get(k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+    .unwrap_or("")
+    .to_string();
     (etype, id)
 }
 
@@ -277,9 +411,35 @@ fn row_key(row: &Value) -> (String, String) {
 /// `admit_proven`, so every law reader sees only proven wide law.
 pub fn read_store_rows(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, usize), String> {
     let (mut rows, damaged) = read_store_rows_raw(graph, jsonl)?;
+    apply_scope_amendments(&mut rows);
+    let skip = archive_skip_keys(&graph_archive(graph));
+    if !skip.is_empty() {
+        rows.retain(|row| !skip.contains(&row_key(row)));
+    }
     let withheld = crate::identity::trusted_user_key()
         .map_or(0, |user_key| admit_proven(&mut rows, &user_key));
     WITHHELD.with(|count| count.set(withheld));
+    Ok((rows, damaged))
+}
+
+/// The physical store rows (no archive skip, no reach apply) plus the
+/// archive's rows, deduped by row_key: every stored row a citation may
+/// name, so a moved id stays resolvable. Unproven rows keep the same admit
+/// pass the plain read applies, so a forged id cannot pass the gate by
+/// archiving.
+pub fn read_store_rows_everything(
+    graph: &Path,
+    jsonl: &Path,
+) -> Result<(Vec<Value>, usize), DecisionStoreError> {
+    let (mut rows, mut damaged) = read_store_rows_raw(graph, jsonl)?;
+    let (archived, arch_damaged) = read_archive_rows(&graph_archive(graph));
+    damaged += arch_damaged;
+    let known: std::collections::HashSet<(String, String)> = rows.iter().map(row_key).collect();
+    for row in archived {
+        if !known.contains(&row_key(&row)) {
+            rows.push(row);
+        }
+    }
     Ok((rows, damaged))
 }
 
@@ -742,7 +902,7 @@ pub fn timed_lifecycle(
 }
 
 /// The node id a row's expiry names by exact id, stated or defaulted.
-fn expiry_node_id(row: &Value) -> Option<String> {
+fn expiry_node_id(row: &Value, seq_prefix: Option<&str>) -> Option<String> {
     if let Some(expiry) = row.get("expiry_ref").filter(|r| r.is_object()) {
         return match <Expiry as serde::Deserialize>::deserialize(expiry) {
             Ok(Expiry::Node { node_id }) => Some(node_id),
@@ -753,7 +913,7 @@ fn expiry_node_id(row: &Value) -> Option<String> {
         return None;
     }
     let subject = RowFacts::of(row).subject.unwrap_or("").trim();
-    crate::law_match::matches_node_id_shape(subject).then(|| subject.to_string())
+    crate::law_match::matches_node_id_shape_under(subject, seq_prefix).then(|| subject.to_string())
 }
 
 /// Drop every row whose expiry has fired, for the readers that serve live
@@ -769,8 +929,12 @@ pub fn drop_expired(index: &mut Index, graph: &Path) {
             .and_then(|e| timed_lifecycle(e, now))
             .map_or(true, |(lc, _)| lc != "expired")
     });
-    let ids: std::collections::BTreeSet<String> =
-        index.rows.iter().filter_map(expiry_node_id).collect();
+    let seq_prefix = super::node_ref::sequential_prefix();
+    let ids: std::collections::BTreeSet<String> = index
+        .rows
+        .iter()
+        .filter_map(|row| expiry_node_id(row, seq_prefix.as_deref()))
+        .collect();
     if ids.is_empty() || !graph.exists() {
         return;
     }
@@ -795,9 +959,9 @@ pub fn drop_expired(index: &mut Index, graph: &Path) {
             }
         }
     }
-    index
-        .rows
-        .retain(|row| expiry_node_id(row).map_or(true, |id| !closed.contains(&id)));
+    index.rows.retain(|row| {
+        expiry_node_id(row, seq_prefix.as_deref()).map_or(true, |id| !closed.contains(&id))
+    });
 }
 
 /// The laws of an index, newest first.
@@ -1056,6 +1220,121 @@ mod tests {
         let index = live_laws(&path).expect("valid rows still return");
         assert_eq!(index.rows.len(), 2);
         assert_eq!(index.damaged, 2);
+    }
+
+    fn amend(id: &str, target: &str, reach: &str, ts: &str) -> String {
+        format!(
+            "{{\"type\":\"decision_scope_amended\",\"ts\":\"{ts}\",\"data\":{{\"amendment_id\":\"{id}\",\
+             \"target_decision_id\":\"{target}\",\"reach\":\"{reach}\"}}}}"
+        )
+    }
+
+    #[test]
+    fn a_scope_amend_applies_newest_wins_and_strips_itself() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = write_index(
+            dir.path(),
+            &[
+                envelope(
+                    "d-aaaa0001",
+                    "2026-09-12T00:00:00Z",
+                    "operator",
+                    "topic-a",
+                    ",\"reach\":\"project:old\"",
+                ),
+                amend("d-cccc0003", "d-pseudo1", "project:new", "2026-11-24T00:00:00Z"),
+                amend("d-dddd0004", "d-aaaa0001", "global", "2026-11-25T00:00:00Z"),
+                "{\"type\":\"decision_scope_amended\",\"ts\":\"2026-11-26T00:00:00Z\",\"data\":{\"amendment_id\":\"d-eeee0005\",\"reach\":\"global\"}}".to_string(),
+            ],
+        );
+        let (mut rows, damaged) = flatten_envelopes(&fs::read_to_string(&path).expect("reads"));
+        assert_eq!(damaged, 1, "an amend with no target is the damaged shape");
+        apply_scope_amendments(&mut rows);
+        assert_eq!(rows.len(), 1, "amendment rows never render");
+        let row = rows.first().expect("the one row stays");
+        assert_eq!(
+            row.get(de::DECISION_ID).and_then(Value::as_str),
+            Some("d-aaaa0001")
+        );
+        assert_eq!(
+            row.get(de::REACH).and_then(Value::as_str),
+            Some("global"),
+            "the newest amendment wins"
+        );
+    }
+
+    #[test]
+    fn the_default_read_skips_archive_rows_and_everything_joins_them_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let graph = dir.path().join("graph.json");
+        let jsonl = dir.path().join("decisions.jsonl");
+        fs::write(
+            &jsonl,
+            format!(
+                "{}\n{}\n",
+                envelope(
+                    "d-keep0001",
+                    "2026-09-12T00:00:00Z",
+                    "operator",
+                    "topic-keep",
+                    ""
+                ),
+                envelope(
+                    "d-gone0002",
+                    "2026-09-11T00:00:00Z",
+                    "operator",
+                    "topic-gone",
+                    ""
+                ),
+            ),
+        )
+        .expect("writes");
+        let archive = graph_archive(&graph);
+        fs::write(
+            &archive,
+            format!(
+                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-11T00:00:00Z\",\"data\":{{\"decision_id\":\"d-gone0002\",\"subject\":\"topic-gone\",\"decision\":\"Ruling.\",\"authority_source\":\"operator\"}}}}\n"
+            ),
+        )
+        .expect("writes");
+        let (rows, _) = read_store_rows(&graph, &jsonl).expect("reads");
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .collect();
+        assert_eq!(ids, vec!["d-keep0001"], "the archived row skips");
+        let (all, _) = read_store_rows_everything(&graph, &jsonl).expect("reads");
+        let mut all_ids: Vec<&str> = all
+            .iter()
+            .filter_map(|r| r.get("decision_id").and_then(Value::as_str))
+            .collect();
+        all_ids.sort();
+        assert_eq!(
+            all_ids,
+            vec!["d-gone0002", "d-keep0001"],
+            "the archive joins back"
+        );
+    }
+
+    #[test]
+    fn two_amendments_of_one_law_keep_distinct_row_keys() {
+        let a = amend("d-cccc0003", "d-aaaa0001", "global", "2026-11-24T00:00:00Z");
+        let b = amend(
+            "d-dddd0004",
+            "d-aaaa0001",
+            "project:fnh",
+            "2026-11-25T00:00:00Z",
+        );
+        let (rows_a, _) = flatten_envelopes(&a);
+        let (rows_b, _) = flatten_envelopes(&b);
+        let (Some(first), Some(second)) = (rows_a.first(), rows_b.first()) else {
+            panic!("each amend flattens to one row");
+        };
+        assert_ne!(
+            row_key(first),
+            row_key(second),
+            "two amendments of one law must not collide"
+        );
     }
 }
 

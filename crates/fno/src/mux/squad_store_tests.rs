@@ -476,6 +476,7 @@ fn hostile_drops_rows() {
         version: STORE_VERSION,
         generations: Default::default(),
         squads: vec![StoredSquad {
+            project: None,
             thread_pins: Vec::new(),
             name: "w".into(),
             key: String::new(),
@@ -684,6 +685,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: String::new(),
                 key: "c5bf8f5419a350e8".into(),
@@ -695,6 +697,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "c5bf8f5419a350e8".into(),
@@ -730,6 +733,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "c5bf8f5419a350e8".into(),
@@ -741,6 +745,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: String::new(),
                 key: "c5bf8f5419a350e8".into(),
@@ -770,6 +775,7 @@ fn load_repair_rows() {
         generations: Default::default(),
         squads: vec![
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: String::new(),
@@ -781,6 +787,7 @@ fn load_repair_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "oss".into(),
                 key: "leftover".into(),
@@ -1381,6 +1388,7 @@ fn collapse_rows() {
         next_pane_id: 0,
         squads: vec![
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "f[no]".into(),
                 key: legacy.into(),
@@ -1392,6 +1400,7 @@ fn collapse_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "fno".into(),
                 key: legacy.into(),
@@ -1436,6 +1445,7 @@ fn collapse_rows() {
         next_pane_id: 0,
         squads: vec![
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "one".into(),
                 key: key.clone(),
@@ -1447,6 +1457,7 @@ fn collapse_rows() {
                 active_tab: None,
             },
             StoredSquad {
+                project: None,
                 thread_pins: Vec::new(),
                 name: "two".into(),
                 key,
@@ -1695,6 +1706,7 @@ fn prune_predicate_matrix() {
     let exists = |p: &str| p == "/alive";
 
     let squad = |name: &str, key: &str, origins: &[&str], members: &[&str]| StoredSquad {
+        project: None,
         thread_pins: Vec::new(),
         name: name.into(),
         key: key.into(),
@@ -1890,6 +1902,30 @@ fn a_thread_pin_moves_between_rows_and_survives_an_upsert() {
     drop(s);
 }
 
+#[test]
+fn a_workspace_project_id_survives_a_topology_upsert() {
+    let s = Scratch::new("project-id");
+    let snap = SquadSnapshot {
+        name: "foot".into(),
+        key: String::new(),
+        origins: vec!["/foot".into()],
+        members: Vec::new(),
+        tab_trees: Vec::new(),
+        active_tab: None,
+        project: Some("foot".into()),
+    };
+    let batch = set_snapshots_if_generations(&std::collections::HashMap::new(), &[snap]).unwrap();
+    assert!(batch.conflicts.is_empty());
+    upsert("foot", "", &["/foot".into()], &[m("c19cd2c3")]).unwrap();
+    let kept = load()
+        .squads
+        .into_iter()
+        .find(|q| q.name == "foot")
+        .and_then(|q| q.project);
+    assert_eq!(kept.as_deref(), Some("foot"));
+    drop(s);
+}
+
 // -- The empty-member grace window --------------------------------------
 //
 // Nine of the fifteen squads measured on this machine have ZERO members. A
@@ -1913,4 +1949,28 @@ fn stamp_parser_matches_a_known_epoch() {
         parse_stamp_epoch("2024-02-29T00:00:00Z"),
         Some(1_709_164_800)
     );
+}
+
+#[test]
+fn shot_pin_squad_needs_every_origin_under_a_pin_dir() {
+    let squad = |origins: &[&str]| StoredSquad {
+        project: None,
+        thread_pins: Vec::new(),
+        name: String::new(),
+        key: String::new(),
+        origins: origins.iter().map(|s| (*s).to_string()).collect(),
+        members: Vec::new(),
+        created_at: String::new(),
+        tab_specs: Vec::new(),
+        tab_trees: Vec::new(),
+        active_tab: None,
+    };
+    assert!(is_shot_pin_squad(&squad(&["/var/T/fno-shot-pin-47612"])));
+    assert!(is_shot_pin_squad(&squad(&["/var/T/fno-shot-pin-1/demo"])));
+    assert!(!is_shot_pin_squad(&squad(&[])));
+    assert!(!is_shot_pin_squad(&squad(&["/Users/bb16"])));
+    assert!(!is_shot_pin_squad(&squad(&[
+        "/var/T/fno-shot-pin-1",
+        "/tmp"
+    ])));
 }

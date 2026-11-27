@@ -53,6 +53,9 @@ pub(crate) mod de;
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
 
+#[path = "lead_checkin_review_board.rs"]
+mod review_board;
+
 #[path = "lead_checkin_rate_limits.rs"]
 mod rate_limits;
 
@@ -1115,9 +1118,9 @@ fn r_territory(cwd: &Path) -> Result<Value, String> {
     Ok(Value::Array(rows))
 }
 
-/// The state-root drift reading: undocumented top-level entries in the fno
-/// state root. A failed doc or root read is a READER FAILED line, never a
-/// silent zero (the unmeasured-state rule).
+/// The state-root drift reading: top-level entries of the fno state root that
+/// no keep row of the layout table carries. A failed root read is a READER
+/// FAILED line, never a silent zero (the unmeasured-state rule).
 fn r_state_root_drift() -> Result<Value, String> {
     let home = crate::paths::AgentsHome::from_env();
     let state_root = crate::reclaim::reclaim_state_root(&home);
@@ -1291,6 +1294,16 @@ fn collect_readings(
         let events_paths = events_paths.clone();
         move || Ok(rate_limits::reading(&events_paths))
     });
+    let h_law_fires = spawn_reading(beat_started, "law_fires", {
+        let events_paths = events_paths.clone();
+        let since = since.clone();
+        move || {
+            Ok(crate::law_at::fires_at_actions(
+                &events_paths,
+                since.as_deref(),
+            ))
+        }
+    });
     let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
     let h_machine = spawn_reading(beat_started, "machine", {
         let events_paths = events_paths.clone();
@@ -1358,6 +1371,22 @@ fn collect_readings(
     });
     let h_parked = spawn_reading(beat_started, "parked", || r_parked());
     let h_prompt_parked = spawn_reading(beat_started, "prompt_parked", || prompt_parked::reading());
+    let h_review_board = spawn_reading(beat_started, "review_board", {
+        let (rows, scope, folded) = (rows.clone(), scope.clone(), folded.clone());
+        move || {
+            let members: std::collections::HashSet<String> = folded
+                .as_ref()
+                .ok()
+                .and_then(|f| f.pointer("/fold"))
+                .map(|f| de::parse::<de::FoldView>(f))
+                .unwrap_or_default()
+                .nodes
+                .iter()
+                .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(str::to_string))
+                .collect();
+            Ok(review_board::reading(&rows, &scope, &members))
+        }
+    });
     // The two input pseudos spawn with the leaves and await at their declared
     // positions: their graph scans overlap the leaf readers instead of
     // front-loading the beat's serial path.
@@ -1421,6 +1450,15 @@ fn collect_readings(
             let claims = crate::claims::list(Some("node:"), None, false)
                 .map(|rows| rows.iter().map(|r| r.holder.clone()).collect());
             let home = crate::paths::AgentsHome::from_env();
+            let spawned = match session_id.as_deref() {
+                Some(session) => {
+                    let registry = crate::state::load_registry(&home.registry_json())
+                        .map_err(|e| format!("fno registry unreadable: {e}"))?;
+                    crate::lead_checkin_blueprint::spawned_in_registry(&registry, &home, session)
+                        .len()
+                }
+                None => 0,
+            };
             let slots = crate::spawn_gate_lanes::share_reading(
                 &home.registry_json(),
                 crate::capacity::effective_for(&cwd).cap,
@@ -1445,6 +1483,7 @@ fn collect_readings(
                 &cwd,
                 session_id,
                 claims,
+                spawned,
                 slots,
                 &floor,
                 &other_owned,
@@ -1472,6 +1511,7 @@ fn collect_readings(
     h_layout.collect_into(&mut readings, beat_started);
     h_telemetry.collect_into(&mut readings, beat_started);
     h_rate_limits.collect_into(&mut readings, beat_started);
+    h_law_fires.collect_into(&mut readings, beat_started);
     h_laws.collect_into(&mut readings, beat_started);
     h_machine.collect_into(&mut readings, beat_started);
 
@@ -1569,6 +1609,7 @@ fn collect_readings(
     h_self_hold.collect_into(&mut readings, beat_started);
     h_parked.collect_into(&mut readings, beat_started);
     h_prompt_parked.collect_into(&mut readings, beat_started);
+    h_review_board.collect_into(&mut readings, beat_started);
 
     readings
 }
@@ -2101,6 +2142,15 @@ fn render_lines_with(
         }
         _ => {}
     }
+    match by_name("law_fires") {
+        Some(r) if !r.ok => lines.push(format!("READER FAILED law_fires: {}", r.error)),
+        Some(r) => {
+            if let Some(summary) = r.value.as_str() {
+                lines.push(format!("law fires at actions: {summary}"));
+            }
+        }
+        _ => {}
+    }
 
     match by_name("session_orders") {
         Some(r) if r.ok && !r.value.is_null() => {
@@ -2429,6 +2479,7 @@ fn render_lines_with(
     lines.extend(posture::lines(readings));
     lines.extend(peer_blocked::lines(readings));
     lines.extend(prompt_parked::lines(readings));
+    lines.extend(review_board::lines(readings));
     lines.extend(crate::backlog::attention_ledger::checkin_lines(readings));
 
     match failed("refusal_rate") {
@@ -2611,7 +2662,7 @@ fn render_lines_with(
                 .collect();
             let more = if count > 5 { ", ..." } else { "" };
             lines.push(format!(
-                "state_root_drift: {count} undocumented top-level entries: {}{more}",
+                "state_root_drift: {count} top-level entries the layout table does not keep: {}{more}",
                 entries.join(", ")
             ));
         }
@@ -3141,6 +3192,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // what pushed the beat past the 60s reader deadline under fleet load.
     // The fold, the scope compile and the idea-children pass all
     // reuse the graph rows this read produces.
+    // The beat takes `undriven_pr`, `unplanned`, `undispatched` and
+    // `blocked_child` from the board and nothing else, so it asks for no
+    // merge verdict, question liveness or needs fold. Under fleet load the
+    // per-PR gates alone held the fetch for the whole board budget, and a
+    // fetch past its deadline fails the board, blueprint and blocked_child
+    // readings together.
     let graph_rx = spawn_preflight("graph read", {
         let graph = ctx.graph.clone();
         move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
@@ -3170,6 +3227,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                 cwd: Some(cwd),
                 budget_ms: BOARD_BUDGET_MS,
                 graph_rows: rows,
+                dispatch_only: true,
                 ..Default::default()
             }))
         }
@@ -3639,6 +3697,25 @@ mod tests {
             assert!(err.starts_with("unreadable ("), "{err}");
         });
         let _ = std::fs::remove_dir_all(&base);
+
+        // The review-board reading: newest slug on the scope or a child, else the remedy line.
+        let note = |ts: &str, text: &str| json!({"ts": ts, "text": text});
+        let boards = vec![
+            json!({"id": "x-epic", "progress_notes": [note("2026-11-01", "Review board: old")]}),
+            json!({"id": "x-kid", "progress_notes": [note("2026-11-02", "Review board: new")]}),
+        ];
+        let line = |scope, kids: &[&str]| {
+            let members = kids.iter().map(|k| k.to_string()).collect();
+            let value = review_board::reading(&boards, scope, &members);
+            review_board::lines(&[Reading::took("review_board", value)])
+        };
+        assert_eq!(
+            line("x-epic", &["x-kid"]),
+            vec!["review_board: new".to_string()]
+        );
+        assert!(line("x-none", &[])
+            .first()
+            .is_some_and(|l| l.starts_with("review_board: none: make one from the Gus or Lara")));
     }
 
     /// One escalation note's frontmatter plus stub sections.

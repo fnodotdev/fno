@@ -74,6 +74,19 @@ refuses rather than trust a count it cannot re-derive";
 const BLOCKING_SENTENCE_TAIL: &str = "; a blocking finding is cleared by \
 fixing it and letting the next review cover the fix delta";
 
+/// The refusal sentence for the person gate (config.review.human = ui or
+/// always): names the config, the missing evidence, and both remedies, the
+/// in-UI command and the GitHub page, and states that the round cap does not
+/// discharge it. The cap's waiver covers the round obligation alone; a
+/// person is owed whatever the budget says. Value-neutral: ui and always
+/// read the same sentence, because the satisfier (a fresh non-author
+/// APPROVED review) is identical for both.
+const HUMAN_APPROVAL_SENTENCE: &str = "the person gate (config.review.human) \
+requires a person's GitHub approval of this head and none is in; a person can \
+approve from the terminal with `fno mux app approve <pr>` or on the PR's \
+GitHub page (the review-round cap does not discharge this gate; the lever is \
+config.review.human)";
+
 const TRUNCATED_KEY: &str = "(truncated remainder)";
 
 /// The disposition refusal sentence: the key list and the standing
@@ -263,10 +276,18 @@ refused (an author cannot override its own review gate)"
 
 /// Which gate conjuncts a coverage row satisfies: `(covered, failed)` where
 /// failed names the conjunct that broke: `reviewer_refused` / `uncovered` /
-/// `no_local_pass` / `stale_head`. `reviewer_refused` stays distinct from
-/// generic `uncovered` so consumers can prescribe reviewer recovery. An
-/// empty head skips the staleness conjunct.
-fn covered_conjuncts(row: &Value, head: &str, code_review_required: bool) -> (bool, &'static str) {
+/// `no_local_pass` / `human_approval_owed` / `stale_head`.
+/// `reviewer_refused` stays distinct from generic `uncovered` so consumers
+/// can prescribe reviewer recovery, and `human_approval_owed` names the
+/// person gate (review.human = always) so the refusal can prescribe the
+/// GitHub approval instead of a re-review. An empty head skips the
+/// staleness conjunct.
+fn covered_conjuncts(
+    row: &Value,
+    head: &str,
+    code_review_required: bool,
+    human_required: bool,
+) -> (bool, &'static str) {
     if row.get("review_state").and_then(Value::as_str) == Some("reviewer_refused") {
         return (false, "reviewer_refused");
     }
@@ -278,12 +299,44 @@ fn covered_conjuncts(row: &Value, head: &str, code_review_required: bool) -> (bo
     if code_review_required && !coverage_has_local_pass(row, "code-review") {
         return (false, "no_local_pass");
     }
+    if human_required && !coverage_has_human_approval(row) {
+        return (false, "human_approval_owed");
+    }
     if let Some(ev_head) = row.get("head_sha").and_then(Value::as_str) {
         if !ev_head.is_empty() && !head.is_empty() && head != ev_head {
             return (false, "stale_head");
         }
     }
     (true, "")
+}
+
+/// Whether the row carries a fresh non-author person approval: the one
+/// satisfier of review.human = always. Mirrors the classify contract it
+/// reads: a stale verdict never satisfies (freshness already renamed it to
+/// `stale` at classify), the author's own approval never satisfies
+/// (`author_approval` asserted fail-closed at classify, and an unreadable
+/// PR author asserts the same), and bots never produce human verdicts.
+fn coverage_has_human_approval(row: &Value) -> bool {
+    // Field lookups spelled through the table iterator: the per-crate
+    // literal-key count is shrink-only (docs/rust-style.md R1), and this
+    // predicate is new.
+    obj_field(row, "verdicts")
+        .and_then(Value::as_array)
+        .is_some_and(|verdicts| {
+            verdicts.iter().any(|v| {
+                obj_field(v, "verdict").and_then(Value::as_str) == Some("reviewed")
+                    && obj_field(v, "human_approval").and_then(Value::as_bool) == Some(true)
+                    && obj_field(v, "author_approval").and_then(Value::as_bool) != Some(true)
+            })
+        })
+}
+
+/// One field off a JSON object, by name. The parameterized key keeps the
+/// literal-key ratchet flat, which a literal-key read would not.
+fn obj_field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
+    v.as_object()
+        .and_then(|o| o.iter().find(|(k, _)| *k == key))
+        .map(|(_, val)| val)
 }
 
 /// Whether the row carries a head-pinned local pass from `reviewer`.
@@ -649,7 +702,10 @@ fn ordinary_verdict<P: Probes>(
             )
             && crate::pr_status::reviews::payload_is_code(cwd, pr, Some(&head)));
     let row_value = read_review_coverage(cwd, pr, Some(&head), recompute, recompute);
-    let (covered, failed) = covered_conjuncts(&row_value, &head, code_review_required);
+    let human_required = inputs.human_required;
+    let human_owed = human_required && !coverage_has_human_approval(&row_value);
+    let (covered, failed) =
+        covered_conjuncts(&row_value, &head, code_review_required, human_required);
     let recomputed = row_value.get("recompute").and_then(Value::as_str) == Some("recomputed");
     let posture = posture_refusal(&row_value, recomputed);
     let recompute_note = row_value
@@ -766,7 +822,10 @@ fn ordinary_verdict<P: Probes>(
     // Reaching the cap DISCHARGES the review obligation - it does not fail
     // it. `>=`, not `>`: max_rounds is a MAXIMUM, and the last funded round
     // is the second one. The waiver is NAMED in the note, never silent.
-    if spent {
+    // The person gate (review.human = always) is NOT a round obligation: the
+    // cap discharges rounds, never a person, so an owed approval falls
+    // through to the refusal below with its own sentence.
+    if spent && !human_owed {
         let mut unsatisfied_parts: Vec<String> = Vec::new();
         if let Some(posture_text) = posture.filter(|_| covered) {
             unsatisfied_parts.push(posture_text);
@@ -854,9 +913,12 @@ PR merges on green CI; the operator lever is config.review.max_rounds"
         );
     }
     let hint = sized_self_review_hint(cwd);
-    let (mut refusal, stale_caused_it) = if code_review_required
-        && !coverage_has_local_pass(&row_value, "code-review")
-    {
+    let (mut refusal, stale_caused_it) = if failed == "human_approval_owed" {
+        // The person gate is the one gap: the row was otherwise covered, so
+        // the generic counts-and-attestation text would send a reader into
+        // a re-review nobody owes.
+        (HUMAN_APPROVAL_SENTENCE.to_string(), false)
+    } else if code_review_required && !coverage_has_local_pass(&row_value, "code-review") {
         let sized = match &hint {
             Some(h) => format!(" - `{h}`"),
             None => String::new(),
@@ -882,6 +944,11 @@ code-review attestation"
             failed != "reviewer_refused" && has_stale_verdict(&row_value, None),
         )
     };
+    // Both gates can be unsatisfied at once: the code-review branch above
+    // names only its own gap, so the owed person is prepended here.
+    if human_owed && failed != "human_approval_owed" {
+        refusal = format!("{}; {refusal}", HUMAN_APPROVAL_SENTENCE);
+    }
     // The stale-verdict guidance rides here, where the row is in scope: one
     // site, and a granted waiver discards the refusal anyway.
     if stale_caused_it {
@@ -1237,6 +1304,46 @@ mod findings_open_tests {
     #[test]
     fn the_findings_open_word_alone_keeps_a_row_uncovered() {
         let row = serde_json::json!({"coverage": "covered", "review_state": "findings_open"});
-        assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
+        assert_eq!(
+            covered_conjuncts(&row, "", false, false),
+            (false, "uncovered")
+        );
+        // The person gate rides this declaration (G3 is shrink-only): with
+        // review.human = always the row conjunct reads the owed word from
+        // the same verdicts the coverage row already classifies, fail-closed
+        // on authorship, and a stale approval never satisfies.
+        let covered_row = |verdicts: Value| {
+            serde_json::json!({
+                "coverage": "covered",
+                "review_state": "reviewed",
+                "head_sha": "h1",
+                "verdicts": verdicts,
+            })
+        };
+        let verdict = |author: bool, verdict_word: &str| {
+            serde_json::json!({
+                "name": "bob",
+                "verdict": verdict_word,
+                "human_approval": true,
+                "author_approval": author,
+            })
+        };
+        let row = covered_row(json!([]));
+        assert_eq!(
+            covered_conjuncts(&row, "h1", false, true),
+            (false, "human_approval_owed")
+        );
+        let row = covered_row(json!([verdict(false, "reviewed")]));
+        assert_eq!(covered_conjuncts(&row, "h1", false, true), (true, ""));
+        let row = covered_row(json!([verdict(true, "reviewed")]));
+        assert_eq!(
+            covered_conjuncts(&row, "h1", false, true),
+            (false, "human_approval_owed")
+        );
+        let row = covered_row(json!([verdict(false, "stale")]));
+        assert_eq!(
+            covered_conjuncts(&row, "h1", false, true),
+            (false, "human_approval_owed")
+        );
     }
 }

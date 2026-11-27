@@ -1,6 +1,6 @@
 # Quick Plan Template
 
-Single flat markdown file for bugs, focused features, and single-session work. One `.md` == one PR == one node, with no folder, no `00-INDEX.md`, and no phase files. Frontmatter is **mandatory** on every plan, quick or not, and holds scalar keys only: `status`, `kind`, and `kill_criteria` always ride in it. `consolidation` and `surface` live in a `## Gate records` section after `## Execution Strategy`, not in frontmatter. Obsidian properties cannot render nested YAML. Any top-level `decisions_acknowledged` rides with them. The markdown-heading form of kill_criteria is invisible to the stamp/validate parser and is not used.
+Single flat markdown file for bugs, focused features, and single-session work. One `.md` == one PR == one node, with no folder, no `00-INDEX.md`, and no phase files. Frontmatter is **mandatory** on every plan, quick or not, and holds scalar keys only: `status` and `kind` always ride in it. The nested and list keys live in one fenced YAML block under a `## Gate records` section after `## Execution Strategy`. They are `code_index`, `kill_criteria`, `done_probes`, `consolidation`, `surface` and `sources`, and the stamp's `urls` and `session_ids`. Obsidian properties cannot render nested YAML. Any top-level `decisions_acknowledged` rides with them. A `## Kill Criteria` heading is a legacy form. New plans do not use it.
 
 ---
 
@@ -39,35 +39,10 @@ difficulty: <low | medium | high> # Required for plans created after 2026-08-26.
 # depends_on:                     # Graph edges wired at auto-adopt time
 #   - ../2026-04-19-sibling-slug  # sibling plan (resolved against graph.plan_path)
 #   -                 # or an existing graph node ID
-# code_index: the step 2-index receipt. main_sha is the origin/main sha the
-#                                 # plan read; providers is one entry per index
-#                                 # asked, or [] when none is present. MANDATORY
-#                                 # on plans created after 2026-09-17: the
-#                                 # validator's Code Index Audit refuses a plan
-#                                 # that skipped a present index. status is
-#                                 # answered | unavailable | error; fresh is
-#                                 # yes | no | unknown.
-code_index:
-  main_sha: <7-40 hex>                     # the origin/main sha the plan read
-  providers:
-    - name: codegraph                      # one entry per index detection finds, or providers: []
-      role: symbol
-      status: answered
-      fresh: yes
-# kill_criteria: abort conditions target/do evaluate at wave + iteration boundaries.
-# Emit these defaults unless the plan overrides them (see SKILL.md "Kill Criteria
-# Declaration"). They live HERE in frontmatter, never under a `## Kill Criteria` heading.
-kill_criteria:
-  - name: iteration_ceiling
-    predicate: iteration > 15
-    reason: "Too many iterations - planning likely wrong"
-  - name: stuck_test
-    predicate: same_test_failing_for >= 3
-    reason: "Same test failing 3+ iterations - root cause unclear"
 # Stamp fields (populated by /target ship gate - do not fill manually):
 # shipped_at: <UTC ISO8601>
-# urls: []
-# session_ids: []
+# pr_url: <the newest PR url>     # one scalar link; the url and session lists
+#                                 # land in ## Gate records
 ---
 
 # [Title — descriptive, not generic]
@@ -142,7 +117,7 @@ no index is present, the first line says so.]
 
 ## Done
 
-[The deliverable as a measured number, and the command that measures it. The same command goes in frontmatter `done_probes:`.]
+[The deliverable as a measured number, and the command that measures it. The same command goes in `done_probes:` in the `## Gate records` fence.]
 
 ## Changes
 
@@ -231,6 +206,35 @@ tasks:
 
 ## Gate records
 
+```yaml
+# code_index: the step 2-index receipt. main_sha is the origin/main sha the
+#                                 # plan read. providers is one entry per index
+#                                 # asked. With no index present, write []. MANDATORY
+#                                 # on plans created after 2026-09-17: the
+#                                 # validator's Code Index Audit refuses a plan
+#                                 # that skipped a present index. status is
+#                                 # answered | unavailable | error. fresh is
+#                                 # yes | no | unknown.
+code_index:
+  main_sha: <7-40 hex>                     # the origin/main sha the plan read
+  providers:
+    - name: codegraph                      # one entry per index detection finds, or providers: []
+      role: symbol
+      status: answered
+      fresh: yes
+# kill_criteria: abort conditions target/do evaluate at wave + iteration boundaries.
+# Emit these defaults unless the plan overrides them (see SKILL.md "Kill Criteria
+# Declaration"). They live HERE in the record fence, never under a `## Kill Criteria` heading.
+kill_criteria:
+  - name: iteration_ceiling
+    predicate: iteration > 15
+    reason: "Too many iterations - planning likely wrong"
+  - name: stuck_test
+    predicate: same_test_failing_for >= 3
+    reason: "Same test failing 3+ iterations - root cause unclear"
+# done_probes: 1-2 shell commands that measure ## Done (see blueprint-gates.md).
+done_probes:
+  - "<the command from ## Done>"
 # consolidation: the step 2d Consolidation Gate's recorded outcome. Exactly one
 #                                 # of absorb | append | proceed_alone, judged on the
 #                                 # 2b receipt's graph.duplicates + graph.closure with

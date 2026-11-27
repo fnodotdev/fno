@@ -47,6 +47,7 @@ pub(super) fn record_build_park(parsed: &super::LoopCheckArgs) {
         "blocker": "build",
         "reason": "build",
         "expires_at_ms": crate::claims::now_ms() + BUILD_PARK_MS,
+        "lease_ms": BUILD_PARK_MS + WATCH_SLACK_MS,
         "build_cargo_pid": wait.cargo_pid,
         "build_since_ms": wait.since_ms,
         "build_holder": wait.holder,
@@ -128,7 +129,11 @@ pub(crate) const IDLE_HARNESSES: [&str; 6] = ["claude", "codex", "opencode", "pi
 /// expiry arm. Loop-run children exit on allow, and unknown or unsupported
 /// harnesses stay on the blocking path rather than idling without a routed wake.
 pub(crate) fn harness_can_idle(author_harness: Option<&str>, is_loop_run_child: bool) -> bool {
-    author_harness.is_some_and(|h| IDLE_HARNESSES.contains(&h)) && !is_loop_run_child
+    // The daemon cannot re-wake a session inside a sandbox, so a sandbox
+    // stop never parks or idles: it blocks.
+    author_harness.is_some_and(|h| IDLE_HARNESSES.contains(&h))
+        && !is_loop_run_child
+        && crate::sandbox::origin().is_none()
 }
 
 /// US6a: the codex watch registration address. `Some` only for a codex
@@ -176,6 +181,64 @@ watcher or re-emit the tag - stop instead. claude parks on its own harness-track
 codex parks only when the fno daemon can inject (loop_check_watch_idle routability gate).",
             author_harness.unwrap_or("unknown")
         )
+    }
+}
+
+/// The longest a failed-read park lasts, quota or gh blip: past it the
+/// daemon re-wakes the session and the gate reads again.
+pub(super) const PARK_MAX_MS: i64 = 2 * 60 * 60_000;
+
+/// The first park for a failed gh read. Each consecutive failed fire doubles
+/// it up to [`PARK_MAX_MS`], so an outage costs one wake per window.
+const GH_READ_PARK_MS: i64 = 180_000;
+
+/// The park for a failed gh read after `streak` failed fires in a row.
+pub(super) fn gh_read_park_ms(streak: u32) -> i64 {
+    GH_READ_PARK_MS
+        .saturating_mul(1_i64 << streak.min(16))
+        .min(PARK_MAX_MS)
+}
+
+/// Arm the daemon re-wake for a session the stop gate parks on a failed
+/// read: renew the node claim over the window and write the
+/// `loop_check_watch_idle` row the expiry arm wakes from. The caller writes
+/// its `loop_check` fire row FIRST: a later non-watching fire row marks the
+/// watch superseded (`is_current_watch`) and the daemon would never wake it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn arm_failed_read_park(
+    blocker: &str,
+    park_ms: i64,
+    expires_at_ms: i64,
+    manifest: &str,
+    session_id: &str,
+    cwd: &std::path::Path,
+    project_events: &std::path::Path,
+    global_events: &std::path::Path,
+) {
+    let lease_ms = park_ms + 2 * WATCH_SLACK_MS;
+    if let Some((key, holder)) = claim_pair(manifest) {
+        if let Err(e) = crate::claims::renew(&key, &holder, lease_ms, None) {
+            eprintln!("loop-check: {blocker} park could not renew {key} ({e})");
+        }
+    }
+    // `lease_ms` is a required field: the store refuses a row without it.
+    let idle_row = serde_json::json!({
+        "session_id": session_id,
+        "pr": null,
+        "blocker": blocker,
+        "reason": blocker,
+        "expires_at_ms": expires_at_ms,
+        "lease_ms": lease_ms,
+        "harness": super::scan_manifest_field(manifest, "harness"),
+        "cwd": cwd,
+    });
+    if let Err(e) = super::fire_history::emit_to_both_checked(
+        project_events,
+        global_events,
+        "loop_check_watch_idle",
+        idle_row,
+    ) {
+        eprintln!("loop-check: {blocker} park not recorded ({e}); no daemon wake is armed");
     }
 }
 

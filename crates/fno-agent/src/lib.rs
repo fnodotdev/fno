@@ -73,20 +73,26 @@ pub mod paths;
 pub mod paths_cli;
 pub mod protocol;
 pub mod remote;
+pub mod sandbox;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;
 pub mod trusted_config;
 pub mod version;
 
+pub mod connector_gate;
 pub mod eval;
 pub mod gate;
 pub mod runtime;
 
-// The copied pid module must resolve `crate::pid` in BOTH crates (the copy
-// contract forbids `crate::` paths in the body), so the runtime module is
-// re-exported at the lib root under the name the copy carries in fno.
+// A copied module must resolve its `crate::` paths in BOTH crates (pid,
+// proc_table and the identity modules name each other), so each is
+// re-exported at the lib root under the name its copy carries in fno.
+pub use eval::proc_table;
+pub use runtime::bus_read;
+pub use runtime::identity_markers;
 pub use runtime::pid;
+pub use spawn::self_identity;
 
 // The flat `crate::<module>` paths stay valid: each module moved into a
 // group directory is re-exported here under its old name.
@@ -95,16 +101,16 @@ pub(crate) use backlog::owner_ladder;
 pub use backlog::{
     active_backlog, additional_prs, announce, backlog_ready, backlog_share, check_supersession,
     day, decide_door, decision_index, decision_log, decision_trace, digest, epic_issue, feed,
-    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_filters,
-    law_firings, law_match, law_pr_shape, law_reach, law_recheck, law_renew, law_restore,
-    law_upkeep, law_when, lead_answers, lint_registry, list_render, list_row, live_store_fence,
-    needs, node_bind, node_branch, node_liveness, node_origin, node_reading, node_route, node_seed,
-    outstanding, outstanding_cmds, plan_carry, plan_doc, plan_schema, planning_lane, plans_dirs,
-    plans_path, question_bus, question_clear, question_intake, question_judge, question_ladder,
-    question_probe, question_sweep, repeated_asks, row_truth, row_verdict, rules, rules_check,
-    rules_source, rundown, select_read, store_conn, store_exec, store_export, store_heal,
-    store_remote, think_daily, think_dispatch, think_inspect, wave, wave_ready, worked_nodes,
-    you_threads,
+    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_archive, law_at,
+    law_filters, law_firings, law_match, law_pr_shape, law_reach, law_recheck, law_renew,
+    law_rescope, law_restore, law_upkeep, law_when, lead_answers, lint_registry, list_render,
+    list_row, live_store_fence, needs, node_bind, node_branch, node_liveness, node_origin,
+    node_reading, node_route, node_seed, outstanding, outstanding_cmds, plan_carry, plan_doc,
+    plan_schema, planning_lane, plans_dirs, plans_path, question_bus, question_clear,
+    question_intake, question_judge, question_ladder, question_probe, question_sweep,
+    repeated_asks, row_truth, row_verdict, rules, rules_check, rules_source, rundown, select_read,
+    store_conn, store_exec, store_export, store_heal, store_remote, think_daily, think_dispatch,
+    think_inspect, wave, wave_ready, worked_nodes, you_threads,
 };
 pub(crate) use eval::lead_eval_grade;
 use eval::refusal_surface_owner;
@@ -167,32 +173,33 @@ pub use runtime::{
     lease_heartbeat, ledger_axes, link_dial, liveness_cmd, liveness_sweep, lock_queue, logs,
     logs_args, logs_client, loop_lead, loop_runtime, loop_target, loops_pause, machine_load,
     machine_mail, machine_sample, machine_watch, mail_arm, mail_backfill, mail_bus, mail_carrier,
-    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
-    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
-    manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
-    opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns,
-    operator_witness, org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc,
-    page_relief, pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch,
-    pane_stop, peek, pending_session_row, pi_transcript, process_owner, process_probe, project,
-    provenance, question_stamp, quiet_retire, readiness, reap_release, reap_render, receipt,
-    reclaim, recovery_sweep, reentry, register, registry_commands, registry_commit, registry_guard,
-    registry_json, registry_read, registry_store, removals, rename, reserve, restart_run,
-    resume_args, resume_gate, resume_pin, resume_receipt, resume_wake, rev_front, revival_check,
-    revive_proof, rm_receipt, rm_tombstone, roles, roster_reap, run_import, run_outcome, run_state,
-    scrape, scratch, screen, session_activity, session_backfill, session_join, session_names_fold,
-    session_start_bytes, session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces,
-    stalls, state, state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout,
-    status_render, status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor,
-    sync_canonical, synthetic_tail, system_sender, task_context, team_alarm, team_identity,
-    team_names, team_read, team_reap, team_rescope, team_settle, team_spend, team_split,
-    team_widen, terminal_stop, territory, tool_activity, tracker, transcript_activity,
-    transcript_resolve, transcript_turns, truth_cli, truth_probe, update_journal,
-    visual_log_reader, visual_screen, wait, wake_name, wake_read, watch, watch_expiry, watchdog,
-    whoami, worker_wake, worktree, worktree_reapable, write_queue,
+    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_ids, mail_inject,
+    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_sent_core, mail_sent_env,
+    mail_teach, mail_threads, manifest, manifest_lookup, mcp, native_adopt, notice_route,
+    notify_dispatch, nudge, observer, opencode_serve, opencode_transcript, opencode_turn,
+    operator_notice, operator_turns, operator_witness, org_board, org_fold, org_remote, org_rivals,
+    orphan_reap, orphans, osc, page_relief, pane_claim, pane_identity, pane_keeper, pane_loop,
+    pane_rebind, pane_relaunch, pane_stop, peek, pending_session_row, pi_transcript, process_owner,
+    process_probe, project, provenance, question_stamp, quiet_retire, readiness, reap_release,
+    reap_render, receipt, reclaim, recovery_sweep, reentry, register, registry_commands,
+    registry_commit, registry_guard, registry_json, registry_read, registry_store, removals,
+    rename, reserve, restart_run, resume_args, resume_gate, resume_pin, resume_receipt,
+    resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone, roles,
+    roster_reap, run_import, run_outcome, run_state, scrape, scratch, screen, session_activity,
+    session_backfill, session_join, session_names_fold, session_start_bytes, session_truth,
+    silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state, state_layout,
+    state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render, status_sinks,
+    stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
+    synthetic_tail, system_sender, task_context, team_alarm, team_identity, team_names, team_read,
+    team_reap, team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop,
+    territory, tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns,
+    truth_cli, truth_probe, update_journal, visual_log_reader, visual_screen, wait, wake_name,
+    wake_read, watch, watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable,
+    write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
-    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_batch,
+    claude_restart_watch, fnod, fnod_tags, footprint_cache, keeper_revival, lead_checkin_batch,
     lead_checkin_beat_budget, lead_checkin_pick, ledger_register, ledger_workers,
     opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
     served_liveness, session_receipt, shot_save, thread_dialog, thread_permission,
@@ -226,8 +233,8 @@ pub use spawn::{
 };
 use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
 pub(crate) use spawn::{
-    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_gate_open_prs,
-    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
+    cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_floor,
+    spawn_gate_open_prs, spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
 };
 
 use serde::{Deserialize, Serialize};
@@ -308,6 +315,32 @@ impl AgentStatus {
             AgentStatus::Ready | AgentStatus::Idle | AgentStatus::Busy | AgentStatus::Live
         )
     }
+
+    /// The variant's serde name, the word every registry row and status
+    /// table spells. One mapping for the whole crate.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentStatus::Spawning => "spawning",
+            AgentStatus::Ready => "ready",
+            AgentStatus::Idle => "idle",
+            AgentStatus::Busy => "busy",
+            AgentStatus::Live => "live",
+            AgentStatus::Restarting => "restarting",
+            AgentStatus::Orphaned => "orphaned",
+            AgentStatus::Failed => "failed",
+            AgentStatus::Exited => "exited",
+            AgentStatus::PermanentDead => "permanent_dead",
+        }
+    }
+
+    /// The registry statuses that hold a live process (idle counts: an
+    /// idle-but-unreaped process still holds RAM), the one vocabulary every
+    /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
+    /// gate. The words are the variants' serde names (`Self::as_str`);
+    /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
+    /// test pins const, names and predicate together. The list itself lives
+    /// in `identity_markers`, which fno compiles a copy of.
+    pub const LIVE_STATUSES: &'static [&'static str] = identity_markers::LIVE_STATUSES;
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions
@@ -969,10 +1002,11 @@ mod tests {
             }
         }
 
-        // The allowed files: production binary repair (install_verify), seven
+        // The allowed files: production binary repair (install_verify), eight
         // production dir modes (paths, fleet_incident, chats, the
         // session-state pin dir, the mcp sidecar's socket-parent tightening,
-        // the daemon's sandbox socket dir, the saved-sessions dir),
+        // the sandbox guest's socket dir, the sandbox transcript dir, the
+        // saved-sessions dir),
         // two dir-mode
         // restores in tests (claims, operator_turns); the bin test target
         // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
@@ -990,7 +1024,8 @@ mod tests {
             ("gate/fleet_incident.rs", 1),
             ("runtime/chats.rs", 1),
             ("runtime/mcp/sidecar.rs", 1),
-            ("runtime/daemon/sandbox_host.rs", 1),
+            ("sandbox/guest.rs", 1),
+            ("sandbox/transcript.rs", 1),
             ("runtime/hook/save_session.rs", 1),
             ("runtime/state_layout_move.rs", 1),
             ("runtime/state_layout.rs", 1),
@@ -1120,6 +1155,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
+    // The in-process mux pane client met an unset FNO_MUX_DIR (mux_client.rs).
+    "mux_dir_unset",
     // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
     // the per-pass summary row and its pause-skip row.
     "shell_writers_sweep",
@@ -1724,6 +1761,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the store's identity columns, and the scoreboard lanes view plus the
     // lead check-in read it.
     "provider_rate_limited",
+    // The Stop front's context-nudge leg: the context and orphan blocks and
+    // the flush advice or refusal (runtime/hook/front/stop.rs).
+    "session_context_nudge",
+    "lead_context_nudge",
+    "lead_orphan_block",
+    "context_flush_nudge",
+    "context_flush_refused",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

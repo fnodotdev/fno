@@ -1,0 +1,143 @@
+name: sandbox-e2e
+
+# The sandboxed headless worker journey on a real engine. It builds the
+# binaries from the PR head (never a published rev), bakes them into the
+# embedded recipe, and runs tests/sandbox/e2e.sh: one headless spawn whose
+# stub harness probes every forbidden reach from inside, while the host checks
+# the sandbox ref, the row, the transcript bytes and teardown. Green means
+# `forbidden reached: 0` and `required failed: 0`.
+
+on:
+  merge_group:
+    types: [checks_requested]
+  pull_request:
+    paths:
+      - crates/fno-agent/**
+      - crates/fno/src/config/**
+      - crates/fno/config_schema.json
+      - tests/sandbox/**
+      - .github/workflows/sandbox-e2e.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sandbox-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  journey:
+    name: sandbox journey (${{ matrix.engine }}${{ matrix.ssh && ' over ssh' || '' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [docker, podman]
+        ssh: [false]
+        include:
+          # The user's own VM: the same journey against a docker daemon the
+          # engine CLI reaches over ssh, here the runner's own sshd.
+          - engine: docker
+            ssh: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools and cargo-zigbuild
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools jq
+          python3 -m pip install --quiet cargo-zigbuild
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno-agent/target
+            crates/fno/target
+          key: sandbox-e2e-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
+
+      - name: Build fno-agent and fno from the PR head
+        run: |
+          (cd crates/fno-agent && cargo zigbuild --target x86_64-unknown-linux-musl --bins)
+          (cd crates/fno && cargo zigbuild --target x86_64-unknown-linux-musl --bin fno)
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin/linux"
+          for b in fno-agent fno-agent-daemon fno-agent-worker; do
+            cp "crates/fno-agent/target/x86_64-unknown-linux-musl/debug/$b" "$bin/"
+          done
+          cp crates/fno/target/x86_64-unknown-linux-musl/debug/fno "$bin/"
+          cp "$bin/fno-agent" "$bin/fno" "$bin/linux/"
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Start sshd and trust its key
+        if: matrix.ssh
+        run: |
+          sudo apt-get install -y openssh-server
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          sudo systemctl start ssh
+          ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts 2>/dev/null
+          docker -H "ssh://$USER@localhost" version --format '{{.Server.Version}}'
+          {
+            echo "E2E_ENGINE_HOST=ssh://$USER@localhost"
+            echo "E2E_SSH_USER=$USER"
+            echo "E2E_DROP_LINK=1"
+          } >> "$GITHUB_ENV"
+
+      - name: Run the journey
+        run: |
+          export PATH="$BIN:$PATH"
+          bash tests/sandbox/e2e.sh "$BIN" "${{ matrix.engine }}" | tee "$RUNNER_TEMP/journey.log"
+          code=${PIPESTATUS[0]}
+          {
+            echo "### sandbox journey on ${{ matrix.engine }}${{ matrix.ssh && ' over ssh' || '' }}"
+            echo '```'
+            grep -E '^(forbidden|FORBIDDEN|required|REQUIRED)' "$RUNNER_TEMP/journey.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
+
+  config-copies:
+    name: generated config copies match
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno/target
+          key: sandbox-config-${{ hashFiles('crates/fno/Cargo.lock') }}
+      - name: Build fno from the PR head
+        run: cd crates/fno && cargo build --bin fno
+      - name: Regenerate and diff
+        run: |
+          export PATH="$PWD/crates/fno/target/debug:$PATH"
+          export FNO_HOME="$(mktemp -d)" FNO_AGENT_HOME="$(mktemp -d)"
+          fno config schema --markdown --write
+          fno config schema --toml --write
+          bash scripts/ci/regen-config-schema-goldens.sh
+          git add -A
+          git diff --cached --binary > "$RUNNER_TEMP/config-copies.patch"
+          git status --short
+          if [ -s "$RUNNER_TEMP/config-copies.patch" ]; then
+            echo "the generated config copies are stale; apply the config-copies artifact"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: config-copies
+          path: ${{ runner.temp }}/config-copies.patch

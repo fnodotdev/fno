@@ -210,6 +210,15 @@ fn read_plan_block(plan_path: &str) -> Option<String> {
         return Some(fm_block);
     }
 
+    // Body form: the `## Gate records` fence, read by the same block awk so
+    // the output stays byte-identical to the frontmatter form.
+    if let Some(fence) = crate::plan_doc::records::fence_text(&content) {
+        let block = extract_kill_criteria_block(&fence);
+        if !block.is_empty() {
+            return Some(block);
+        }
+    }
+
     // Quick-mode: fenced YAML under `## Kill Criteria` -> the kill_criteria:
     // block.
     let fenced = extract_fenced_under_heading(&content);
@@ -1162,4 +1171,35 @@ fn kill_check_with_args(args: &[String]) -> i32 {
 pub fn run_kill_check_capture(args: &[String]) -> (i32, String, String) {
     let out = run(args);
     (out.code, out.stdout, out.stderr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// AC3: the body form reads the same block bytes as the frontmatter form,
+    /// so every predicate fires the same; a plan with neither reads none.
+    #[test]
+    fn the_record_fence_reads_the_same_block_as_frontmatter() {
+        let dir = tempfile::tempdir().unwrap();
+        let block = "  - name: iteration_ceiling\n    predicate: iteration > 15\n    reason: r";
+        let write = |name: &str, text: String| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let fm = write(
+            "fm.md",
+            format!("---\nstatus: ready\nkill_criteria:\n{block}\n---\n\n# T\n"),
+        );
+        let body = write(
+            "body.md",
+            format!("---\nstatus: ready\n---\n\n# T\n\n## Gate records\n\n```yaml\nkill_criteria:\n{block}\ndone_probes:\n  - \"true\"\n```\n"),
+        );
+        let none = write("none.md", "---\nstatus: ready\n---\n\n# T\n".into());
+        let from_fm = read_plan_block(&fm).unwrap();
+        assert_eq!(read_plan_block(&body).as_deref(), Some(from_fm.as_str()));
+        assert_eq!(parse_entries(&from_fm).len(), 1);
+        assert_eq!(read_plan_block(&none), None);
+    }
 }

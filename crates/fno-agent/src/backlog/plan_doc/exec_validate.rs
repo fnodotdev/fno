@@ -599,9 +599,11 @@ fn validate_acceptance_evidence(
         ));
         return out;
     };
+    // done_probes may sit in the `## Gate records` fence; read the lifted map.
+    let lifted = doc.validation_map().ok();
     let mut probe_lists: HashMap<&str, Vec<String>> = HashMap::new();
     for key in ["done_probes", "close_probes"] {
-        let raw = fm.and_then(|m| m.get(key));
+        let raw = lifted.as_ref().and_then(|m| m.get(key));
         let items: Vec<String> = match raw {
             Some(Value::String(s)) => vec![s.clone()],
             Some(Value::Array(a)) => a

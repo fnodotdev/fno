@@ -41,6 +41,16 @@
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/review-hold.sh\" acquire"
           }
         ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/scripts/memory/read-count-hook.sh\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PermissionRequest": [
@@ -51,6 +61,16 @@
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree-relocation-allow.sh\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PermissionRequest",
+            "timeout": 5
           }
         ]
       }
@@ -72,57 +92,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude UserPromptSubmit"
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-join-prompt.sh\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/frontdoor-nudge-prompt-submit.sh\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh\"",
-            "timeout": 8
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
-            "timeout": 3
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-mail-notify.sh\"",
-            "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-announce.sh\" prompt",
-            "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/rules-dispatch.sh\" prompt",
-            "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt-outstanding.sh\"",
-            "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/node-bind-prompt-submit.sh\"",
-            "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/wake-resume-inject.sh\"",
-            "timeout": 5
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/hook-front.sh\" UserPromptSubmit",
+            "timeout": 10
           }
         ]
       }
@@ -132,24 +103,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude Stop"
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/target-stop-hook.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-nudge.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-capture-nudge.sh\"",
-            "timeout": 4
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/transcript-push.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/hook-front.sh\" Stop"
           }
         ]
       }
@@ -194,16 +148,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/spend-drift-monitor.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/claim-heartbeat.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/friction-offer-inject.sh\"",
-            "timeout": 3
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/hook-front.sh\" PostToolUse"
           }
         ]
       },
@@ -256,6 +201,16 @@
           {
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-push.sh\"",
+            "timeout": 4
+          }
+        ]
+      },
+      {
+        "matcher": "PushNotification",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/push-receipt.sh\"",
             "timeout": 4
           }
         ]
@@ -357,20 +312,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-using-fno.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/context-run.sh\" claude-session-start",
-            "timeout": 50
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/daemon-liveness-session-start.sh\""
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/bootstrap-session-start.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/hook-front.sh\" SessionStart"
           }
         ]
       }

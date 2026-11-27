@@ -37,6 +37,8 @@ prefix = "fno"
 [build]
 # Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile.
 agent_freeze = false
+# Shared compile cache: while true and sccache is installed, the rustc wrapper compiles through sccache, so a fresh worktree reuses the dependency compiles of other worktrees. The project file settles it over the global one. SCCACHE_DISABLE=1 wins over it.
+sccache = false
 
 [paths]
 # One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
@@ -101,10 +103,22 @@ tool_boundary_ordinary = false
 name = ""
 # The do-wizard interview records the person's favorite skills here. Record-only today: no runtime reader consumes the list yet.
 favorite_skills = []
+# IANA zone for working_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
+timezone = ""
+# When you are at work, as weekday lists (mon to sun) of HH:MM-HH:MM ranges under [user.working_hours]. Outside the ranges you are away, and a prompt that needs a person is denied at once instead of held. An empty list means away all day, and so does a missing weekday. With no table you are never away.
+# working_hours = <unset>   # optional; no default
+# Auto-approve routine worker file work: while true, a new spawn gets Claude Code permission rules that allow reads and edits in its own worktree and plan folder. Claude Code still applies deny and ask rules first, and secret and settings names keep their prompt. Off by default. A worker's entry to its own worktree never needs this setting. Only you turn it on, with `fno config set user.auto_approve_routine true` in an interactive terminal. A command with no terminal cannot set it. That check slows an agent down and does not stop one with a Bash tool, so the Bash permission is the real guard.
+auto_approve_routine = false
 
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
 on_unavailable = "refuse"
+# Runs each headless worker in its own container with no mount and no network, reached only through the host relay. docker covers OrbStack and Docker Desktop. devcontainer builds the image from the default branch's .devcontainer and runs it on docker. apple refuses until it passes the sandbox journey. A project layer can raise none to a sandbox but never lower or switch a global provider.
+provider = "none"
+# The image a sandboxed worker runs. Unset builds the embedded recipe with the host rev's Linux binaries from bin-cache. Read from global config only: a project value is ignored with a notice.
+# image = <unset>   # optional; no default
+# Runs the sandbox engine on a Linux VM you own, as ssh://[user@]host[:port]. The engine CLI reaches the VM's docker or podman over ssh; the relay and the claim stay on this host, and the VM gets no GitHub token and no route back. The host must be in known_hosts, and an ssh config that forwards the agent or a port refuses. Unset runs the engine locally. Read from global config only.
+# host = <unset>   # optional; no default
 
 [blueprint]
 # Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agent wave check warns on a plan that declares more.
@@ -115,7 +129,7 @@ max_prs_per_epic = 4
 default_diff_budget = 300
 
 [backlog]
-# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).
+# Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-). Unset defaults to x; legacy ab- ids stay resolvable.
 # id_prefix = <unset>   # optional; no default
 # Hex width of minted node IDs (4-8).
 id_hex_width = 8
@@ -265,6 +279,8 @@ self_review_required = true
 require_corroboration = false
 # When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.
 github_approval_satisfies = true
+# The person gate (never | ui | always). never = no person is owed. ui = a non-author person's GitHub approval of the PR head is owed; a person can give it from the terminal (`fno mux app approve <pr>`, or `--repo <owner/name>` outside the checkout) or on the PR's GitHub page. always = the same approval owed on GitHub. In both owed values fno do pr status reads not ready and the merge refuses until one lands (an APPROVED review by a login that is not the PR author, fresh at the head), and the review-round cap does not discharge it (the lever back off is this key). With no key set, no person is owed (today's stock-install behavior). GitHub refuses an author's approval of their own PR, so the approving identity must differ from the author identity. Validated at write: never, ui or always.
+# human = <unset>   # optional; no default
 # The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. At this many rounds the review phase is complete: the PR merges on green CI and open findings stay in the PR conversation - nothing is filed to the backlog and no finding class holds the PR past its own budget. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
 max_rounds = 2
 # How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation decision D1050 (d-608344c1)). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.
@@ -875,16 +891,12 @@ font_size = 13.0
 [provider_cap]
 # Arm the provider cap actor: a lane that hits its usage cap alerts its leads, and its members park until the reset (default on). Off still measures and saves the snapshot, and moves nothing.
 enabled = true
-# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; inside sleep_hours it moves without a question) | auto (every member moves without a question).
+# What a capped lane does with its members: park (default; alert the leads, move nothing, resume after the reset) | triage (a member on a p0 or p1 node, or with an open PR, moves to destinations; the rest park) | ask (nothing moves until an operator answers; while you are away it moves without a question) | auto (every member moves without a question).
 mode = "park"
 # Route lanes a moving member tries in order when no fallback grid is set. Empty by default: moving work spends another paid lane, so only an operator names one.
 destinations = []
 # A reset closer than this many minutes is waited out and never moved (default 30).
 min_wait_minutes = 30
-# Window as HH:MM-HH:MM, read in sleep_timezone. In ask mode a cap inside the window moves members without a question. Empty (default) means never asleep.
-sleep_hours = ""
-# IANA zone for sleep_hours, for example America/Los_Angeles. Empty (default) reads the machine's local zone.
-sleep_timezone = ""
 # Minutes a canary session must live after the reset before the return ladder resumes the parked members (default 15).
 canary_survive_minutes = 15
 # Members on one lane with a fresh capped tail needed to open it (default 2). One member suffices when its 429 names a reset still ahead, or when the account's runtime-state quota lock is set.

@@ -91,6 +91,8 @@ pub(super) fn register(reg: &mut Registry) {
     reg.before("ThinkSpawnBlock", &["substrate"], coerce_legacy_substrate);
 
     reg.before("JoinBlock", &["sandbox"], coerce_sandbox);
+    reg.before("SandboxBlock", &["provider"], check_sandbox_provider);
+    reg.before("SandboxBlock", &["host"], check_sandbox_host);
 
     reg.before("AutoMergeBlock", &["enabled"], coerce_affirmative);
     reg.before("AutoMergeBlock", &["grant"], coerce_grant);
@@ -661,6 +663,58 @@ fn coerce_sandbox(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
     } else {
         Value::Bool(false)
     })
+}
+
+/// The engines a sandboxed worker runs on. An unknown value refuses and
+/// names the legal ones: a silent `none` would run workers on the host while
+/// the operator believes they are boxed.
+const SANDBOX_PROVIDERS: [&str; 5] = ["none", "docker", "podman", "apple", "devcontainer"];
+
+fn check_sandbox_provider(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    match &v {
+        Value::String(s) if SANDBOX_PROVIDERS.contains(&s.trim()) => Ok(Value::from(s.trim())),
+        other => Err(Fail::Value(format!(
+            "sandbox.provider must be one of {}; got {}",
+            SANDBOX_PROVIDERS.join(", "),
+            py_repr(other)
+        ))),
+    }
+}
+
+/// `sandbox.host`: null, or `ssh://[user@]host[:port]` in plain characters
+/// with no leading dash, so no value can turn into an ssh option. The spawn
+/// re-parses it (`SshHost::parse` in fno-agent) and then checks known_hosts
+/// and forwarding before first use; this check refuses a bad `config set`.
+fn check_sandbox_host(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    let plain = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    };
+    let ok = |s: &str| -> bool {
+        let Some(rest) = s.strip_prefix("ssh://") else {
+            return false;
+        };
+        let (user, hostport) = rest
+            .split_once('@')
+            .map_or((None, rest), |(u, h)| (Some(u), h));
+        let (host, port) = hostport
+            .rsplit_once(':')
+            .map_or((hostport, None), |(h, p)| (h, Some(p)));
+        plain(host)
+            && user.is_none_or(plain)
+            && port.is_none_or(|p| p.parse::<u16>().is_ok_and(|p| p > 0))
+    };
+    match &v {
+        Value::Null => Ok(Value::Null),
+        Value::String(s) if s.trim().is_empty() => Ok(Value::Null),
+        Value::String(s) if ok(s.trim()) => Ok(Value::from(s.trim())),
+        other => Err(Fail::Value(format!(
+            "sandbox.host must be ssh://[user@]host[:port] with plain characters; got {}",
+            py_repr(other)
+        ))),
+    }
 }
 
 /// A trimmed str inside `allowed`, else `fallback`.

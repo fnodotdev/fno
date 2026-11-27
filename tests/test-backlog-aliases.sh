@@ -131,8 +131,10 @@ EOF
 
 # The receipt reads `intake <id> -> backlog: "<title>"`. It said "adopted <id>"
 # before the adopt->intake rename, and this assertion outlived the command.
+# The minted prefix is config-owned (the fresh-install default is x), so the
+# match is grammar-shaped, never prefix-literal.
 intake_out=$(run_fno backlog intake "$plan_a" 2>&1)
-if [[ "$intake_out" == *"intake ab-"* ]]; then
+if [[ "$intake_out" == *"intake "*[a-z]"-"* ]]; then
     pass "intake creates a node"
 else
     fail "intake did not report a minted node: $intake_out"
@@ -165,7 +167,7 @@ fi
 # --- Scenario 5: backlog done marks node complete ---------------------------
 # The id comes from the intake receipt. The store owns the rows, and an
 # installed `fno` is no Python interpreter to read them with.
-node_id=$(printf '%s\n' "$intake_out" | sed -n 's/.*intake \(ab-[0-9a-z]*\).*/\1/p' | head -1)
+node_id=$(printf '%s\n' "$intake_out" | sed -n 's/.*intake \([a-z][a-z0-9]*-[0-9a-f]*\).*/\1/p' | head -1)
 
 if [[ -z "$node_id" ]]; then
     fail "no node ID available for done test"

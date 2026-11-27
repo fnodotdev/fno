@@ -66,13 +66,13 @@ Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check
 - `require-ack` blocks until the event's `acks` name the rule.
 - The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
 
-`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agent/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agent/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. A decision recorded with `--at-command <glob>` also gets a tier-0 rule `law-<id>-at` with `events = ["pre-tool"]`, `tools = ["Bash"]` and `commands` set to the globs. A decision recorded with `--at-door <send|spawn|merge>[:<subject-glob>]` also gets a tier-0 rule `law-<id>-door` on that `door:` event, with `subjects` set to the globs. Both action rules take the decision's strength and sit beside its prompt rule, so the law still reaches the prompt. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`. The span goes to the event store of the caller's project, resolved from the cwd `rule()` gets, never from `FNO_REPO_ROOT`. The hook pins that variable to the plugin root, and spans written there reached no reader.
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 
 The four doors ask the same way through `rules_source::rule`. The merge door reads one `door:merge` event per PR. The subject is `<owner/repo>#<n>`. The node comes from the body. A block holds the merge with blocker `rule`. The preview carries the same answer, so `fno do pr status` never says ready where merge refuses.
 
-The send door reads `door:send` with the recipient as subject. A block exits 3.
+The send door reads `door:send` with the recipient as subject. A recipient that is not a uuid or an 8-hex fno id is a name. For a name the subjects also carry `by-name:<recipient>`, so a rule can match a send by name. A block exits 3.
 
 The spawn gate reads `door:spawn` (harness, model, node, phase). A block refuses with exit 93 before any capacity math runs. `--force` does not clear a rule.
 
@@ -82,9 +82,11 @@ At every door a warn or an unread source prints and the door proceeds. Rules nev
 
 Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the decision door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
 
-`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
+`{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It reads them from the cwd project's event store, the same store the fires write. When the store cannot be read, `unread` names its path and the answer stays `ok: true`. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
 
 `{"mode":"rules-explain","event":{"kind":"pre-tool","tool":"Edit","paths":["cli/src/a.py"]}}` reads every live rule against that event. The event takes the `Event` fields. An event with no `project` takes the cwd's project. Each row carries a `status` and its `clauses`. The status is `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`, `retrieval` (tier 1, ranked only at a prompt or skill event) or `unevaluated` (tier 2). Each clause names one filter the rule sets, whether it held, and the event value it saw. The clauses are the ones `matches` uses, so a tier-0 `applies` row is exactly a rule `decide` fires. `rules-report` is the firing log: fires, blocks and warns per rule, and `never_fired` for the rest.
+
+The lead check-in reads the same spans. Its `law_fires` reading counts the spans that carry a `law` at a `pre-tool` or `door:*` event over the last 24h. It prints one line with at most five laws, such as `law fires at actions: D1051 x2 (sessions a1b2c3d4)`. A quiet window prints no line.
 
 ## Events
 
@@ -149,6 +151,51 @@ instructions = "Does this message ask the user for a decision?"
 
 A choice question also takes `[fnod.questions.<id>.criteria]`, one line per label. An edit to `instructions` or `criteria` changes the wording, so the question reads untrained and escalates to the model. The is_ask span carries `fnod_question`, `fnod_trained`, `fnod_escalate` and `fnod_confidence`.
 
+### The shadow judge
+
+The shadow judge asks fnod about a Stop reply after the fact. `rule_obeyed` asks whether the reply obeyed the behavioural laws its prompt picked. `is_ask` asks whether the reply is an ask. The judge is a pilot. It blocks nothing, it changes no Stop answer, and a failure costs one verdict.
+
+A law takes one tag in a tag file: one line per decision id, set to `behavioural` or `state`. `fnod.judge.tags_file` in fno config holds the file's absolute path. `behavioural` means the reply text alone can show obedience, as a read call before a claim does. `state` means obedience needs a world read, as a merge does. A law with no tag is never judged, and the lens counts it as untagged. The table is a file of its own, so some hundred laws add no parse to the other config reads.
+
+```toml
+# fno config
+[fnod.judge]
+tags_file = "/absolute/path/to/judge-tags.toml"
+```
+
+```toml
+# the tag file
+"d-1a2b3c4d" = "behavioural"
+"d-deadbeef" = "state"
+```
+
+Every Stop that carries a session id writes one request row to `.fno/event-rules/judge.jsonl` in the repository's main checkout. The row names the machine, the Stop key (`stop:<session>:<turn>`) and the laws the turn's prompt picked. `rules` holds at most 3 behavioural laws. `judge_dropped` counts the other behavioural laws, and `judge_state` counts the state laws. The `fnod` field reads `off`, `refused`, `down` or `up`. If the install never set `fnod.url`, the row also reads `off`. The shadow judge takes no default url, so its request row opens no connection there. The inline score at a keyword block still tries the default url. Only an `up` row keeps the reply tail, its last 4,000 characters, in `excerpt`. If fnod is absent, the row is a skip row. No later run can score it, so the report counts it as coverage lost. The file rotates after 64 MB and keeps one older copy.
+
+Stop makes no fnod call. The kev README reports 721 ms for a pass of the 4B model on an M5 with five questions on new text. If the text comes from the cache, the same pass takes 136 ms. The visitor Stop fixture is held at p90 300 ms (`tests/hook_latency.rs`). Scoring thus runs off the Stop path. `fno-agent intel --lens rules --score` first asks fnod about the request rows that carry no verdict. One pass per request asks `is_ask` and one `rule_obeyed` question per law, and the state carries each law's text. A pass is bounded at 10 seconds. One run scores at most 2,000 requests, and three failed passes in a row end the run. A pass that fnod fails whole writes no row, so the request waits for the next run. Each answer lands as one verdict row. It names its request in `judge_of` and carries `verdict`, `confidence`, `escalate`, `trained` and `fnod_ms`. An answer the reply skips carries `fnod_error` and reads `error`.
+
+The lens prints the judge section after the rule table:
+
+| Line | What it reads |
+|---|---|
+| `judge rows (days N)` | Requests, scored, skipped and pending in the window. |
+| `<machine> <day>` | The same four counts for one machine and one UTC day. Coverage reads here. |
+| `skipped while fnod was` | The skipped requests, counted by the fnod state their row read. |
+| `judge:<label>` | Verdict counts for one question. A law prints as its D number. `labeled` and `wrong` follow when a labels file marks its verdict rows. |
+| `fnod_ms p50 .. p90 ..` | The cost of one pass. |
+| `ask pair by stop key` | Stops where both the keyword lint blocked and fnod read an ask, where only the lint blocked (`keyword-only`), and where only fnod read an ask (`judge-only`). |
+| `untagged laws` | Live laws with no tag. |
+
+A labels file marks a verdict row as it marks a fire, by `span_id`. A `false` verdict means the judge was wrong. The `sample judge` block lists the verdicts no file marks, with the reply tail the judge read. A labeling pass thus has its next rows.
+
+Two numbers sit near each other. The table's `fnod_no` is the inline score at the block. It reads the last 16,000 characters of the message. If fnod did not listen at that moment, the score is missing. The ask pair is the batch pass on the last 4,000 characters. A filed ask counts as `judge-only`, because the lint allows it.
+
+For the readout, run `--score` at least once a day of the pilot. Then read the section with `--days 7`:
+
+1. Read the coverage lines. fnod `off`, `refused` or `down` for more than one day means the week is short. Say so, and recommend nothing.
+2. Read the ask pair for the keyword lint. `keyword-only` counts false-block candidates. `judge-only` counts asks the lint let through, filed asks among them.
+3. Label a sample of verdict rows, then read `labeled` and `wrong` for each judge. The rule question stays untrained until a student trains on its rows, so its verdicts read near chance before that.
+4. Pick one word: `replace` the lint with the judge, `keep both`, or `drop` the judge. Name the `fnod_ms` p50 as the cost per Stop. An inline judge adds one pass to each Stop.
+
 ## The tier-1 scorer: BM25 stays
 
 The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 decisions. 36 prompts name a decision that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live decisions. Both scorers answer top-3.
@@ -196,7 +243,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 20 | Never parent new work into a running epic (lead:121) | guard: `epic_max_open_children` + role-linked rollup |
 | 21 | Rank is the user's (lead:123) | guard: `fno backlog rank` refuses agent sessions |
 | 22 | Verdict stalled, degraded or unknown: escalate (lead:131) | row (later): event lead_checkin verdict, action nudge |
-| 23 | A role clears only its own question (lead:137) | guard: clear refuses a role on another's question |
+| 23 | A role clears its own question, or a lead holding the node's scope clears a non-deny-class one (lead:137, D3744) | guard: clear refuses a role outside the scope and any deny class |
 | 24 | Escalate the four classes only; decide the rest (lead:138) | row: why_user_escape |
 | 25 | Silence past the deadline takes the default (lead:139) | stays prose (check-in reader) |
 | 26 | User answers in chat: record it (lead:140) | row (later): port of hooks/operator-capture-nudge.sh |

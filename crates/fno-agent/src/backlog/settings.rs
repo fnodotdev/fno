@@ -2,12 +2,13 @@
 //! candidate order the Python config readers use: the repo-local config
 //! first, then the global file (honoring `FNO_GLOBAL_SETTINGS_PATH`).
 //!
-//! `backlog.id_prefix` feeds the bare-hex resolution tier; the
-//! `work.workspaces` project map feeds the `_resolved_cwd` display
-//! annotation `backlog get` stamps on every served row (and that
-//! `validate-plan.sh` reads back through `--field _resolved_cwd`). Both are
-//! best-effort: a missing or unparseable file contributes nothing, and the
-//! legacy defaults hold.
+//! `backlog.id_prefix` resolves through one resolver: the mint refuses a
+//! config it cannot read, resolution readers fall to the documented
+//! default `x`. The `work.workspaces` project map feeds the `_resolved_cwd`
+//! display annotation `backlog get` stamps on every served row (and that
+//! `validate-plan.sh` reads back through `--field _resolved_cwd`). The work
+//! map stays best-effort: a missing or unparseable file contributes
+//! nothing, and the legacy defaults hold.
 
 use serde_json::Value;
 use std::path::PathBuf;
@@ -72,20 +73,37 @@ pub(crate) fn candidates_at(cwd: Option<&std::path::Path>) -> Vec<PathBuf> {
     out
 }
 
-/// Parse one config file into a JSON object: TOML by suffix, YAML otherwise.
-/// `{}` on a missing or unparseable file.
-fn read_flat(path: &std::path::Path) -> Value {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Value::Object(Default::default());
-    };
-    let parsed: Value = if path.extension().is_some_and(|e| e == "toml") {
+/// Why an id-prefix resolution refused: the config file named in the
+/// message exists but will not read or parse, or the configured value is
+/// not a prefix word.
+#[derive(Debug, thiserror::Error, PartialEq)]
+#[error("{0}")]
+pub struct PrefixError(pub String);
+
+/// Parse one config file into a JSON value: TOML by suffix, YAML otherwise.
+/// `Err` names the path when the file exists but will not read or parse;
+/// the loud prefix resolver needs that split and the best-effort readers
+/// cannot carry it.
+fn read_flat_result(path: &std::path::Path) -> Result<Value, PrefixError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| PrefixError(format!("{}: {e}", path.display())))?;
+    if path.extension().is_some_and(|e| e == "toml") {
         text.parse::<toml::Value>()
+            .map_err(|e| PrefixError(format!("{}: {e}", path.display())))
             .map(|v| serde_json::to_value(v).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null)
     } else {
-        serde_yaml_ng::from_str::<serde_json::Value>(&text).unwrap_or(Value::Null)
-    };
-    parsed
+        serde_yaml_ng::from_str::<serde_json::Value>(&text)
+            .map_err(|e| PrefixError(format!("{}: {e}", path.display())))
+    }
+}
+
+/// Parse one config file into a JSON object for the best-effort readers:
+/// `{}` on a missing file, `Null` on one that will not read or parse.
+fn read_flat(path: &std::path::Path) -> Value {
+    if !path.exists() {
+        return Value::Object(Default::default());
+    }
+    read_flat_result(path).unwrap_or(Value::Null)
 }
 
 /// The parsed config candidates, first-priority order. The birth hook reads
@@ -95,21 +113,61 @@ pub(crate) fn config_candidates() -> Vec<Value> {
     candidates().iter().map(|p| read_flat(p)).collect()
 }
 
-/// The configured node-id prefix, or the legacy `ab-`. The first candidate
-/// carrying a non-empty `backlog.id_prefix` wins.
-pub fn node_id_prefix() -> String {
-    for path in candidates() {
-        let doc = read_flat(&path);
-        let prefix = doc
-            .get("backlog")
-            .and_then(|b| b.get("id_prefix"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if !prefix.is_empty() {
-            return prefix.to_string();
+/// The documented fresh-install prefix (D1888: the default carries the
+/// user). The CI graphless closure gate knows only the `x` and `ab`
+/// families (skills/target/scripts/lib/node-id.sh:50), so `x` is the one
+/// default every consumer already accepts.
+pub const DEFAULT_NODE_ID_PREFIX: &str = "x";
+
+/// One id-prefix resolution with the fail-closed split, over explicit
+/// candidates: a present file that will not read or parse is an `Err`
+/// naming the path, so the mint refuses instead of guessing; a walk with
+/// no answer at all is the documented default. The configured value is
+/// trimmed of its trailing dash and shape-checked here, once, so the `x`
+/// and `x-` spellings behave identically at every reader.
+pub(crate) fn resolved_node_id_prefix_over(paths: &[PathBuf]) -> Result<String, PrefixError> {
+    for path in paths {
+        if !path.exists() {
+            continue;
         }
+        let doc = read_flat_result(path)?;
+        let prefix = match doc.get("backlog").and_then(|b| b.get("id_prefix")) {
+            Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+            // Absent, explicit null, or an explicit empty string: the key
+            // does not configure a prefix here.
+            None | Some(Value::Null) | Some(Value::String(_)) => continue,
+            // A present value of any other type is a misconfiguration: the
+            // user wrote a prefix and none applies. Refuse, never default.
+            Some(_) => {
+                return Err(PrefixError(format!(
+                    "backlog.id_prefix in {} is not a string",
+                    path.display()
+                )))
+            }
+        };
+        let trimmed = prefix.trim_end_matches('-');
+        if !crate::backlog::node_ref::valid_prefix_word(trimmed) {
+            return Err(PrefixError(format!(
+                "backlog.id_prefix = {prefix:?} in {} is not a prefix word (a lowercase \
+                 letter first, lowercase letters and digits, up to 7 chars)",
+                path.display()
+            )));
+        }
+        return Ok(trimmed.to_string());
     }
-    "ab-".to_string()
+    Ok(DEFAULT_NODE_ID_PREFIX.to_string())
+}
+
+/// The one id-prefix resolution: the loud `Err` the mint must refuse on.
+pub fn resolved_node_id_prefix() -> Result<String, PrefixError> {
+    resolved_node_id_prefix_over(&candidates())
+}
+
+/// The tolerant read the resolution tiers share: the documented default on
+/// an unreadable config, never the legacy `ab-`; the mint does not come
+/// through here.
+pub fn node_id_prefix() -> String {
+    resolved_node_id_prefix().unwrap_or_else(|_| DEFAULT_NODE_ID_PREFIX.to_string())
 }
 
 /// The board's id display: `hex` (default) or `number`. `number` shows a
@@ -855,5 +913,57 @@ mod tests {
             Some(v) => std::env::set_var("FNO_CONFIG", v),
             None => std::env::remove_var("FNO_CONFIG"),
         }
+    }
+
+    #[test]
+    fn missing_config_yields_the_documented_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.toml");
+        assert_eq!(resolved_node_id_prefix_over(&[missing]).as_deref(), Ok("x"));
+        assert_eq!(resolved_node_id_prefix_over(&[]).as_deref(), Ok("x"));
+    }
+
+    #[test]
+    fn unreadable_config_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("broken.toml");
+        std::fs::write(&cfg, "backlog.id_prefix = [ not toml").unwrap();
+        let err = resolved_node_id_prefix_over(&[cfg]).unwrap_err();
+        assert!(err.0.contains("broken.toml"), "{err}");
+    }
+
+    #[test]
+    fn a_non_string_prefix_value_refuses_instead_of_defaulting() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("wrong-type.toml");
+        std::fs::write(&cfg, "backlog.id_prefix = 123\n").unwrap();
+        assert!(resolved_node_id_prefix_over(&[cfg]).is_err());
+    }
+
+    #[test]
+    fn normalized_prefix_strips_the_trailing_dash() {
+        let dir = tempfile::tempdir().unwrap();
+        let dashed = dir.path().join("dashed.toml");
+        std::fs::write(&dashed, "backlog.id_prefix = \"x-\"\n").unwrap();
+        assert_eq!(resolved_node_id_prefix_over(&[dashed]).as_deref(), Ok("x"));
+        let plain = dir.path().join("plain.toml");
+        std::fs::write(&plain, "backlog.id_prefix = \"x\"\n").unwrap();
+        assert_eq!(resolved_node_id_prefix_over(&[plain]).as_deref(), Ok("x"));
+        let upper = dir.path().join("upper.toml");
+        std::fs::write(&upper, "backlog.id_prefix = \"X-\"\n").unwrap();
+        assert!(resolved_node_id_prefix_over(&[upper]).is_err());
+    }
+
+    #[test]
+    fn the_walk_takes_the_first_candidate_carrying_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.yaml");
+        std::fs::write(&first, "backlog:\n  id_prefix: t-\n").unwrap();
+        let second = dir.path().join("second.toml");
+        std::fs::write(&second, "backlog.id_prefix = \"q\"\n").unwrap();
+        assert_eq!(
+            resolved_node_id_prefix_over(&[first, second]).as_deref(),
+            Ok("t")
+        );
     }
 }

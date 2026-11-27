@@ -101,7 +101,7 @@ Do not prefix a getter with `get_`. Use `as_` for a cheap borrow, `to_` for a co
 
 ### R17. cargo fmt and cargo clippy are the tools of record
 
-CI runs `cargo fmt --check` and `cargo clippy -- -D warnings` on every PR, so CI is the lint of record. A worker runs `cargo fmt --check` only: local cargo build, check and clippy refuse in an agent session (the compile door, exit 86). A build the turn genuinely needs declares itself with `FNO_BUILD_WHY="<why>"`. When a deny-warnings pass names dead code, delete the field or value instead of allowing the lint. An allow is for wire or ABI shape the compiler cannot see.
+CI runs `cargo fmt --check` and `cargo clippy -- -D warnings` on every PR, so CI is the lint of record. A worker runs `cargo fmt --check` only: local cargo build, check and clippy refuse in an agent session (the compile door, exit 86). Only a build declares itself with `FNO_BUILD_WHY="<why>"`. Check and clippy admit under no why, so CI is their gate. When a deny-warnings pass names dead code, delete the field or value instead of allowing the lint. An allow is for wire or ABI shape the compiler cannot see.
 
 ## Dropped from the sources
 

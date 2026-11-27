@@ -44,6 +44,10 @@ pub(crate) struct ReviewInputs {
     pub(crate) self_review_floor_on: bool,
     /// `config.review.github_approval_satisfies`, resolved (absent = true).
     pub(crate) approval_satisfies: bool,
+    /// `config.review.human`, resolved: true only on `always`, the one value
+    /// that owes a person's GitHub approval. `never` and `ui` (and an absent
+    /// key) read false, which is today's behavior everywhere the flag gates.
+    pub(crate) human_required: bool,
 }
 
 /// Resolve [`ReviewInputs`]: event paths, repo slug, the GLOBAL-then-local
@@ -172,6 +176,12 @@ pub(crate) fn resolve_review_inputs(
                 // read the global-only view.
                 merged.posture = local.posture;
             }
+            if local.human.is_some() {
+                // Same presence rule: the person gate is a project policy
+                // leaf, so a local review.human must override the global
+                // file's value.
+                merged.human = local.human;
+            }
             if !local.nudge_overrides.is_empty() {
                 // Without this line a project-local `[review.nudge]` (including
                 // `enabled = false`) is read from the GLOBAL file only and the
@@ -257,6 +267,12 @@ pub(crate) fn resolve_review_inputs(
         .any(|r| normalize_reviewer(r) == "code-review");
     let self_review_floor_on = settings.self_review_required.unwrap_or(true);
     let approval_satisfies = settings.github_approval_satisfies.unwrap_or(true);
+    // The person gate reads off the same settings leaf. `lane_configured`
+    // stays keyed to the login/local lanes (the self-review floor's
+    // stock-install predicate reads it), so the human flag rides beside it
+    // and only the lane predicate folds it in. Explicit ui gates like
+    // always; an absent key stays not-owed (ReviewHuman::owed).
+    let human_required = ReviewHuman::owed(settings.human);
 
     ReviewInputs {
         project_events,
@@ -279,6 +295,7 @@ pub(crate) fn resolve_review_inputs(
         code_review_configured,
         self_review_floor_on,
         approval_satisfies,
+        human_required,
     }
 }
 
@@ -301,5 +318,54 @@ mod tests {
 
         let inputs = resolve_review_inputs(temp.path(), None, None, None, Some(&global), None);
         assert_eq!(inputs.settings.team_cost_cap_usd, Some(Ok(10.0)));
+        // The person gate rides this declaration (G3 is shrink-only): on a
+        // stock install with review.human = always, human_required resolves
+        // and the lane lights so the stock-install skip cannot bypass the
+        // gate, while lane_configured stays keyed to the login/local lanes
+        // (the self-review floor's stock-install predicate reads it).
+        std::fs::write(
+            temp.path().join(".fno/config.toml"),
+            "[review]\nhuman = \"always\"\n",
+        )
+        .unwrap();
+        let inputs = resolve_review_inputs(temp.path(), None, None, None, None, None);
+        assert!(inputs.human_required, "always resolves human_required");
+        assert!(!inputs.lane_configured);
+        assert!(
+            crate::pr_status::reviews::review_lane(temp.path(), 0, None),
+            "review.human = always is a lane: the stock-install skip cannot bypass the gate"
+        );
+        // Explicit `ui` gates exactly like `always`: the person approval is
+        // owed and the lane lights, while the absent key below keeps the
+        // stock install on the no-person-gate side.
+        std::fs::write(
+            temp.path().join(".fno/config.toml"),
+            "[review]\nhuman = \"ui\"\n",
+        )
+        .unwrap();
+        let inputs = resolve_review_inputs(temp.path(), None, None, None, None, None);
+        assert!(inputs.human_required, "ui resolves human_required");
+        assert!(
+            crate::pr_status::reviews::review_lane(temp.path(), 0, None),
+            "review.human = ui is a lane: the stock-install skip cannot bypass the gate"
+        );
+        // And `never` keeps today's lane answer: the same stock install
+        // without the key answers identically (the floor arm, not the gate).
+        std::fs::write(
+            temp.path().join(".fno/config.toml"),
+            "[review]\nhuman = \"never\"\n",
+        )
+        .unwrap();
+        let inputs = resolve_review_inputs(temp.path(), None, None, None, None, None);
+        assert!(!inputs.human_required);
+        let never_lane = crate::pr_status::reviews::review_lane(temp.path(), 0, None);
+        std::fs::write(temp.path().join(".fno/config.toml"), "").unwrap();
+        let inputs = resolve_review_inputs(temp.path(), None, None, None, None, None);
+        assert!(!inputs.human_required);
+        assert_eq!(
+            never_lane,
+            crate::pr_status::reviews::review_lane(temp.path(), 0, None),
+            "never keeps today's lane answer on the same stock install"
+        );
     }
 }

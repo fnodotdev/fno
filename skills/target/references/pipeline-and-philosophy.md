@@ -14,7 +14,7 @@ Read this for a from-idea or multi-phase run when you want the whole phase map a
 │  /execute waves {expertise} → Execute with TDD (archer agents)    │
 │  /simplify       → Remove AI slop patterns (clean modifier)  │
 │  validate        → Run tests / typecheck / build            │
-│  /ship-docs      → Architecture docs + how-to guides        │
+│  /fno:ship-docs  → Architecture docs + how-to guides        │
 │  browser testing → If has_ui, run Chrome DevTools checks    │
 │  /fno:ship pr create      → Create PR (fork to Haiku)                │
 │  review          → Native final-head review request         │
@@ -41,7 +41,7 @@ Docs and browser testing run BEFORE `/fno:ship pr create` so they ride in the sa
 | Clean | `/simplify` | Remove AI slop patterns | Only with `clean` modifier | Opus (inline) |
 | Review | in-context fno lane | `/fno:review <size> --comment` on the local HEAD BEFORE the PR, in the invoking session; findings hold and post at PR open; sigma is retired | Always for code payloads | Opus (inline) |
 | Validate | _(bash)_ | npm run build / pytest | Always | Opus (inline) |
-| Docs | `/ship-docs` | Architecture + how-to in parallel | Default YES, skip with `--no-docs` or config - runs BEFORE ship so docs ride in the same PR | **Sonnet** (agents) |
+| Docs | `/fno:ship-docs` | Architecture + how-to in parallel | Default YES, skip with `--no-docs` or config - runs BEFORE ship so docs ride in the same PR | **Sonnet** (agents) |
 | Browser | `/tdd` (browser-testing ref) | Human-like UI checks (advisory: runs and logs, never gates `<promise>`) | If `has_ui` - runs BEFORE ship | Sonnet (agent) |
 | Ship | /fno:ship pr create | PR creation (fresh agent) | Always | **Haiku** (agent) |
 | External | `/fno:ship pr check` | Wait for external review + implement | Default YES, skip with `--no-external` or config | Sonnet (review response), Opus (code fixes) |
@@ -55,7 +55,7 @@ See [usage-detail.md](usage-detail.md) for model-optimization rationale (when to
 - **/execute waves**: for a multi-task plan with parallelizable waves. A single-file or locked refactor runs **inline**, not through the wave orchestrator.
 - **/simplify (clean)**: only with the `clean` modifier, or on AI-slop-prone new code.
 - **review**: before the PR exists, run `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, in the invoking session. Size: medium under 300 changed lines, high above, xhigh for risky surfaces. Require a positive result. The promise waits for the stop gate to read review coverage covered. Coverage means a clean round that tiles the head, or the budget spent. Findings hold on branch and HEAD. Once the PR opens, they post as one PR comment. Docs-only payloads and the explicit opt-out keep their exemptions.
-- **/ship-docs**: skip for an internal refactor with no public API or architecture change; run it when behavior or a public surface changed.
+- **/fno:ship-docs**: run it on a behavior or public-surface change. Skip it for an internal refactor with no public API or architecture change.
 - **browser testing**: only if `has_ui`.
 - **/fno:ship pr create + `<promise>`**: always. That is the deliverable.
 

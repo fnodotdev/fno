@@ -47,6 +47,24 @@ fn the_unknown_key_walk_reads_map_keys_as_data_and_names_near_misses() {
     let honored = json!({"recovery": {"retire_grace_s": 60}});
     assert!(schema_walk::unknown_key_problems(schema, &leaves, &layer(honored)).is_empty());
 }
+
+/// `build.sccache` is read by the rustc wrapper straight from the TOML. The
+/// schema models it, so the walk names no unknown key for it.
+#[test]
+fn the_unknown_key_walk_knows_the_sccache_key() {
+    let table = crate::config_schema::schema_table();
+    let schema = &table["json_schema"];
+    let leaves: Vec<String> = table["leaves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["path"].as_str().unwrap().to_string())
+        .collect();
+    let layer = |body: Value| vec![("/cfg/config.toml".to_string(), body)];
+    let opted = json!({"build": {"sccache": true}});
+    assert!(schema_walk::unknown_key_problems(schema, &leaves, &layer(opted)).is_empty());
+}
+
 #[test]
 fn the_post_merge_verdict_reads_the_repo_file_only() {
     let root = tempfile::TempDir::new().unwrap();

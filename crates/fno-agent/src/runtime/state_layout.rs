@@ -49,6 +49,7 @@ pub enum Kind {
     Lock,
     Park,
     Dir,
+    Keep,
 }
 
 impl Kind {
@@ -63,6 +64,7 @@ impl Kind {
             "lock" => Self::Lock,
             "park" => Self::Park,
             "dir" => Self::Dir,
+            "keep" => Self::Keep,
             _ => return None,
         })
     }
@@ -133,7 +135,7 @@ pub fn parse_table(tsv: &str) -> Result<Vec<Row>, String> {
 
 /// The shipped rows, parsed once. A malformed shipped table panics loud
 /// rather than resolving guessed paths; the unit tests keep that unreachable.
-pub fn rows() -> &'static [Row] {
+fn all_rows() -> &'static [Row] {
     static ROWS: OnceLock<&'static [Row]> = OnceLock::new();
     *ROWS.get_or_init(|| {
         let parsed = parse_table(LAYOUT_TSV).unwrap_or_else(|e| panic!("{e}"));
@@ -141,57 +143,42 @@ pub fn rows() -> &'static [Row] {
     })
 }
 
+/// The rows the resolvers and the mover read. A keep row names a top-level
+/// entry that stays where it is, so neither ever sees one.
+pub fn rows() -> &'static [Row] {
+    static MOVING: OnceLock<&'static [Row]> = OnceLock::new();
+    *MOVING.get_or_init(|| {
+        let moving: Vec<Row> = all_rows()
+            .iter()
+            .filter(|r| r.kind != Kind::Keep)
+            .cloned()
+            .collect();
+        Box::leak(moving.into_boxed_slice())
+    })
+}
+
+/// Whether `name` may sit at the top level of a state root: a keep row
+/// carries it, by name or by glob. This is the one closed set.
+pub fn is_kept(name: &str) -> bool {
+    all_rows()
+        .iter()
+        .filter(|r| r.kind == Kind::Keep)
+        .any(|r| crate::state_root_drift::glob_match(&r.legacy, name))
+}
+
+/// Whether any row carries `name` at the top level: kept, or owed a move or
+/// a park. A name this answers false for is one fno never declared.
+pub fn is_carried(name: &str) -> bool {
+    is_kept(name)
+        || rows().iter().any(|r| {
+            crate::state_root_drift::glob_match(&r.legacy, name)
+                || r.new.split('/').next() == Some(name)
+        })
+}
+
 pub fn find(legacy_name: &str) -> Option<&'static Row> {
     rows().iter().find(|r| r.legacy == legacy_name)
 }
-
-/// The ruled top-level categories (d-c74fda50, 2026-10-16) plus `backups`,
-/// the park base every stamp lands under. A row naming any other first
-/// segment mints a top-level folder in every state root; the closed-set
-/// test refuses it.
-pub const APPROVED_TOP_LEVEL: &[&str] = &[
-    "agents", "backups", "cache", "db", "install", "logs", "mux", "spaces", "state",
-];
-
-/// The folders a `dir` row may carry: the ruled fold set. `sessions` is
-/// absent (it parks; it does not fold) and `worktrees` is absent (the ruled
-/// relocation changes the allocation default to `spaces/worktrees` only;
-/// live checkouts never move). A new name here is a new top-level folder on every machine.
-pub const FOLD_CANDIDATES: &[&str] = &[
-    "announce-cursors",
-    "attention",
-    "attest",
-    "backups",
-    "bin",
-    "bus",
-    "build-marks",
-    "cargo-build",
-    "chats",
-    "claim-aux",
-    "context-cache",
-    "corrections",
-    "fleet",
-    "flight",
-    "handoffs",
-    "history",
-    "latches",
-    "locks",
-    "mail-escalations",
-    "mail-hold",
-    "migrations",
-    "notice-route",
-    "operator-capture",
-    "pages",
-    "plugin-stage",
-    "postmortems",
-    "push-stamps",
-    "reclaim",
-    "retro-pending",
-    "review-invocations",
-    "route-settings",
-    "saved-sessions",
-    "validity-decks",
-];
 
 /// Fold candidates whose children can be held by an open flock. The mover
 /// will not fold one while a regular-file child's lock is held; the row
@@ -208,15 +195,36 @@ const LOCK_BEARING_FOLDERS: &[&str] = &[
 
 /// Fold candidates that drain instead of folding. A live reader may retain a
 /// child's absolute path, so the mover never renames it. New writes use the
-/// row's destination; cargo-build residue and plugin-stage swap debris have
-/// safe park rules, while live entries stay until their owner drains them.
-const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings"];
+/// row's destination; cargo-build residue, plugin-stage swap debris and a
+/// route-settings file no writer has touched past the age limit have safe
+/// park rules, while live entries stay until their owner drains them. A
+/// `screens` shot stays until no question row names it.
+const DRAIN_ONLY_FOLDERS: &[&str] = &["cargo-build", "plugin-stage", "route-settings", "screens"];
 pub(crate) const LEGACY_DRAIN_AGE_SECS: u64 = 3 * 24 * 60 * 60;
 
 /// Fold candidates that hold message or journal lines. A clashing child never
 /// parks here: it merges (`state_layout_merge`), and a destination that does
 /// not exist yet takes the whole folder in one rename.
 const MERGE_FOLDERS: &[&str] = &["bus", "chats", "history"];
+
+/// Children a fold leaves at the legacy path, with the holder a pending
+/// reading names. The sealed eval worker's Claude login is a Keychain item
+/// whose service name hashes the config folder's path, so a moved folder
+/// reads a different item and the login is lost.
+const PINNED_CHILDREN: &[(&str, &str, &str)] = &[(
+    "evals",
+    "claude-config",
+    "the sealed eval login is keyed by evals/claude-config's path",
+)];
+
+/// True while the setup wizard's lock names a live process: the wizard
+/// holds its report and answers paths open for the whole run.
+fn wizard_lock_live(sidecar: &Path) -> bool {
+    std::fs::read_to_string(sidecar.join("wizard-lock"))
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok())
+        .is_some_and(crate::evals_arm::pid_alive)
+}
 
 /// The anchor's file name. Frozen: the lock, its queue, the keeper socket and
 /// the note journal all derive from it, so an older binary and a newer one
@@ -827,7 +835,10 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // row still names must stay put until its prune. Only the emptied shell
     // goes.
     if DRAIN_ONLY_FOLDERS.contains(&row.legacy.as_str()) {
-        if matches!(row.legacy.as_str(), "cargo-build" | "plugin-stage") {
+        if matches!(
+            row.legacy.as_str(),
+            "cargo-build" | "plugin-stage" | "route-settings"
+        ) {
             let remaining = drain_legacy_children(root, &legacy, stamp, apply);
             if !remaining.is_empty() {
                 return Status::Pending(format!(
@@ -874,6 +885,9 @@ fn migrate_dir(root: &Path, row: &Row, apply: bool, stamp: &str) -> Status {
     // pass retries.
     if name == "claim-aux" && !lane_dirs_empty(&legacy) {
         return Status::Pending("a waiter holds a ticket".to_string());
+    }
+    if name == "sidecar" && wizard_lock_live(&legacy) {
+        return Status::Pending("wizard-lock names a live setup run".to_string());
     }
     // The probe fds stay open through the fold: a lock another writer takes
     // between the probe and a rename cannot split a child from its holder.
@@ -931,7 +945,12 @@ fn fold_dir_children(root: &Path, row: &Row, stamp: &str, legacy: &Path, new: &P
     for child in children.flatten() {
         let from = child.path();
         let target = new.join(child.file_name());
-        let status = if !occupied(&target) {
+        let pinned = PINNED_CHILDREN
+            .iter()
+            .find(|(folder, kid, _)| row.legacy == *folder && child.file_name() == *kid);
+        let status = if let Some((_, _, holder)) = pinned {
+            Status::Pending((*holder).to_string())
+        } else if !occupied(&target) {
             match crate::state_layout_undo::carry(root, stamp, &from, &target) {
                 Ok(()) => Status::Moved,
                 Err(e) => Status::Refused(format!("refused: {e}")),
@@ -1122,6 +1141,15 @@ fn drain_legacy_children(root: &Path, legacy: &Path, stamp: &str, apply: bool) -
         let park_reason = match folder {
             "cargo-build" => match quiet_untagged_tree(&path, now) {
                 Ok(true) => Some("untagged cargo residue quiet past the age limit"),
+                Ok(false) => None,
+                Err(reason) => {
+                    eprintln!("state-root drain: kept {} ({reason})", path.display());
+                    remaining.push(name);
+                    continue;
+                }
+            },
+            "route-settings" if path.is_file() => match quiet_tree(&path, now) {
+                Ok(true) => Some("route-settings file quiet past the age limit"),
                 Ok(false) => None,
                 Err(reason) => {
                     eprintln!("state-root drain: kept {} ({reason})", path.display());
@@ -1598,48 +1626,47 @@ mod tests {
         std::fs::remove_dir_all(root).ok();
     }
 
-    // The closed set of top-level destinations a table row may name. The
-    // ruled categories (d-c74fda50) plus the park base. A new
-    // name is a new top-level folder on every machine: it needs the review
-    // a new root row gets.
+    // The keep rows are the one closed set: every destination a row names
+    // starts with a kept folder, and a keep row stays where it is. A new
+    // top-level name therefore needs a keep row, and that row is the review.
     #[test]
     fn top_level_set_is_closed() {
-        let rows = parse_table(LAYOUT_TSV).expect("shipped table must parse");
-        for row in &rows {
-            if row.kind == Kind::Park {
-                assert_eq!(row.new, "-", "park row {} has no destination", row.legacy);
-                continue;
+        let table = parse_table(LAYOUT_TSV).expect("shipped table must parse");
+        for row in &table {
+            match row.kind {
+                Kind::Keep => {
+                    assert_eq!(row.legacy, row.new, "keep row {} moves", row.legacy);
+                    assert!(!row.new.contains('/'), "keep row {} nests", row.legacy);
+                }
+                Kind::Park => assert_eq!(row.new, "-", "park row {} has a home", row.legacy),
+                _ => {
+                    let first = row.new.split('/').next().unwrap_or(&row.new);
+                    assert!(
+                        row.new.contains('/') && is_kept(first),
+                        "row {} lands at {}, outside the kept folders",
+                        row.legacy,
+                        row.new
+                    );
+                }
             }
-            let first = row.new.split('/').next().unwrap_or(&row.new);
-            if row.kind == Kind::Dir {
-                assert!(
-                    FOLD_CANDIDATES.contains(&row.legacy.as_str()),
-                    "dir row for {} is not a ruled fold candidate; widening FOLD_CANDIDATES mints a top-level folder on every machine",
-                    row.legacy
-                );
-                assert!(
-                    first == row.legacy.as_str() || APPROVED_TOP_LEVEL.contains(&first),
-                    "dir row {} lands at unruled top level {first}; fold destinations are the ruled categories",
-                    row.legacy
-                );
-                continue;
-            }
-            assert!(
-                row.new.contains('/'),
-                "file row {} must land in a subfolder",
-                row.legacy
-            );
-            assert!(
-                APPROVED_TOP_LEVEL.contains(&first),
-                "row {} names top-level {first} outside the ruled categories",
-                row.legacy
-            );
         }
-        for name in FOLD_CANDIDATES {
-            let row =
-                find(name).unwrap_or_else(|| panic!("fold candidate {name} has no table row"));
-            assert_eq!(row.kind, Kind::Dir, "{name} must carry a dir row");
-        }
+        assert!(rows().iter().all(|r| r.kind != Kind::Keep));
+        assert!(
+            find("agents").is_none(),
+            "the resolvers never read a keep row"
+        );
+        assert!(
+            is_kept("config.toml.bak-20261113-render"),
+            "a keep glob admits its match"
+        );
+        assert!(
+            is_carried("bus") && !is_kept("bus"),
+            "a fold folder is owed a move"
+        );
+        assert!(
+            !is_carried("profile-new"),
+            "an undeclared name is carried by nothing"
+        );
     }
 
     #[test]
@@ -1722,7 +1749,8 @@ mod tests {
         }
 
         let rows = parse_table(
-            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n",
+            "cargo-build\tcache/cargo-build\tdir\tdaemon\nplugin-stage\tinstall/plugin-stage\tdir\tdaemon\n\
+             route-settings\tstate/route-settings\tdir\tdaemon\nevals\tdb/evals\tdir\tdaemon\n",
         )
         .unwrap();
         let live = tmp_root("drain-live");
@@ -1732,9 +1760,24 @@ mod tests {
         let stage_file = live.join("plugin-stage/fno/hooks/stop.sh");
         std::fs::create_dir_all(stage_file.parent().unwrap()).unwrap();
         std::fs::write(&stage_file, b"live hook\n").unwrap();
+        std::fs::create_dir_all(live.join("route-settings")).unwrap();
+        std::fs::write(live.join("route-settings/fresh.json"), b"{}").unwrap();
+        std::fs::create_dir_all(live.join("evals/claude-config")).unwrap();
+        std::fs::write(live.join("evals/claude-config/.claude.json"), b"{}").unwrap();
+        std::fs::write(live.join("evals/labels.jsonl"), b"{}\n").unwrap();
 
         let receipt = migrate_rows(&live, &rows, true, "live");
-        for name in ["cargo-build", "plugin-stage"] {
+        let evals = receipt
+            .iter()
+            .find(|entry| entry.legacy == "evals")
+            .unwrap();
+        assert!(
+            matches!(evals.status, Status::Pending(ref reason) if reason.contains("sealed eval login")),
+            "the sealed login's folder stays and names its holder: {evals:?}"
+        );
+        assert!(live.join("evals/claude-config/.claude.json").is_file());
+        assert!(live.join("db/evals/labels.jsonl").is_file());
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(
                 matches!(row.status, Status::Pending(ref reason) if reason.starts_with("drains:")),
@@ -1758,9 +1801,12 @@ mod tests {
             std::fs::write(marker, b"stale swap residue\n").unwrap();
         }
         age_tree(&residue.join("plugin-stage"), old);
+        std::fs::create_dir_all(residue.join("route-settings")).unwrap();
+        std::fs::write(residue.join("route-settings/old.json"), b"{}").unwrap();
+        age_tree(&residue.join("route-settings"), old);
 
         let receipt = migrate_rows(&residue, &rows, true, "test");
-        for name in ["cargo-build", "plugin-stage"] {
+        for name in ["cargo-build", "plugin-stage", "route-settings"] {
             let row = receipt.iter().find(|entry| entry.legacy == name).unwrap();
             assert!(matches!(row.status, Status::Moved), "{row:?}");
             assert!(
@@ -1772,6 +1818,7 @@ mod tests {
         assert!(parked.join("fc").join("build/output").is_file());
         assert!(parked.join(".fno.new-old/marker").is_file());
         assert!(parked.join(".fno.old-old/marker").is_file());
+        assert!(parked.join("old.json").is_file());
         clean(&residue);
     }
 
@@ -1940,6 +1987,27 @@ mod tests {
         assert!(
             !quiet.entries.iter().any(|e| e.legacy.contains("(journal)")),
             "a root with no family file reports no journal entry"
+        );
+
+        // AC5-ERR: a question journal holding a row its store lacks stays
+        // at the root, and the pass reads pending naming the file.
+        let questions = root.join("questions.jsonl");
+        std::fs::write(
+            &questions,
+            format!("{{\"ts\":\"{ts}\",\"type\":\"operator_question\"}}\n"),
+        )
+        .unwrap();
+        let held = migrate(&root, true);
+        assert!(
+            held.entries
+                .iter()
+                .any(|e| e.legacy.contains("questions.jsonl")
+                    && matches!(e.status, Status::Pending(ref why) if why.contains("lacks"))),
+            "{held:?}"
+        );
+        assert!(
+            questions.is_file(),
+            "the file stays until a read ingests it"
         );
         match prior_home {
             Some(v) => std::env::set_var("FNO_AGENT_HOME", v),

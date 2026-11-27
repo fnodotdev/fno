@@ -42,7 +42,7 @@
 "agents unregister-channel" = "nothing - see `fno agent register-channel`; the `channel.*` RPC is live"
 "agents push-channel" = "nothing - see `fno agent register-channel`; the `channel.*` RPC is live"
 "backlog backfill-slugs" = "nothing - the one-shot migration that gave every node a slug has run. `fno backlog idea` assigns a slug at creation"
-"backlog briefs" = "nothing - the last-N listing had no reader. The briefs themselves are files under `paths.briefs_dir()` (`~/.fno/briefs/<id>.md`)"
+"backlog briefs" = "nothing - the last-N listing had no reader. The briefs themselves are files under `paths.briefs_dir()` (`~/.fno/db/briefs/<id>.md`)"
 "backlog exec-graph" = "nothing - the derived execution graph had no reader outside its own compile step, which still runs"
 "backlog release" = "`fno backlog unclaim` - `release` was an alias for it"
 "backlog schedule" = "nothing - the shadow-first frontier report never left shadow mode and no gate ever read its exit code. `fno backlog next` picks work"

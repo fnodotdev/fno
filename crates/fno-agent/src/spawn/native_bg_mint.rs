@@ -104,10 +104,14 @@ pub(crate) fn mint_missing_native_bg(
                 continue;
             }
         }
-        // Only a session that joined fno, or one a launch record names, is
-        // adopted; the listing then only rescues a row that went missing.
+        // Only a session whose join cause is a law trigger (user law D2402: a
+        // /fno: skill other than using-fno, a prompt naming one, /fno:fno-me,
+        // or spawn birth), or one a launch record names, is adopted; the
+        // listing then only rescues a row that went missing.
         let record = crate::launch_record::claimed_edge(home.root(), session);
-        if record.is_none() && !crate::join_marker::is_joined(home.root(), "claude", session) {
+        if record.is_none()
+            && crate::join_marker::adoption_trigger(home.root(), "claude", session).is_none()
+        {
             continue;
         }
         let transcript = find_transcript_for(row, session);
@@ -568,6 +572,7 @@ fn prepare_row(
         pid: None,
         transcript_path: transcript.map(|p| p.display().to_string()),
         start_source: Some(START_SOURCE.into()),
+        sandbox_transcript: None,
         cwd: cwd.clone(),
         project_root: cwd,
         claude_session_uuid: row.session_id.clone().filter(|s| !s.is_empty()),
@@ -595,13 +600,14 @@ mod tests {
         std::fs::create_dir_all(&agents).unwrap();
         std::env::set_var("FNO_AGENT_HOME", &agents);
         let home = crate::paths::AgentsHome::from_env();
-        // The fixture sessions joined fno; `unjoined_listing_row_mints_nothing`
-        // covers the other side.
+        // The fixture sessions carry a law trigger (D2402); the bare-word
+        // and no-marker sides live in `unjoined_listing_row_mints_nothing`
+        // and `bare_word_marker_mints_nothing`.
         for sid in [
             "492ccda4-63ff-4736-a02a-8818f63c8b46",
             "aaaaaaaa-0000-0000-0000-000000000001",
         ] {
-            crate::join_marker::write_marker(home.root(), "claude", sid).unwrap();
+            crate::join_marker::write_marker(home.root(), "claude", sid, "skill:review").unwrap();
         }
         let out = f(&home);
         match saved_home {
@@ -760,6 +766,28 @@ mod tests {
             row.short_id = "bbbbbbbb".into();
             let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
             assert_eq!(mint_missing_native_bg(home, &snapshot, &emitter(home)), 0);
+        });
+    }
+
+    /// A bare-command marker is not a law cause: the listing row stays
+    /// unadopted even though the session joined fno (user law D2402).
+    #[test]
+    fn bare_word_marker_mints_nothing() {
+        sandbox(|home| {
+            crate::join_marker::write_marker(
+                home.root(),
+                "claude",
+                "cccccccc-0000-0000-0000-000000000003",
+                "command",
+            )
+            .unwrap();
+            let mut row = listing_row("discussion-bg", "working");
+            row.session_id = Some("cccccccc-0000-0000-0000-000000000003".into());
+            row.short_id = "cccccccc".into();
+            let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
+            assert_eq!(mint_missing_native_bg(home, &snapshot, &emitter(home)), 0);
+            let registry = crate::daemon::load_registry_asserted(&home.registry_json()).unwrap();
+            assert_eq!(registry.entries.len(), 0);
         });
     }
 

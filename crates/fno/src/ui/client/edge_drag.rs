@@ -463,6 +463,141 @@ pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) -> bool {
         && view.begin_edge_drag(rep.row, rep.col)
 }
 
+impl View {
+    /// End a seam drag and recompute hover from `(row, col)`. Both the release
+    /// arm and the non-left cancellation arm (a wheel, another button) route
+    /// through here: a Drag event never refreshes hover, so however the gesture
+    /// ends, the accent must be recomputed or it lingers until the next bare
+    /// Move (codex peer review of the sideline-border affordance).
+    pub(super) fn end_seam_drag(&mut self, row: u16, col: u16) {
+        self.seam_drag = None;
+        self.refresh_hover_affordances(row, col);
+    }
+
+    /// End a sideline-border drag and recompute hover; see [`View::end_seam_drag`].
+    ///
+    /// Persists the reached width on the way out - but only if the drag
+    /// actually moved it, so a bare press-and-release on the border writes
+    /// nothing. Every non-revert end routes here (release, a non-left event, and
+    /// the stuck-drag timeout), so all three keep the width the operator dragged
+    /// to (AC2-FR); only Esc reverts, via [`View::revert_sideline_drag`].
+    pub(super) fn end_sideline_drag(&mut self, row: u16, col: u16) {
+        if let Some(drag) = self.sideline_drag.take() {
+            if drag.start_width != self.sideline_width {
+                view_store::save_width(self.sideline_width);
+            }
+        }
+        self.refresh_hover_affordances(row, col);
+    }
+
+    /// End a sideline drag by reverting to the width at grab (a bare
+    /// Esc), mirroring [`View::revert_seam_drag`]. Returns whether the width
+    /// changed, so the caller re-reports the content viewport only when it did.
+    /// Client-local, so unlike the seam revert nothing travels to the server
+    /// beyond the resulting `Resize`; the on-disk width is untouched because a
+    /// reverted drag never persisted.
+    pub(super) fn revert_sideline_drag(&mut self) -> bool {
+        let Some(drag) = self.sideline_drag.take() else {
+            return false;
+        };
+        let changed = self.sideline_width != drag.start_width;
+        self.sideline_width = drag.start_width;
+        changed
+    }
+
+    /// True on the sideline's right border column - the grab band for the
+    /// density drag. False when the sideline is hidden: there is no border to
+    /// grab, so revealing it stays on the existing toggle.
+    pub(super) fn on_sideline_border(&self, row: u16, col: u16) -> bool {
+        let panel_w = self.panel_w();
+        panel_w > 0 && row >= TAB_BAR_ROWS && col == panel_w - 1
+    }
+
+    /// Grab a seam, remembering the share it currently holds so Esc can put it
+    /// back. A seam whose panes have already gone is not grabbable.
+    pub(super) fn begin_seam_drag(&mut self, seam: Seam, now: Instant) {
+        let Some(start) = self.seam_pos(seam) else {
+            return;
+        };
+        self.seam_drag = Some(SeamDrag {
+            seam,
+            start_pos: start,
+            last_pos: start,
+            last_at: now,
+        });
+    }
+
+    /// The command for a drag that has reached an outer cell, or `None` when
+    /// the seam has not moved. A drag reports far more cells than the seam has
+    /// positions, so this is what keeps the wire quiet between crossings.
+    ///
+    /// The seam's span is invariant under its own resize - the pair's total
+    /// extent does not change, only the split point inside it - so the target
+    /// stays stable as the server's layout updates mid-drag, and a command lost
+    /// on the way self-heals at the next cell.
+    pub(super) fn seam_drag_to(&mut self, row: u16, col: u16, now: Instant) -> Option<Command> {
+        let drag = self.seam_drag?;
+        let target = self.seam_pos_at(drag.seam, row, col)?;
+        if target == drag.last_pos {
+            return None;
+        }
+        let live = self.seam_drag.as_mut()?;
+        live.last_pos = target;
+        live.last_at = now;
+        Some(Command::ResizeSeam {
+            a: drag.seam.a,
+            b: drag.seam.b,
+            pos: target,
+        })
+    }
+
+    /// Set the sideline to a free width from the dragged border column,
+    /// clamped to `[MIN_SLIM_PANEL_W .. `[`sideline_max_width`]`]`. Returns
+    /// whether the width changed. The floor is `MIN_SLIM_PANEL_W`, not the
+    /// density's, so a drag past a mode's floor demotes the mode.
+    pub(super) fn drag_sideline_to(&mut self, col: u16, now: Instant) -> bool {
+        // Refresh the stuck-drag deadline before any early return: a held drag
+        // pinned against a clamp must not expire. Only silence lets it fire.
+        if let Some(drag) = self.sideline_drag.as_mut() {
+            drag.last_at = now;
+        }
+        let max = sideline_max_width(self.term.1);
+        // A WINCH can leave `max < MIN_SLIM_PANEL_W`, and clamp panics when
+        // min > max. The rail is hidden then: keep the stored width.
+        if max < MIN_SLIM_PANEL_W {
+            return false;
+        }
+        // The border sits on the sideline's last column, so the width the
+        // operator is asking for is one past it.
+        let want = col.saturating_add(1).clamp(MIN_SLIM_PANEL_W, max);
+        if want == self.sideline_width {
+            return false;
+        }
+        self.sideline_width = want;
+        // Below the mode's floor, demote it (in practice Extended -> Regular),
+        // then re-anchor the selector after the row set changes, as `cycle_density` does.
+        if self.sideline_width < min_render_width(self.density) {
+            let held = self.selected_agent_name();
+            self.density = Density::Regular;
+            view_store::save_prefs(self.density, self.agent_sort);
+            self.reanchor_selector(held);
+        }
+        true
+    }
+
+    /// End the drag and put the seam back where it started, returning the
+    /// command that does it. `None` when the seam never moved: a press that
+    /// released without a crossing sent nothing, so there is nothing to undo.
+    pub(super) fn revert_seam_drag(&mut self) -> Option<Command> {
+        let drag = self.seam_drag.take()?;
+        (drag.last_pos != drag.start_pos).then_some(Command::ResizeSeam {
+            a: drag.seam.a,
+            b: drag.seam.b,
+            pos: drag.start_pos,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

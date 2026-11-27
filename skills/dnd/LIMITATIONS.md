@@ -6,6 +6,7 @@
 - The command holds only the session that runs it. You cannot quiet another session from here. Run the door in that session.
 - `fno agent loop control resume-all` run inside the held session lifts the hold, whoever armed it.
 - The automatic conversation hold needs two things. The harness must run the fno UserPromptSubmit and Stop hooks (claude and codex today). The session must be typed through the fno mux. Harnesses without the prompt hook keep only the manual door.
+- A mux Enter arms the conversation hold on every harness. The turn end shortens it to the two-minute grace on claude, codex, agy, opencode, pi, omp, grok and zcode. cursor-agent, muse and gemini send no turn-end hook, so their hold ends at the answer backstop (10 minutes by default).
 - Sessions typed outside the fno mux write no typing or submit witness. The quiet wait cannot see their drafts, so C11 cannot protect them.
 - A held-mail digest on a mux pane keeps the Python verbatim path with real newlines. The flattened one-line typing covers the claude, keeper and pane typed lanes.
 - cursor-agent and agy never withdraw, because no landing can be seen there. The inject types and reports unconfirmed rather than deleting the composer's contents.

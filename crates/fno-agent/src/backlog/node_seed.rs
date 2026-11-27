@@ -272,7 +272,7 @@ pub fn decide(payload: &Value) -> Value {
                 })
                 .unwrap_or_default();
             crate::graph_store::read_rows_where(
-                &crate::graph_get::default_graph_path(),
+                &crate::backlog::settings::graph_path(),
                 &crate::backlog::RowQuery {
                     filter: crate::backlog::api::NodeFilter {
                         id_in: Some(vec![wanted]),
@@ -619,7 +619,7 @@ pub fn spawn_node_cwd(params: &Value, caller: &Path) -> SpawnNodeCwd {
         .into_iter()
         .collect();
     let rows = crate::graph_store::read_rows_where(
-        &crate::graph_get::default_graph_path(),
+        &crate::backlog::settings::graph_path(),
         &crate::backlog::RowQuery {
             filter: crate::backlog::api::NodeFilter {
                 id_in: Some(wanted),

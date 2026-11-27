@@ -35,6 +35,8 @@
     "live_status_basis",
     "observed_model",
     "log_path",
+    "transcript_path",
+    "sandbox_transcript",
     "role",
     "role_level",
     "role_scope",
@@ -183,8 +185,8 @@
       "stop",
       "tool_calls",
       "tool_errors",
-      "transcript_path",
-      "turn_policy_source"
+      "turn_policy_source",
+      "watch"
     ]
   },
   "known_gaps": {},

@@ -536,7 +536,6 @@ fn play_case(case: &Case) -> Result<(), String> {
     let dir = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
     let root = dir.path();
     let env0 = base_env(root);
-    let _ = std::fs::write(root.join(".path-migration-done"), "captured\n");
     let _ = std::fs::write(root.join("settings.yaml"), "");
     let mut node = NODE.to_string();
     if case.manifest {

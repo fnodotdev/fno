@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by scripts/ops/install-fnh-runner.sh. The placeholders __RUNNER_USER__,
+     __RUNNER_HOME__ and __RUNNER_DIR__ are filled in at install time. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.footnote.fnh-actions-runner</string>
+
+    <key>UserName</key>
+    <string>__RUNNER_USER__</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>WorkingDirectory</key>
+    <string>__RUNNER_DIR__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd "__RUNNER_DIR__" &amp;&amp; exec ./run.sh</string>
+    </array>
+
+    <!-- launchd does not set HOME for a UserName job. rustup and cargo read it,
+         and a missing HOME falls back to the caller's home (a permission error). -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__RUNNER_HOME__</string>
+        <key>PATH</key>
+        <string>__RUNNER_HOME__/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/fnh-actions-runner.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/fnh-actions-runner.log</string>
+</dict>
+</plist>

@@ -61,6 +61,18 @@ enum MatchRequest {
     /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
     #[serde(rename = "upkeep")]
     Upkeep(RecordDoorRequest),
+    /// The scope-amend door: `argv` is the `fno inbox decisions rescope`
+    /// command line. Same ownership as `renew`: stdout carries the amendment
+    /// id, the exit code is 0 amended, 3 refused. The operator's yes is the
+    /// door's proof: never widen or narrow a law's reach without it.
+    #[serde(rename = "rescope")]
+    Rescope(RecordDoorRequest),
+    /// The cold-archive door: `argv` is the `fno inbox decisions archive`
+    /// command line. Dry run by default; `--apply` moves the non-live rows
+    /// into `decisions-archive.jsonl` at the state root. The door owns
+    /// stdout and the exit code (0 answered, 1 store failure, 2 usage).
+    #[serde(rename = "archive")]
+    Archive(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -992,7 +1004,7 @@ pub(crate) fn matches_node_id_shape(s: &str) -> bool {
 
 /// `matches_node_id_shape` under an explicit mode: `Some("t")` reads
 /// `t-12`, `None` is hex. The seam the tests drive.
-fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
+pub(crate) fn matches_node_id_shape_under(s: &str, seq_prefix: Option<&str>) -> bool {
     let Some((prefix, suffix)) = s.split_once('-') else {
         return false;
     };
@@ -1397,6 +1409,9 @@ pub(crate) struct RecordDoor {
     raw_paths: Vec<String>,
     quote: Option<String>,
     at_skill: Option<String>,
+    /// Action triggers (`--at-command`, `--at-door`): the law fires at a Bash
+    /// command or a door, not only when the prompt text ranks it.
+    at: crate::law_at::LawAt,
     delivery: Option<String>,
     /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
     audience: Option<String>,
@@ -1433,7 +1448,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--at-skill <skill>] [--delivery store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--at-skill <skill>] [--at-command <glob>]... [--at-door <send|spawn|merge>[:<subject-glob>]] [--delivery store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1509,6 +1524,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         raw_paths: Vec::new(),
         quote: None,
         at_skill: None,
+        at: Default::default(),
         delivery: None,
         audience: None,
         why: None,
@@ -1551,8 +1567,10 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             }
             "--keep" => {
                 let typed = take(&mut i)?;
-                door.keep
-                    .push(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+                for k in typed.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                    door.keep
+                        .push(crate::numbers::resolve('d', k).unwrap_or_else(|| k.to_string()));
+                }
             }
             "--sweep" => door.sweep.push(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
@@ -1561,6 +1579,11 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
             "--at-skill" => door.at_skill = Some(take(&mut i)?),
+            "--at-command" => door.at.commands.push(take(&mut i)?),
+            "--at-door" => door
+                .at
+                .set_door(&take(&mut i)?)
+                .map_err(|e| format!("{e}\n{RECORD_USAGE}"))?,
             "--delivery" => door.delivery = Some(take(&mut i)?),
             "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
@@ -1906,7 +1929,10 @@ pub(crate) fn project_events_journal() -> std::path::PathBuf {
 
 /// The same canonical-root walk, run from a caller-named directory instead
 /// of the process cwd. The env-free form exists because a process-wide
-/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters.
+/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters. A cwd
+/// outside any checkout that is a state root (it holds `db/`) answers its
+/// own journal anchor, so a hook run from `~/.fno` never creates
+/// `~/.fno/.fno/`.
 pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::PathBuf {
     let main_root = std::process::Command::new("git")
         .args(["worktree", "list", "--porcelain"])
@@ -1919,9 +1945,12 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
                 .lines()
                 .find_map(|l| l.strip_prefix("worktree ").map(str::to_string))
         })
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf());
-    main_root.join(".fno").join("events.jsonl")
+        .map(std::path::PathBuf::from);
+    match main_root {
+        Some(root) => root.join(".fno").join("events.jsonl"),
+        None if cwd.join("db").is_dir() => cwd.join("events.jsonl"),
+        None => cwd.join(".fno").join("events.jsonl"),
+    }
 }
 
 /// Open questions the new law may answer: `read_open_questions`' fold over
@@ -1929,9 +1958,8 @@ pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::Pat
 /// or malformed store reads as no questions, never an error.
 fn read_open_questions() -> Vec<OpenQuestion> {
     let path = decision_index::default_state_path("questions.jsonl");
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
+    let text =
+        crate::event_store::journal_text(&path, &["operator_question", "operator_question_closed"]);
     let mut asked: Vec<OpenQuestion> = Vec::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in text.lines() {
@@ -2418,6 +2446,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         if let Some(map) = data.as_object_mut() {
             map.insert("at_skill".into(), json!(skill));
         }
+    }
+    if let Some(map) = data.as_object_mut() {
+        door.at.write(map);
     }
     if let Some(spec) = door.delivery.as_deref() {
         let filtered = !door.filters.is_empty() || !door.not_filters.is_empty();
@@ -3453,6 +3484,12 @@ pub fn run_law_match_str(input: &str) -> i32 {
         MatchRequest::Upkeep(r) => {
             return crate::law_upkeep::run_upkeep(&r.argv);
         }
+        MatchRequest::Rescope(r) => {
+            return crate::decision_log::refresh_after(crate::law_rescope::run_rescope(&r.argv));
+        }
+        MatchRequest::Archive(r) => {
+            return crate::law_archive::run_archive(&r.argv);
+        }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
             let near = near_law_lines(&r.law);
@@ -3858,6 +3895,7 @@ pub(crate) mod scope_tests {
             raw_paths: Vec::new(),
             quote: None,
             at_skill: None,
+            at: Default::default(),
             delivery: None,
             audience: Some("internal".to_string()),
             why: Some("the operator owns durable policy.".to_string()),

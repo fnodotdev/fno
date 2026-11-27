@@ -16,6 +16,6 @@ grade:
   - kind: file-exists
     path: new-user-answer.md
   - kind: exit
-    command: "grep -qiF 'skip' new-user-answer.md && grep -qF '~/.fno/evals/personas/new-user/' new-user-answer.md && grep -qF -- '--learnings --record' new-user-answer.md"
+    command: "grep -qiF 'skip' new-user-answer.md && grep -qF '~/.fno/db/evals/personas/new-user/' new-user-answer.md && grep -qF -- '--learnings --record' new-user-answer.md"
 timeout_minutes: 10
 tags: [capability, persona-new-user]

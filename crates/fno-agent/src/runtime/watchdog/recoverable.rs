@@ -601,6 +601,27 @@ fn is_adopted_row(entry: &crate::state::RegistryEntry, candidate: &RecoverableRo
 /// resume path. `Err` is the batch-level `adoption_failed` detail.
 fn adopt_one(candidate: &RecoverableRollout, registry_path: &Path) -> Result<Value, String> {
     let session_id = candidate.session_id.as_str();
+    // The law gate: a rollout whose session holds no launch record and no
+    // law join trigger stays rowless. A skip for the batch, not a failure:
+    // the recovery continues with the rest.
+    let law_ok = crate::launch_record::claimed_edge(
+        registry_path.parent().unwrap_or(Path::new(".")),
+        session_id,
+    )
+    .is_some()
+        || crate::join_marker::adoption_trigger(
+            registry_path.parent().unwrap_or(Path::new(".")),
+            "codex",
+            session_id,
+        )
+        .is_some();
+    if !law_ok {
+        return Err(
+            "law_refused: no law-D2402 cause (no /fno: skill, no fno-me, no launch \
+record); the rollout stays unadopted"
+                .to_string(),
+        );
+    }
     let process_cwd = std::env::current_dir().map_err(|exc| exc.to_string())?;
     let state_root = crate::agents_config::state_dir(&process_cwd)
         .ok_or_else(|| "state root could not be resolved".to_string())?;
@@ -713,13 +734,23 @@ pub fn apply_recoverable_with(
         // One vanished row never aborts the batch.
         results.push(
             adopt_one(candidate, registry_path).unwrap_or_else(|detail| {
-                json!({
-                    "session_id": session_id,
-                    "outcome": "refused",
-                    "reason": "adoption_failed",
-                    "transcript_usable": true,
-                    "detail": detail,
-                })
+                if detail.starts_with("law_refused") {
+                    json!({
+                        "session_id": session_id,
+                        "outcome": "skipped",
+                        "reason": "law_refused",
+                        "transcript_usable": true,
+                        "detail": detail,
+                    })
+                } else {
+                    json!({
+                        "session_id": session_id,
+                        "outcome": "refused",
+                        "reason": "adoption_failed",
+                        "transcript_usable": true,
+                        "detail": detail,
+                    })
+                }
             }),
         );
     }
@@ -742,5 +773,6 @@ pub fn recovery_result_counts(results: &[Value]) -> Value {
         "applied": count("applied"),
         "refused": count("refused"),
         "deferred": count("deferred"),
+        "skipped": count("skipped"),
     })
 }

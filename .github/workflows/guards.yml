@@ -44,6 +44,8 @@ name: guards
 # a structural guard, and stays its own workflow.
 
 on:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
   # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
   # it passes in is workflow_dispatch, so the PR-only jobs skip.
@@ -456,17 +458,6 @@ jobs:
         working-directory: crates/fno-agent
         run: cargo build --bin fno-agent
 
-      # State-root tidiness: the inventory doc's root rows are shrink-only.
-      # The runtime half is hooks/write-gate.sh, which refuses
-      # a NEW top-level write in either root; this gate is the review half,
-      # failing a PR whose diff adds a root pattern to the doc.
-      - name: State-root inventory rows are shrink-only
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        run: |
-          bash scripts/ci/check-state-root-rows.sh --self-test
-          bash scripts/ci/check-state-root-rows.sh
-
       - name: every spawn-gate refusal emits
         if: ${{ !cancelled() }}
         timeout-minutes: 5
@@ -711,6 +702,13 @@ jobs:
         timeout-minutes: 5
         run: bash tests/ci/test_check_value_reads.sh
 
+      # The mux client and the fno-agent feed reader share one search
+      # grammar in fno-proto; a second copy fails here.
+      - name: One search grammar
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-one-grammar.sh
+
       # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
       # included. The fno-agent binary's action list may only shrink; the
       # command ratchet reads all of fno-agent as ONE baseline leaf, so nothing
@@ -728,19 +726,6 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/ci/test_check_client_actions_shrink.sh
-
-      # The write-side half of the same rule: a diff that ADDS a hand-built
-      # root-level write (a bare state_dir() leaf, a fence-less
-      # root_state_file, a Rust place() with no layout row) fails, so a new
-      # writer cannot skip the paths-module doors the doc's rule names.
-      - name: State-root writes are rowed or subfoldered
-        if: ${{ !cancelled() }}
-        timeout-minutes: 5
-        env:
-          PR_BASE_REF: ${{ github.base_ref || 'main' }}
-        run: |
-          bash scripts/ci/check-state-root-writes.sh --self-test
-          bash scripts/ci/check-state-root-writes.sh
 
       # From review-invocation-single-source.yml.
       - name: Review invocation single-source check
@@ -894,6 +879,17 @@ jobs:
         run: |
           bash scripts/ci/check-no-verb-wording.sh --self-test
           bash scripts/ci/check-no-verb-wording.sh
+
+      # Claude Code ships its own ship command (Claude Ship beta), so the
+      # bare spelling opens Claude's command, not fno's. Every ship command
+      # in the tree reads /fno:ship (codex $fno:ship). The self-test watches
+      # it fail first.
+      - name: Every ship command is plugin-qualified + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-plugin-qualified-ship.sh --self-test
+          bash scripts/ci/check-plugin-qualified-ship.sh
 
       # A web page never swallows an error: an empty catch needs a quiet-ok
       # comment. The self-test watches it fail first.

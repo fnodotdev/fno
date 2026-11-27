@@ -188,7 +188,9 @@ impl Op {
 }
 
 /// One row change: the table, the column names, and the row before and
-/// after. An insert has no old row, a delete no new one.
+/// after. An insert has no old row, a delete no new one. `narrowed` marks an
+/// update trimmed to its moved and key columns; it ships under its own op
+/// code so a replica that predates narrowing refuses it.
 #[derive(Clone, Debug, PartialEq)]
 struct Change {
     op: Op,
@@ -196,12 +198,24 @@ struct Change {
     columns: Vec<String>,
     old: Vec<SqlValue>,
     new: Vec<SqlValue>,
+    narrowed: bool,
 }
+
+/// The change-log op code of an update trimmed to part of its row. A replica
+/// built before narrowing reads every update as a whole row and replaces its
+/// row with this partial one, so the unnamed columns fall back to defaults.
+/// An unknown code is a parse error there: the batch is refused, not applied.
+const NARROWED_UPDATE: &str = "p";
 
 impl Change {
     fn to_json(&self) -> Value {
         let values = |row: &[SqlValue]| row.iter().map(SqlValue::to_hrana).collect::<Vec<_>>();
-        json!({"op": self.op.code(), "t": self.table, "c": self.columns,
+        let op = if self.narrowed && self.op == Op::Update {
+            NARROWED_UPDATE
+        } else {
+            self.op.code()
+        };
+        json!({"op": op, "t": self.table, "c": self.columns,
                "o": values(&self.old), "n": values(&self.new)})
     }
 
@@ -213,11 +227,16 @@ impl Change {
                 .map(SqlValue::from_hrana)
                 .collect()
         };
+        let code = row["op"].as_str();
+        let narrowed = code == Some(NARROWED_UPDATE);
         Ok(Change {
-            op: row["op"]
-                .as_str()
-                .and_then(Op::parse)
-                .ok_or("change without an op")?,
+            op: if narrowed {
+                Some(Op::Update)
+            } else {
+                code.and_then(Op::parse)
+            }
+            .ok_or("change without an op")?,
+            narrowed,
             table: row["t"].as_str().ok_or("change without a table")?.into(),
             columns: row["c"]
                 .as_array()
@@ -391,6 +410,7 @@ pub(crate) fn attach(connection: &Connection, graph: &Path) -> Result<(), String
                     columns: columns.clone(),
                     old,
                     new,
+                    narrowed: false,
                 };
                 Ok(change.to_json().to_string())
             },
@@ -474,6 +494,7 @@ fn narrow_updates(connection: &Connection, changes: &mut [Change]) -> Result<(),
         change.columns = keep.iter().map(|&i| full_columns[i].clone()).collect();
         change.old = keep.iter().map(|&i| old[i].clone()).collect();
         change.new = keep.iter().map(|&i| new[i].clone()).collect();
+        change.narrowed = true;
     }
     Ok(())
 }
@@ -1188,6 +1209,16 @@ pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
+/// Whether a take-back target the primary does not hold keeps its local row.
+#[derive(Clone, Copy, PartialEq)]
+enum KeepOnEmpty {
+    No,
+    Yes,
+    /// Keep only while the target at this index, the update's old key,
+    /// reads empty too.
+    IfAbsent(usize),
+}
+
 /// Take the primary's rows back for the nodes the refusal named, re-queue
 /// the batch's other writes for the next flush, keep the refused statements
 /// for retry or inspection, and clear the batch from the outbox, in one
@@ -1226,7 +1257,8 @@ fn repair(
                 .iter()
                 .any(|id| refused_ids.contains(id))
     };
-    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>, bool)> = Vec::new();
+    let mut targets: Vec<(String, Vec<String>, Vec<String>, Vec<SqlValue>, KeepOnEmpty)> =
+        Vec::new();
     for change in changes
         .iter()
         .filter(|c| taken_back(c) && c.op != Op::Insert)
@@ -1255,13 +1287,23 @@ fn repair(
         // would amputate the columns it does not name.
         let all_columns: Vec<String> = info.iter().map(|(name, _)| name.clone()).collect();
         // An update whose target the primary lacks keeps its local row; a
-        // delete completed there, so its absence removes the local row.
-        let keep_on_empty = change.op == Op::Update;
-        for row in [&change.old, &change.new] {
+        // delete completed there, so its absence removes the local row. An
+        // update that moved the row's key keeps its new key only while the
+        // primary lacks the old one too: a primary that still holds the old
+        // key has the row there, and a kept new key would be a second copy.
+        let mut old_at: Option<usize> = None;
+        for (new_image, row) in [(false, &change.old), (true, &change.new)] {
             if row.is_empty() {
                 continue;
             }
             let values: Vec<SqlValue> = key.iter().map(|&i| row[i].clone()).collect();
+            let keep_on_empty = match old_at {
+                _ if change.op != Op::Update => KeepOnEmpty::No,
+                Some(j) if new_image && targets.get(j).is_some_and(|t| t.3 != values) => {
+                    KeepOnEmpty::IfAbsent(j)
+                }
+                _ => KeepOnEmpty::Yes,
+            };
             let target = (
                 change.table.clone(),
                 all_columns.clone(),
@@ -1269,8 +1311,15 @@ fn repair(
                 values,
                 keep_on_empty,
             );
-            if !targets.contains(&target) {
-                targets.push(target);
+            let at = match targets.iter().position(|t| *t == target) {
+                Some(at) => at,
+                None => {
+                    targets.push(target);
+                    targets.len() - 1
+                }
+            };
+            if !new_image {
+                old_at = Some(at);
             }
         }
     }
@@ -1290,8 +1339,14 @@ fn repair(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
     let mut kept_unlanded = 0usize;
+    let absent: Vec<bool> = fetched.iter().map(Vec::is_empty).collect();
     for ((table, columns, names, values, keep_on_empty), rows) in targets.iter().zip(fetched) {
-        if rows.is_empty() && *keep_on_empty {
+        let keep = match *keep_on_empty {
+            KeepOnEmpty::No => false,
+            KeepOnEmpty::Yes => true,
+            KeepOnEmpty::IfAbsent(old) => absent.get(old).copied().unwrap_or(false),
+        };
+        if rows.is_empty() && keep {
             kept_unlanded += 1;
             continue;
         }
@@ -3135,6 +3190,28 @@ mod tests {
     }
 
     #[test]
+    fn a_narrowed_update_ships_under_an_op_code_a_legacy_replica_refuses() {
+        let update = |narrowed| Change {
+            op: Op::Update,
+            table: "nodes".to_string(),
+            columns: vec!["id".to_string(), "title".to_string()],
+            old: vec![SqlValue::Text("x-1".into()), SqlValue::Text("a".into())],
+            new: vec![SqlValue::Text("x-1".into()), SqlValue::Text("b".into())],
+            narrowed,
+        };
+        let narrowed = update(true).to_json();
+        assert!(narrowed.to_string().contains(r#""op":"p""#));
+        assert!(
+            Op::parse(NARROWED_UPDATE).is_none(),
+            "a reader that knows only i/u/d must fail on a narrowed update"
+        );
+        assert_eq!(Change::from_json(&narrowed).unwrap(), update(true));
+        let full = update(false).to_json();
+        assert!(full.to_string().contains(r#""op":"u""#));
+        assert_eq!(Change::from_json(&full).unwrap(), update(false));
+    }
+
+    #[test]
     fn the_stale_row_guard_text_names_the_row_instead_of_the_check() {
         let changes = vec![Change {
             op: Op::Update,
@@ -3142,6 +3219,7 @@ mod tests {
             columns: vec!["note".to_string()],
             old: vec![],
             new: vec![],
+            narrowed: false,
         }];
         let message = refusal_message(
             "remote store http://linux1:18080: SQLite error: CHECK constraint failed: n = 1",

@@ -257,9 +257,7 @@ pub fn capped_tail(transcript: &Path) -> TailReading {
     }
 }
 
-/// The claude-shaped verdict scan over transcript LINES, so the
-/// stored-records reader (`daemon/transcript_push.rs`) reuses the exact
-/// verdict logic instead of a forked copy. `size` is the window's byte size,
+/// The claude-shaped verdict scan over transcript LINES. `size` is the window's byte size,
 /// which the window-miss unknowns still name.
 pub(crate) fn capped_tail_lines(lines: &[String], size: u64) -> TailReading {
     for line in lines.iter().rev() {
@@ -392,64 +390,6 @@ pub(crate) fn codex_capped_tail_lines(lines: &[String], size: u64) -> TailReadin
 // ---------------------------------------------------------------------------
 // Stored-records tail: the sandboxed-session lane
 // ---------------------------------------------------------------------------
-
-/// The capped-tail verdict for one session, stored records FIRST: the
-/// transcripts journal's rows for `session_id` are scanned with the same
-/// verdict logic as the file, and a session the store holds nothing for
-/// falls back to the transcript file. Neither source answers, the verdict
-/// says so (`unknown`), never idle: a live sandboxed worker with an
-/// unreadable transcript must not read as parked.
-pub(crate) fn capped_tail_stored(
-    journal: &std::path::Path,
-    session_id: &str,
-    codex: bool,
-    fallback: Option<&std::path::Path>,
-) -> TailReading {
-    let scan = if codex {
-        codex_capped_tail_lines
-    } else {
-        capped_tail_lines
-    };
-    if let Some(lines) = crate::daemon::transcript_push::stored_lines(journal, session_id) {
-        let size = lines.iter().map(|l| l.len() as u64).sum();
-        let (ts, excerpt, unknown) = scan(&lines, size);
-        if unknown.is_none() {
-            return (ts, excerpt, None);
-        }
-        // Stored rows exist but the window missed: the file may hold the
-        // newer rows the hook has not pushed yet, so fall through.
-        stored_fallback(codex, fallback, unknown)
-    } else {
-        stored_fallback(codex, fallback, None)
-    }
-}
-
-/// The file fallback of the stored-first read, through the same shape scan:
-/// the harness dispatch rides `codex`. A missing or unreadable path reads
-/// the honest unknown: never idle, never parked.
-fn stored_fallback(
-    codex: bool,
-    fallback: Option<&std::path::Path>,
-    unknown: Option<String>,
-) -> TailReading {
-    if let Some(path) = fallback.filter(|p| p.is_file()) {
-        let (size, lines) = match tail_window_lines(path) {
-            Ok(v) => v,
-            Err(reason) => return (None, None, Some(reason)),
-        };
-        let scan = if codex {
-            codex_capped_tail_lines
-        } else {
-            capped_tail_lines
-        };
-        return scan(&lines, size);
-    }
-    (
-        None,
-        None,
-        unknown.or(Some("transcript-not-found".to_string())),
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Reset + timezone audit
@@ -747,6 +687,11 @@ pub fn snapshot_with(
         let Some(name) = s_field(row, "name") else {
             continue;
         };
+        // A sandbox row never joins an account's cap lane: its transcript is
+        // sandbox content, and sandbox content is never authority.
+        if s_field(row, "sandbox_transcript").is_some() {
+            continue;
+        }
         let name = name.to_string();
         // Codex rows carry the thread UUID in `harness_session_id`; the
         // plain `session_id` field is the rarer spelling. The handoff
@@ -809,8 +754,6 @@ pub fn snapshot_with(
                 })
             });
         member.transcript = transcript.as_ref().map(|p| p.to_string_lossy().to_string());
-        let journal =
-            crate::paths::AgentsHome::at(scan.compaction_home.clone()).transcripts_journal();
         if let Some(t) = &transcript {
             let (ts, excerpt, unknown) = if harness.as_harness() == Harness::Codex {
                 codex_capped_tail(t)
@@ -832,19 +775,6 @@ pub fn snapshot_with(
             );
             if cs.possibly_compacting() {
                 member.held = Some("compacting".to_string());
-            }
-        } else if let Some(sid) = session_id.as_deref() {
-            // The sandboxed lane: no host-visible transcript file, but the
-            // session's turn hook may be pushing stored records. Stored
-            // first; neither source answers `unknown`, never idle, so a live
-            // sandboxed worker is never parked or reaped as quiet.
-            let (ts, excerpt, unknown) =
-                capped_tail_stored(&journal, sid, harness.as_harness() == Harness::Codex, None);
-            member.newest_assistant = ts;
-            member.cap_unknown = unknown;
-            if let Some(excerpt) = excerpt {
-                member.capped = true;
-                member.excerpt = Some(excerpt);
             }
         } else if bridge_key.is_none() {
             member.cap_unknown = Some("transcript-not-found".to_string());
@@ -1117,49 +1047,10 @@ pub fn questions_path(home: &AgentsHome) -> PathBuf {
 // Leaving (wave 3): short waits hold, sleep hours decide, else ask.
 // ---------------------------------------------------------------------------
 
-/// True when `now_epoch` falls inside `cfg.sleep_hours` ("HH:MM-HH:MM")
-/// resolved in `cfg.sleep_timezone` (IANA; empty = the machine's local zone).
-/// A window that crosses midnight is a window, not an error.
+/// True when the user is away at `now_epoch`: outside their `[user]` working
+/// hours (see [`crate::agents_config::UserHours`]).
 pub fn in_sleep_window(cfg: &ProviderCapConfig, now_epoch: i64) -> bool {
-    use chrono::{Local, TimeZone, Timelike};
-    let (start, end) = match parse_sleep_hours(&cfg.sleep_hours) {
-        Some(v) => v,
-        None => return false,
-    };
-    let local_minutes: i64 = if cfg.sleep_timezone.is_empty() {
-        Local
-            .timestamp_opt(now_epoch, 0)
-            .single()
-            .map(|dt| (dt.hour() as i64) * 60 + dt.minute() as i64)
-            .unwrap_or(0)
-    } else {
-        let tz = match cfg.sleep_timezone.parse::<chrono_tz::Tz>() {
-            Ok(tz) => tz,
-            Err(_) => return false, // an unparseable zone is never "asleep"
-        };
-        tz.timestamp_opt(now_epoch, 0)
-            .single()
-            .map(|dt| (dt.hour() as i64) * 60 + dt.minute() as i64)
-            .unwrap_or(0)
-    };
-    if start <= end {
-        local_minutes >= start && local_minutes < end
-    } else {
-        local_minutes >= start || local_minutes < end
-    }
-}
-
-fn parse_sleep_hours(spec: &str) -> Option<(i64, i64)> {
-    let spec = spec.trim();
-    if spec.is_empty() {
-        return None;
-    }
-    let (a, b) = spec.split_once('-')?;
-    let hm = |s: &str| -> Option<i64> {
-        let (h, m) = s.trim().split_once(':')?;
-        Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?)
-    };
-    Some((hm(a)?, hm(b)?))
+    cfg.user_hours.away(now_epoch)
 }
 
 /// The operator's recorded answer for a lane, from `provider-cap decide`.
@@ -1833,13 +1724,34 @@ pub struct LeaveDeps {
 }
 
 /// The move destinations when no fallback grid is configured: the route
-/// lanes `[provider_cap] destinations` names, in order. Each lane template
-/// carries its own harness, model and effort.
+/// lanes `[provider_cap] destinations` names, in order. A vendor-backed lane
+/// goes out as `--route <lane>`; a harness-native row declares no route, so
+/// spawn refuses it there and it goes out as its own harness and model.
 fn configured_destinations(cfg: &ProviderCapConfig) -> Vec<(String, Vec<String>)> {
+    let cwd = std::env::current_dir().unwrap_or_default();
     cfg.destinations
         .iter()
-        .map(|route| (route.clone(), vec!["--route".to_string(), route.clone()]))
+        .map(|name| {
+            let row = crate::spawn_route::lane_row(name, &cwd);
+            (name.clone(), destination_flags(name, row.as_ref()))
+        })
         .collect()
+}
+
+/// The spawn flags for one named destination lane row.
+fn destination_flags(name: &str, row: Option<&Value>) -> Vec<String> {
+    let field = |k: &str| {
+        row.and_then(|r| r.get(k))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    };
+    let (harness, model) = (field("harness"), field("model"));
+    if field("vendor").is_empty() && !harness.is_empty() && !model.is_empty() {
+        return vec!["-H".into(), harness, format!("--model={model}")];
+    }
+    vec!["--route".to_string(), name.to_string()]
 }
 
 fn alert_marker(home: &AgentsHome, lane: &str) -> PathBuf {
@@ -2826,7 +2738,6 @@ mod tests {
         let _ = std::fs::create_dir_all(lanes_dir(&home));
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
-            sleep_hours: String::new(),
             mode: "ask".into(),
             ..Default::default()
         };
@@ -2852,11 +2763,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.root());
         let lane = lane_fixture(Some(now_epoch_secs() + 3 * 3600), None);
         let cfg = ProviderCapConfig {
-            // 24:00, not 23:59: the window is end-exclusive, so 23:59 is
-            // awake for one minute a day and this CI test ran inside it
-            // (2026-09-26 23:59 UTC). The test wants "asleep now", always.
-            sleep_hours: "00:00-24:00".into(),
-            sleep_timezone: String::new(),
+            user_hours: crate::agents_config::UserHours::always_away(),
             mode: "ask".into(),
             ..Default::default()
         };
@@ -2877,6 +2784,22 @@ mod tests {
             confirmed_pos < stopped_pos,
             "spawn-confirmed before stopped"
         );
+    }
+
+    #[test]
+    fn a_native_destination_row_resolves_to_harness_and_model_not_route() {
+        let native =
+            json!({"found": true, "vendor": "", "harness": "codex", "model": "gpt-6-luna"});
+        assert_eq!(
+            destination_flags("codex-luna", Some(&native)),
+            ["-H", "codex", "--model=gpt-6-luna"]
+        );
+        let routed = json!({"found": true, "vendor": "zai", "harness": "claude", "model": "glm"});
+        assert_eq!(
+            destination_flags("zai-flash", Some(&routed)),
+            ["--route", "zai-flash"]
+        );
+        assert_eq!(destination_flags("nope", None), ["--route", "nope"]);
     }
 
     /// Triage on a measured strand: important work moves to the configured

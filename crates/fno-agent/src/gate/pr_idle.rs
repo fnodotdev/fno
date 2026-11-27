@@ -1,18 +1,22 @@
 //! The idle-PR alarm: a PR that sits green, mergeable and review-covered with
 //! nobody merging it. The owning worker merges by law; this arm is the
 //! backstop for the worker that left and the lead that swept only its wave.
-//! Each pass lists every open PR of every registry repo and reads each
-//! non-draft one through the status door, so a read rides the shared status
-//! cache and the account poller instead of new GitHub calls. The status
-//! `ready` verdict is the merge gate's own answer, so a held, uncovered or
-//! visual-approval PR never reads ready; `green` keeps an unmeasured head
-//! out, because ready stays true while CI sits queued (unmeasured CI warns,
-//! never blocks). The first ready-and-green sighting of a head starts the
-//! clock under `pr-idle/<repo>-<pr>.json`. At 2 hours mail goes to the live
-//! lead whose scope names the PR repo's project, else - when no live scope
-//! covers the repo - to the live workers registered in the repo, and the
-//! operator gets a phone notice; at 6 hours both are raised again. A new
-//! head, a not-ready or not-green read, or a closed PR resets it.
+//! Each pass lists every open PR of every registry repo. It skips drafts
+//! and PRs whose body names a merge hold. It reads each other PR through
+//! the status door, so a read rides the shared status cache and the account
+//! poller instead of new GitHub calls. The status `ready` verdict answers
+//! one question only: does the merge decision list a blocker. Missing review
+//! coverage and a missing `Docs:` line are warnings there, though the merge
+//! door holds on the Docs line and review law holds on coverage. The alarm
+//! reads those warnings itself and stays quiet while one stands. `green`
+//! keeps an unmeasured head out, because ready stays true while CI sits
+//! queued (unmeasured CI warns, never blocks). The first clear sighting of a
+//! head starts the clock under `pr-idle/<repo>-<pr>.json`. At 2 hours mail
+//! goes to the live lead whose scope names the PR repo's project, else -
+//! when no live scope covers the repo - to the live workers registered in
+//! the repo, and the operator gets a phone notice; at 6 hours both are
+//! raised again. A new head, a read that is held, not ready or not green, a
+//! closed PR or a PR its body holds resets it.
 //! Contract: docs/architecture/pr-heal.md, "The idle-PR alarm".
 
 use crate::paths::AgentsHome;
@@ -54,6 +58,10 @@ pub(crate) struct Read {
     pub head: String,
     pub ready: bool,
     pub green: bool,
+    /// The alarm stays quiet though `ready` reads true: the decision warns
+    /// that nobody reviewed the head, or that the merge door holds on the
+    /// `Docs:` line.
+    pub held: bool,
 }
 
 fn dir(home: &AgentsHome) -> PathBuf {
@@ -106,9 +114,10 @@ fn notice(slug: &str, pr: u64, age_ms: i64, level: u8) -> String {
 }
 
 /// Fold one repo's reads into its clocks and deliver every alarm that is due.
-/// `open` is the full open-PR listing, or None when it was unreadable: only a
-/// clean listing drops the clock of a PR that left it. `recipients` is the
-/// routed session list from [`route_recipients`], not every live lead.
+/// `open` is the set of PRs the pass may read, or None when the listing was
+/// unreadable: only a clean listing drops the clock of a PR that left the
+/// set. `recipients` is the routed session list from [`route_recipients`],
+/// not every live lead.
 pub(crate) fn run_repo(
     home: &AgentsHome,
     now: i64,
@@ -124,7 +133,7 @@ pub(crate) fn run_repo(
     let mut first_error = None;
     for read in reads {
         let path = file(home, slug, read.pr);
-        if !read.ready || !read.green {
+        if !read.ready || !read.green || read.held {
             let _ = std::fs::remove_file(&path);
             continue;
         }
@@ -251,6 +260,16 @@ pub(crate) fn route_recipients(
     out
 }
 
+/// The decision warnings that hold the alarm though `ready` reads true: the
+/// merge door holds the first, and review law holds the two coverage codes,
+/// which the merge door only warns on.
+fn warning_holds(code: &str) -> bool {
+    matches!(
+        code,
+        "docs_line_missing" | "review_coverage_uncovered" | "review_coverage_unknown"
+    )
+}
+
 /// The status door's verdict for one PR, or None when the door did not answer.
 fn status_read(root: &Path, pr: u64) -> Option<Read> {
     let payload = json!({"cwd": root.display().to_string(), "pr": pr});
@@ -258,19 +277,81 @@ fn status_read(root: &Path, pr: u64) -> Option<Read> {
     if code > 3 {
         return None;
     }
+    read_answer(pr, &stdout)
+}
+
+/// One door answer as the alarm reads it. `held` comes from the decision's
+/// own warnings, which `ready` leaves alone.
+fn read_answer(pr: u64, stdout: &str) -> Option<Read> {
     #[derive(Deserialize)]
     struct Answer {
         head: String,
         ready: bool,
         green: bool,
+        merge_decision: Option<Decision>,
     }
+    #[derive(Deserialize)]
+    struct Decision {
+        #[serde(default)]
+        warnings: Vec<DecisionWarning>,
+    }
+    #[derive(Deserialize)]
+    struct DecisionWarning {
+        code: String,
+    }
+    // An answer that does not parse is no read, and the alarm stays quiet on
+    // the PR.
     let answer: Answer = serde_json::from_str(stdout.trim()).ok()?;
+    // A ready answer that carries no decision is no proof of review, so it
+    // holds as well.
+    let held = answer.ready
+        && answer
+            .merge_decision
+            .is_none_or(|d| d.warnings.iter().any(|w| warning_holds(&w.code)));
     Some(Read {
         pr,
         head: answer.head,
         ready: answer.ready,
         green: answer.green,
+        held,
     })
+}
+
+/// One row of the open-PR listing, read once where the listing meets the
+/// alarm.
+#[derive(Deserialize)]
+struct ListedPull {
+    number: u64,
+    draft: Option<bool>,
+    body: Option<String>,
+}
+
+/// The open PRs the alarm may read: not a draft, and a body that names no
+/// merge hold. Leaving one out drops its clock, so it starts fresh when the
+/// PR returns.
+fn open_prs(pulls: Vec<Value>) -> HashSet<u64> {
+    pulls
+        .into_iter()
+        // A row that does not parse names no PR the alarm can read, so it
+        // stays out and the alarm stays quiet on it.
+        .filter_map(|p| serde_json::from_value::<ListedPull>(p).ok())
+        .filter(|p| p.draft != Some(true) && !names_merge_hold(p.body.as_deref().unwrap_or("")))
+        .map(|p| p.number)
+        .collect()
+}
+
+/// Whether a PR body names a merge hold: a line that opens with the words
+/// `Merge hold`, or the order "do not merge" anywhere. The body stays held
+/// while it carries the words, and the author removes them when the hold
+/// lifts. A comment is not read.
+fn names_merge_hold(body: &str) -> bool {
+    let text = body.to_lowercase().replace('\u{2019}', "'");
+    text.lines().any(|line| {
+        line.trim_start_matches(['#', '*', '-', '>', ' ', '\t'])
+            .starts_with("merge hold")
+    }) || ["do not merge", "do-not-merge", "don't merge"]
+        .iter()
+        .any(|order| text.contains(order))
 }
 
 pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
@@ -302,13 +383,10 @@ pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
                 continue;
             }
         };
-        // A draft is not open for merging: leaving it out of the set drops its
-        // clock, so a PR back from draft starts a fresh one.
-        let open: HashSet<u64> = pulls
-            .iter()
-            .filter(|p| p.get("draft").and_then(Value::as_bool) != Some(true))
-            .filter_map(|p| p.get("number").and_then(Value::as_u64))
-            .collect();
+        // A draft is not open for merging, and neither is a PR whose body
+        // names a merge hold: leaving either out of the set drops its clock,
+        // so it starts a fresh one when the PR returns.
+        let open = open_prs(pulls);
         let reads: Vec<Read> = open
             .iter()
             .filter_map(|pr| status_read(root, *pr))
@@ -367,7 +445,42 @@ mod tests {
             head: head.into(),
             ready: true,
             green: true,
+            held: false,
         }
+    }
+
+    /// The door's answer for a ready and green head that carries these
+    /// warnings.
+    fn answer(warnings: Value) -> String {
+        json!({"head": "abc", "ready": true, "green": true, "merge_decision": {"warnings": warnings}})
+            .to_string()
+    }
+
+    /// One pass of [`run_repo`] over these reads: how many lead mails and
+    /// phone notices it sent.
+    fn sends(home: &AgentsHome, now: i64, open: &HashSet<u64>, reads: &[Read]) -> (usize, u32) {
+        let mail: RefCell<Vec<(String, String)>> = Default::default();
+        let mut deliver = |argv: &[String], _: &str| {
+            mail.borrow_mut().push((argv[8].clone(), argv[9].clone()));
+            (0, "accepted-new-turn".into(), String::new())
+        };
+        let phones: RefCell<u32> = Default::default();
+        let mut phone = |_: &str, _: &str, _: Option<&str>| {
+            *phones.borrow_mut() += 1;
+            true
+        };
+        run_repo(
+            home,
+            now,
+            "o/r",
+            Some(open),
+            reads,
+            &["lead-a".to_string()],
+            &mut deliver,
+            &mut phone,
+        )
+        .unwrap();
+        (mail.into_inner().len(), phones.into_inner())
     }
 
     #[test]
@@ -425,41 +538,120 @@ mod tests {
     }
 
     #[test]
-    fn a_ready_but_not_green_read_starts_no_clock_and_never_alarms() {
+    fn a_held_or_unmeasured_read_starts_no_clock_and_never_alarms() {
         let temp = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(temp.path().join("agents"));
-        let mut quiet = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
-        let phones: RefCell<u32> = Default::default();
-        let mut phone = |_: &str, _: &str, _: Option<&str>| {
-            *phones.borrow_mut() += 1;
-            true
-        };
         let open: HashSet<u64> = [7].into();
+        let t0 = 1_000_000;
         // CI never measured this head: the status door reads ready, not green.
-        let queued = [Read {
+        let unmeasured = [Read {
             green: false,
             ..ready(7, "abc")
         }];
-        let mut pass = |now: i64| {
-            run_repo(
-                &home,
-                now,
-                "o/r",
-                Some(&open),
-                &queued,
-                &["lead-a".to_string()],
-                &mut quiet,
-                &mut phone,
-            )
-            .unwrap()
-        };
-        pass(1_000_000);
-        pass(1_000_000 + RAISE_AFTER_MS);
-        pass(1_000_000 + RAISE_AFTER_MS + 60_000);
+        // Ready and green, and held all the same: the merge door holds on the
+        // Docs line, or nobody reviewed the head.
+        let held: Vec<Read> = [
+            "docs_line_missing",
+            "review_coverage_uncovered",
+            "review_coverage_unknown",
+        ]
+        .iter()
+        .map(|code| read_answer(7, &answer(json!([{ "code": code }]))).unwrap())
+        .collect();
+        // A ready answer that carries no decision is no proof of review.
+        let undecided = [read_answer(
+            7,
+            &json!({"head": "abc", "ready": true, "green": true}).to_string(),
+        )
+        .unwrap()];
+        assert!(
+            held.iter()
+                .chain(&undecided)
+                .all(|r| r.held && r.ready && r.green),
+            "{held:?}"
+        );
+        for now in [t0, t0 + RAISE_AFTER_MS, t0 + RAISE_AFTER_MS + 60_000] {
+            assert_eq!(sends(&home, now, &open, &unmeasured), (0, 0));
+            for read in held.iter().chain(&undecided) {
+                assert_eq!(sends(&home, now, &open, std::slice::from_ref(read)), (0, 0));
+            }
+        }
         assert!(
             !file(&home, "o/r", 7).exists(),
-            "no clock starts on an unmeasured head"
+            "no clock on a held or unmeasured read"
         );
-        assert_eq!(*phones.borrow(), 0, "no alarm without green");
+        body_hold_drops_the_clock(&home, t0);
+        // A warning that holds no merge holds no alarm.
+        let look_only = read_answer(7, &answer(json!([{ "code": "visual_approval" }]))).unwrap();
+        assert!(look_only.ready && look_only.green && !look_only.held);
+        // An answer with no head is no read, and a PR with no read keeps its
+        // clock.
+        let headless = json!({"pr": "7", "verdict": "unknown", "green": false, "settled": false, "ready": false});
+        assert!(read_answer(7, &headless.to_string()).is_none());
+        let clock = Seen {
+            head: "abc".into(),
+            ready_since_ms: t0,
+            ..Seen::default()
+        };
+        assert!(state::write_json_atomic(&file(&home, "o/r", 7), &clock).is_ok());
+        assert_eq!(sends(&home, t0, &open, &[]), (0, 0));
+        assert!(
+            file(&home, "o/r", 7).exists(),
+            "a PR with no read keeps its clock"
+        );
+    }
+
+    /// A PR whose body names a merge hold leaves the open set the way a draft
+    /// does, loses its clock, and starts a fresh one when the words go. The
+    /// order "do not merge" holds a PR the same way. The phrase "merge hold"
+    /// inside a sentence does not.
+    fn body_hold_drops_the_clock(home: &AgentsHome, t0: i64) {
+        let row = |number: u64, draft: bool, body: Option<&str>| json!({"number": number, "draft": draft, "body": body});
+        let listing = |body: &str| {
+            open_prs(vec![
+                row(7, false, Some("A plain change.")),
+                row(8, false, Some(body)),
+                row(
+                    9,
+                    false,
+                    Some("Docs only. Do not merge this PR before that code merges."),
+                ),
+                row(10, true, Some("A draft.")),
+                row(
+                    11,
+                    false,
+                    Some("A merge hold in the plan frontmatter blocks dispatch."),
+                ),
+                row(12, false, None),
+            ])
+        };
+        let held_body = "## Merge hold\n\nThe merge waits for the release tag.";
+        let skipped: HashSet<u64> = [7, 11, 12].into();
+        assert_eq!(listing(held_body), skipped);
+        assert_eq!(listing("**MERGE HOLD** until the release tag"), skipped);
+        let stale = Seen {
+            head: "def".into(),
+            ready_since_ms: t0,
+            raised: 1,
+            ..Seen::default()
+        };
+        let path = file(home, "o/r", 8);
+        assert!(state::write_json_atomic(&path, &stale).is_ok());
+        assert_eq!(sends(home, t0, &skipped, &[]), (0, 0));
+        assert!(!path.exists(), "a body-held PR loses its clock");
+        // The author removed the words: the PR is open again, and its clock
+        // starts from zero.
+        let open_again: HashSet<u64> = [7, 8, 11, 12].into();
+        assert_eq!(listing("A plain change too."), open_again);
+        assert_eq!(
+            sends(home, t0 + RERAISE_AFTER_MS, &open_again, &[ready(8, "def")]),
+            (0, 0)
+        );
+        let seen: Seen = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            seen.ready_since_ms,
+            t0 + RERAISE_AFTER_MS,
+            "the clock starts from zero"
+        );
     }
 }

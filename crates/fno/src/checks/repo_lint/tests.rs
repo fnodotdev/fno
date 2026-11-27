@@ -56,6 +56,36 @@ fn state_roots_rule_a_fires_on_a_hand_built_path_and_both_directions_hold() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
+fn state_roots_rule_c_names_a_planted_join_the_table_does_not_carry() {
+    let dir = fixture("state-roots-c");
+    write(
+        &dir,
+        "docs/state-root-layout.tsv",
+        "db\tdb\tkeep\tdaemon\nbriefs\tdb/briefs\tdir\tdaemon\n.reconcile-*\t-\tpark\tdaemon\n",
+    );
+    write(
+        &dir,
+        "crates/x/src/a.rs",
+        "fn a(state_root: &Path) {\n    let _ = state_root.join(\"db\").join(\"x\");\n    let _ = state_root.join(\"briefs\");\n    let _ = state_root.join(\".reconcile-1\");\n    let _ = place(&state_root, \"planted-new\");\n}\n",
+    );
+    let hits = state_roots::rule_c_violations(&dir);
+    assert_eq!(hits.len(), 1, "only the untabled name fires: {hits:?}");
+    let (name, rel, msg) = hits.first().expect("one hit");
+    assert_eq!(
+        (name.as_str(), rel.as_str()),
+        ("planted-new", "crates/x/src/a.rs")
+    );
+    assert!(msg.contains("crates/x/src/a.rs:5"), "{msg}");
+    std::fs::remove_file(dir.join("docs/state-root-layout.tsv")).unwrap();
+    assert_eq!(
+        state_roots::rule_c_violations(&dir).len(),
+        1,
+        "no table fails closed"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn spawn_paths_fires_on_a_hand_assembled_session_argv() {
     let dir = fixture("spawn-paths");
     write(
@@ -142,4 +172,21 @@ fn claims_pattern_gains_only_the_sequential_arm() {
     // Another prefix's token and a zero lead stay prose.
     assert!(!seq.is_match("u-9"));
     assert!(!seq.is_match("t-07"));
+}
+
+#[test]
+fn door_prefix_answers_the_documented_default() {
+    // Admit arm: a receipt naming x- trims to x.
+    assert_eq!(door_prefix_from(Some(r#"{"prefix": "x-"}"#)), "x");
+    // Refuse arms: a failed, empty or malformed door answers the
+    // documented default, never the legacy ab.
+    assert_eq!(door_prefix_from(None), "x");
+    assert_eq!(door_prefix_from(Some("")), "x");
+    assert_eq!(door_prefix_from(Some("not json")), "x");
+    // The allowlist shape keeps the legacy ab explicitly.
+    let allowlist: std::collections::BTreeSet<String> = [door_prefix_from(None), "ab".to_string()]
+        .into_iter()
+        .collect();
+    assert!(allowlist.contains("x"));
+    assert!(allowlist.contains("ab"));
 }

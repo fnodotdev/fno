@@ -567,6 +567,7 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
         .and_then(|n| n.difficulty.as_deref())
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
+    let difficulty_explicit = !band_raw.is_empty();
     let band = if BAND_RANK_KEYS.contains(&band_raw.as_str()) {
         band_raw
     } else {
@@ -599,9 +600,11 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     }
     // p0 bills at the strong band, p3 prefers the cheap one; the planning
     // role floors at the strong end because a plan earns the cheap tier.
+    // The node's own difficulty is the floor: p3 cheapens only a node that
+    // names no difficulty, and p0 still raises a weaker band.
     let mut candidate_band = if prio == "p0" {
         "high".to_string()
-    } else if prio == "p3" {
+    } else if prio == "p3" && !difficulty_explicit {
         "low".to_string()
     } else {
         band.clone()
@@ -3373,9 +3376,10 @@ mod tests {
         assert_eq!(out["candidate"]["route"], "zai/glm-5.3-flash[1m]");
         assert_eq!(out["candidate"]["account"], "zai-main");
         // AC2/AC4-EDGE: a routeless winner emits neither key, byte-identical
-        // to the pre-port shape for every anthropic row.
+        // to the pre-port shape for every anthropic row. Difficulty-less p3
+        // keeps the cheap band.
         let out = resolve_slot_payload(&payload(json!({
-            "lanes_raw": [], "node": {"difficulty": "high", "priority": "p3"},
+            "lanes_raw": [], "node": {"priority": "p3"},
             "inventory": {"declared": true, "objective": "cheapest-that-clears",
                           "rows": [
                 {"name": "flash", "harness": "claude", "model": "glm", "band": "high",
@@ -3401,7 +3405,7 @@ mod tests {
         assert!(chain_of(&out).contains(&"grid=invalid-input".to_string()));
 
         let out = resolve_slot_payload(&payload(json!({
-            "lanes_raw": [], "node": {"difficulty": "high", "priority": "p3"},
+            "lanes_raw": [], "node": {"priority": "p3"},
             "inventory": {"declared": true, "objective": "cheapest-that-clears",
                           "rows": [
                 {"name": "unb", "harness": "claude", "model": "m-unb"},
@@ -3415,6 +3419,48 @@ mod tests {
         assert!(chain
             .iter()
             .any(|l| l.contains("grid candidate claude/lowrow capacity=ok window=w")));
+
+        // An explicit difficulty is the band floor: high + p3 bills the high
+        // band (the 2026-11-24 spawn-door defect dispatched such a node to
+        // the cheap lane), and medium + p3 holds its own rung. p0 still
+        // raises, and a difficulty-less p3 lands low (the fixture above).
+        let out = resolve_slot_payload(&payload(json!({
+            "lanes_raw": [], "node": {"difficulty": "high", "priority": "p3"},
+            "inventory": {"declared": true, "objective": "cheapest-that-clears",
+                          "rows": [
+                {"name": "flash", "harness": "claude", "model": "glm", "band": "high",
+                 "route": "zai/glm-5.3-flash[1m]", "account": "zai-main"},
+                {"name": "bare", "harness": "claude", "model": "sonnet", "band": "low"},
+            ]},
+        })));
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("glm")
+        );
+        let out = resolve_slot_payload(&payload(json!({
+            "lanes_raw": [], "node": {"difficulty": "medium", "priority": "p3"},
+            "inventory": {"declared": true, "objective": "cheapest-that-clears",
+                          "rows": [
+                {"name": "mid", "harness": "claude", "model": "m-mid", "band": "medium"},
+                {"name": "lowrow", "harness": "claude", "model": "m-low", "band": "low"},
+            ]},
+        })));
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("m-mid")
+        );
+        let out = resolve_slot_payload(&payload(json!({
+            "lanes_raw": [], "node": {"difficulty": "low", "priority": "p0"},
+            "inventory": {"declared": true, "objective": "cheapest-that-clears",
+                          "rows": [
+                {"name": "lowrow", "harness": "claude", "model": "m-low", "band": "low"},
+                {"name": "top", "harness": "claude", "model": "m-top", "band": "high"},
+            ]},
+        })));
+        assert_eq!(
+            out.pointer("/candidate/model").and_then(Value::as_str),
+            Some("m-top")
+        );
 
         let out = resolve_slot_payload(&payload(json!({
             "lanes_raw": [], "node": {"difficulty": "low", "priority": "p2"},

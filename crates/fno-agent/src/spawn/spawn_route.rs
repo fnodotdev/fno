@@ -24,6 +24,9 @@ pub struct Route {
     pub model: String,
     pub effort: Option<String>,
     pub settings: String,
+    /// A codex route's `-c` tokens and key env; `env` then holds only the
+    /// provider stamp, so no settings file or `--print` line carries the key.
+    pub codex: Option<crate::codex_route::CodexRoute>,
 }
 
 /// How a spawn's `--route` proceeds on the Rust arm.
@@ -87,6 +90,9 @@ pub fn route_seam(
     let Some(route) = route else {
         return RouteSeam::None;
     };
+    if harness.as_harness() == Harness::Codex {
+        return codex_seam(route, substrate, cwd);
+    }
     if harness.as_harness() != Harness::Claude {
         return RouteSeam::Refuse(format!(
             "--route {route} requires the claude harness; got harness {} substrate {}. \
@@ -108,6 +114,34 @@ pub fn route_seam(
     }
 }
 
+/// The codex `--route` door. Only the headless lane carries it: a codex
+/// thread runs on the one shared app-server, which takes no per-thread
+/// provider tokens.
+fn codex_seam(route: &str, substrate: &str, cwd: &Path) -> RouteSeam {
+    if substrate != "headless" {
+        let reason = format!(
+            "codex carries a route on the headless lane only; got substrate {}. Pass --as headless",
+            py_repr(substrate)
+        );
+        return RouteSeam::Refuse(refused(route, &reason));
+    }
+    let (_, provider, model, effort) = match target_identity(route, cwd) {
+        Ok(identity) => identity,
+        Err(RefusalLine(line)) => return RouteSeam::Refuse(line),
+    };
+    match crate::codex_route::resolve_codex_route(cwd, &provider, model.trim()) {
+        Err(e) => RouteSeam::Refuse(refused(route, e.message())),
+        Ok(codex) => RouteSeam::Routed(Route {
+            env: BTreeMap::from([(ROUTE_PROVIDER_ENV.to_string(), provider.clone())]),
+            provider,
+            model: codex.model.clone(),
+            effort,
+            settings: String::new(),
+            codex: Some(codex),
+        }),
+    }
+}
+
 /// A route target resolved to its env, stamped with its provider: what the
 /// thread seam, the pane arm and the role table all launch on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +154,7 @@ pub struct Target {
 
 /// One declared lane row matched by name, the lookup [`resolve_target`] and
 /// [`route_vendor`] share; `None` when no row carries the name.
-fn lane_row(route: &str, cwd: &Path) -> Option<Value> {
+pub(crate) fn lane_row(route: &str, cwd: &Path) -> Option<Value> {
     let row = crate::route_gather::run_mode(
         &json!({"mode": "lane", "match": "name", "name": route}),
         cwd,
@@ -145,29 +179,31 @@ pub fn route_vendor(route: &str, cwd: &Path) -> Option<String> {
     (!vendor.is_empty()).then_some(vendor)
 }
 
-/// Resolve a `--route` value (`provider,model` or a declared lane name) to
-/// its env. `Err` is the refusal line, `cmd_spawn`'s words.
-pub fn resolve_target(
+/// A spawn refusal line, in the door's own words.
+struct RefusalLine(String);
+
+/// A `--route` value's identity: the pair form, else a declared lane. Answers
+/// (provider as written, provider lowercased, model, effort).
+fn target_identity(
     route: &str,
     cwd: &Path,
-    env_get: &dyn Fn(&str) -> Option<String>,
-) -> Result<Target, String> {
+) -> Result<(String, String, String, Option<String>), RefusalLine> {
     let (provider, model, effort) = match parse_target(route) {
         Some((p, m)) => (p, m, None),
         None => {
             let Some(row) = lane_row(route, cwd) else {
-                return Err(format!(
+                return Err(RefusalLine(format!(
                     "--route takes 'provider,model' or a declared lane name; got {}",
                     py_repr(route)
-                ));
+                )));
             };
             let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
             if field("vendor").is_empty() {
-                return Err(format!(
+                return Err(RefusalLine(format!(
                     "--route {} names a lane that declares no route; no worker launched, \
                      node stays dispatchable.",
                     py_repr(route)
-                ));
+                )));
             }
             let effort = Some(field("effort")).filter(|e| !e.is_empty());
             (field("vendor"), field("model"), effort)
@@ -176,8 +212,19 @@ pub fn resolve_target(
     // resolve_explicit_route: a blank provider or model resolves nothing.
     let pname = provider.trim().to_lowercase();
     if pname.is_empty() || model.trim().is_empty() {
-        return Err(refused(route, ROUTE_KEYLESS));
+        return Err(RefusalLine(refused(route, ROUTE_KEYLESS)));
     }
+    Ok((provider, pname, model, effort))
+}
+
+/// Resolve a `--route` value (`provider,model` or a declared lane name) to
+/// its env. `Err` is the refusal line, `cmd_spawn`'s words.
+pub fn resolve_target(
+    route: &str,
+    cwd: &Path,
+    env_get: &dyn Fn(&str) -> Option<String>,
+) -> Result<Target, String> {
+    let (provider, pname, model, effort) = target_identity(route, cwd).map_err(|r| r.0)?;
     let ctx = RouteCtx::Peer(pname.clone());
     let mut env = match claude_route(cwd, &pname, model.trim(), &ctx, env_get) {
         ClaudeRoute::Routed { env, .. } => env,
@@ -208,19 +255,26 @@ fn settled(refuse: &dyn Fn(&str) -> String, target: Target, cwd: &Path) -> Route
         .iter()
         .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
-    let settings =
-        match crate::route_settings::write_composed(&route_env, &Map::new(), None, None, None, cwd)
-        {
-            Ok(Some(path)) => path,
-            Ok(None) => return RouteSeam::Refuse(refuse("the route wrote no settings file")),
-            Err(e) => return RouteSeam::Refuse(refuse(&e)),
-        };
+    let settings = match crate::route_settings::write_composed(
+        &route_env,
+        &Map::new(),
+        None,
+        None,
+        None,
+        cwd,
+        None,
+    ) {
+        Ok(Some(path)) => path,
+        Ok(None) => return RouteSeam::Refuse(refuse("the route wrote no settings file")),
+        Err(e) => return RouteSeam::Refuse(refuse(&e)),
+    };
     RouteSeam::Routed(Route {
         env: target.env,
         provider: target.provider,
         model: target.model,
         effort: target.effort,
         settings,
+        codex: None,
     })
 }
 
@@ -274,7 +328,7 @@ pub fn role_seam(
 mod tests {
     use super::*;
 
-    const CLAUDE_ONLY: &str = "--route zai/glm-5.3 requires the claude harness; got harness 'codex' substrate 'thread'. A non-claude harness resolves its provider from its own config: pass that harness's own model id via --model instead (opencode spells it provider/model, e.g. zai-coding-plan/glm-5.3-flash).";
+    const CLAUDE_ONLY: &str = "--route zai/glm-5.3 requires the claude harness; got harness 'opencode' substrate 'thread'. A non-claude harness resolves its provider from its own config: pass that harness's own model id via --model instead (opencode spells it provider/model, e.g. zai-coding-plan/glm-5.3-flash).";
     const MALFORMED: &str =
         "--route takes 'provider,model' or a declared lane name; got 'no-such-lane'";
 
@@ -307,9 +361,23 @@ mod tests {
         let seam = |route, harness, substrate| route_seam(route, harness, substrate, &cwd, &no_env);
         assert_eq!(seam(None, "claude", "thread"), RouteSeam::None);
         assert_eq!(
-            seam(Some("zai/glm-5.3"), "codex", "thread"),
+            seam(Some("zai/glm-5.3"), "opencode", "thread"),
             RouteSeam::Refuse(CLAUDE_ONLY.into())
         );
+        // codex: a thread shares one app-server, so only headless routes.
+        assert_eq!(
+            seam(Some("zai/glm-5.3"), "codex", "thread"),
+            RouteSeam::Refuse(refused(
+                "zai/glm-5.3",
+                "codex carries a route on the headless lane only; got substrate 'thread'. Pass --as headless"
+            ))
+        );
+        // An anthropic-only vendor refuses on codex headless: unconfigured,
+        // or a claude-lane record, depending on the host's config stack.
+        assert!(matches!(
+            seam(Some("deepseek/deepseek-chat"), "codex", "headless"),
+            RouteSeam::Refuse(l) if l.starts_with("--route 'deepseek/deepseek-chat' refused (provider \"deepseek\"")
+        ));
         assert_eq!(
             seam(Some("zai/glm-5.3"), "claude", "cloud"),
             RouteSeam::Refuse(refused("zai/glm-5.3", "the cloud lane carries no route"))

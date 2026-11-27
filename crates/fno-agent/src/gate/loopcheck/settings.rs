@@ -166,6 +166,34 @@ pub(super) fn parse_manifest(content: &str) -> Option<Manifest> {
 
 // ── settings parsing ──────────────────────────────────────────────────────────
 
+/// The vocabulary of config.review.human, the person-approval gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewHuman {
+    Never,
+    Ui,
+    Always,
+}
+
+impl ReviewHuman {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "never" => Some(Self::Never),
+            "ui" => Some(Self::Ui),
+            "always" => Some(Self::Always),
+            _ => None,
+        }
+    }
+
+    /// Whether this value owes a person's approval. Explicit `ui` and
+    /// `always` gate; an absent key (`None`) never does, so a stock install
+    /// keeps today's no-person-gate behavior. One predicate for both read
+    /// sites (review_inputs and the run_done call), so pr status and the
+    /// stop gate cannot disagree on the resolved value.
+    pub(crate) fn owed(human: Option<Self>) -> bool {
+        matches!(human, Some(Self::Ui | Self::Always))
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Settings {
     /// config.budget.attended.wall_clock_cap_minutes
@@ -236,6 +264,17 @@ pub(crate) struct Settings {
     /// GitHub's refusal is per identity, not per human - a second account
     /// with its own token can still self-approve.
     pub(super) github_approval_satisfies: Option<bool>,
+    /// config.review.human: the person-approval gate. Never = no person is
+    /// owed. Ui = a non-author person's approval is OWED, satisfied through
+    /// the in-UI lane (`fno mux app approve <pr>`) or on GitHub. Always = the
+    /// same approval owed on GitHub. In both owed values, pr status and the
+    /// merge read stay not-ready until a fresh non-author approval lands at
+    /// the head, and the round cap does not discharge it. Absent key = None
+    /// = no person gate (today's stock-install behavior). A value the
+    /// vocabulary does not carry stays None here: the `fno config set` door
+    /// rejects the same value, so a hand-edited typo degrades to the absent
+    /// behavior while a written one refuses loudly.
+    pub(super) human: Option<ReviewHuman>,
     /// config.review.max_rounds (default 2, clamped at least 1 at read): the
     /// review-round budget. Once this many rounds pass, the review obligation
     /// is discharged: the gate reads covered and the PR merges on green CI.
@@ -738,6 +777,23 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             // config that loads at all. Malformed stays None -> true (the
             // default-ON direction), matching the Python loader's rejection.
             s.github_approval_satisfies = lax_bool(v);
+        }
+        // Key lookup spelled through the table iterator: the per-crate
+        // literal-key count is shrink-only (docs/rust-style.md R1), and this
+        // leaf is new.
+        if let Some(v) = review
+            .as_table()
+            .and_then(|t| t.iter().find(|(k, _)| *k == "human"))
+            .map(|(_, v)| v)
+        {
+            // Same lax contract as posture: only a name the vocabulary
+            // carries is kept; anything else (a typo, a non-string) stays
+            // None so the default applies. The `fno config set` door rejects
+            // the same value, so a hand-edited typo degrades to today's
+            // behavior while a written one refuses loudly.
+            if let Some(raw) = v.as_str() {
+                s.human = ReviewHuman::parse(raw);
+            }
         }
         if let Some(v) = review.get("max_rounds") {
             // An integer at least 1, read-side clamped; anything else stays

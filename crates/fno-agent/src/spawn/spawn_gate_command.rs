@@ -19,7 +19,7 @@ use serde_json::{json, Map, Value};
 
 use crate::agents_config;
 use crate::claims;
-use crate::spawn_gate::{self, GateFlags, GateInput};
+use crate::spawn_gate::{self, GateFlags, GateInput, LiveRead};
 use crate::spawn_gate_lanes;
 
 /// `spawn-gate`: one payload on stdin, one answer on stdout. Exit 0 whenever
@@ -404,6 +404,7 @@ mod probe {
                 }),
                 &[],
                 out,
+                &warnings,
             );
         }
 
@@ -434,6 +435,7 @@ mod probe {
                     json!({"generation": record.generation}),
                     &[],
                     out,
+                    &warnings,
                 );
             }
             crate::fleet_incident::Verdict::Unavailable(detail) => {
@@ -443,6 +445,7 @@ mod probe {
                     json!({"detail": detail}),
                     &[],
                     out,
+                    &warnings,
                 );
             }
         }
@@ -463,6 +466,7 @@ mod probe {
                 json!({"detail": detail}),
                 &[],
                 out,
+                &warnings,
             );
         }
 
@@ -492,6 +496,7 @@ mod probe {
                     receipt,
                     &[],
                     out,
+                    &warnings,
                 );
             }
         }
@@ -501,7 +506,13 @@ mod probe {
         // max_live, refused later, accepted) carries them. Reservations are
         // named beside the registry rows, each entry tagged with its kind.
         // Leads take no worker slot; their count rides beside the slots.
-        let all_live = spawn_gate::live_rows(&registry_path, &mut warnings);
+        let (all_live, dropped) = match spawn_gate::live_rows_checked(&registry_path, &mut warnings)
+        {
+            LiveRead::Rows { rows, dropped } => (rows, Some(dropped)),
+            // The filter's own degraded note rides `warnings`. A read that
+            // failed has no tally to print.
+            LiveRead::RegistryUnreadable(_) => (Vec::new(), None),
+        };
         let (slot_row_entries, leads) = crate::spawn_gate_slots::split_leads(all_live.clone());
         let slot_reservations = spawn_gate::live_worker_slot_claims(&mut warnings);
         let slots = slot_row_entries.len() + slot_reservations.len();
@@ -553,6 +564,13 @@ mod probe {
             })
         }));
         out.insert("slot_rows".into(), json!(slot_rows_json));
+        // Every live-status row the count left out, by reason, beside the
+        // rows it counted. From here on every verdict carries both: the
+        // object in `out`, the note line in `warnings`.
+        if let Some(dropped) = dropped {
+            warnings.extend(dropped.note_line());
+            out.insert("dropped".into(), dropped.to_json());
+        }
         // Every answer names its occupancy, not only the accepted one: a
         // refused spawn deserves the same fleet reading as an admitted one.
         out.insert("slots".into(), json!(slots));
@@ -621,6 +639,7 @@ mod probe {
                         json!({"count": slots, "max_live": top.cap, "burst": "memory_off"}),
                         &[fleet_row(slots, top.cap, yours)],
                         out,
+                        &warnings,
                     );
                 }
                 let newest = crate::spawn_gate_slots::newest_slot_age_s(
@@ -647,6 +666,7 @@ mod probe {
                         json!({"count": slots, "max_live": top.cap, "burst": word}),
                         &[fleet_row(slots, top.cap, yours)],
                         out,
+                        &warnings,
                     );
                 }
             }
@@ -687,6 +707,7 @@ mod probe {
                     parsed,
                     &[],
                     out,
+                    &warnings,
                 );
             }
             // Memory terms: the SAME call the gate makes, so the probe and
@@ -708,6 +729,7 @@ mod probe {
                     }),
                     &make_rows(None, slots, cap, yours, ram_row, Vec::new()),
                     out,
+                    &warnings,
                 );
             }
             // Disk floor: the same call the gate makes, so the check-in
@@ -724,6 +746,7 @@ mod probe {
                     }),
                     &make_rows(None, slots, cap, yours, ram_row, Vec::new()),
                     out,
+                    &warnings,
                 );
             }
             // CPU axis: one footprint reading feeds the verdict and the rows.
@@ -745,6 +768,7 @@ mod probe {
                         }),
                         &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                         out,
+                        &warnings,
                     );
                 }
                 _ => {}
@@ -789,6 +813,7 @@ mod probe {
                                 json!({"count": slots, "max_live": cap, "burst": b.word()}),
                                 &[fleet_row(slots, cap, yours)],
                                 out,
+                                &warnings,
                             );
                         }
                         None => {
@@ -798,6 +823,7 @@ mod probe {
                                 json!({"count": slots, "max_live": cap}),
                                 &[fleet_row(slots, cap, yours)],
                                 out,
+                                &warnings,
                             );
                         }
                     }
@@ -809,6 +835,7 @@ mod probe {
                         json!({"count": slots, "max_live": cap}),
                         &[fleet_row(slots, cap, yours)],
                         out,
+                        &warnings,
                     );
                 } else {
                     out.insert(
@@ -864,6 +891,7 @@ mod probe {
                     }),
                     &make_rows(None, slots, cap, yours, ram_row, cpu_rows),
                     out,
+                    &warnings,
                 );
             }
         }
@@ -901,6 +929,7 @@ mod probe {
                 json!({"lanes": lanes}),
                 &make_rows(Some(&lanes), slots, cap, yours, ram_row, cpu_rows),
                 out,
+                &warnings,
             );
         }
 
@@ -948,14 +977,16 @@ fn unwrap_key(held: Option<(String, String)>) -> (Value, Value) {
 }
 
 /// A refused probe: verdict + reason + message + the refused fields, plus the
-/// measurement rows read so far. A refusal is not the end of the answer: the
-/// rows carry whatever the probe managed to read before it refused.
+/// measurement rows and the notes read so far. A refusal is not the end of
+/// the answer: each carries whatever the probe managed to read before it
+/// refused.
 fn refuse_with(
     reason: &str,
     message: String,
     mut extra: Value,
     rows: &[Value],
     mut out: Map<String, Value>,
+    warnings: &[String],
 ) -> Value {
     let mut refusal_rows = rows.to_vec();
     if !refusal_rows.iter().any(|row| {
@@ -976,6 +1007,7 @@ fn refuse_with(
     out.insert("verdict".into(), json!("refused"));
     out.insert("reason".into(), json!(reason));
     out.insert("message".into(), json!(message));
+    out.insert("warnings".into(), json!(warnings));
     if let Some(obj) = extra.as_object_mut() {
         let moved: Vec<(String, Value)> =
             obj.iter_mut().map(|(k, v)| (k.clone(), v.take())).collect();
@@ -1724,6 +1756,143 @@ mod tests {
             "this lead holds 2 of max_live 2 (effective cap unknown, using ceiling) across 1 leads (share 2); 0 seat(s) free and 0 owed to other leads; the rows charged to you are w1, w2"
         );
         assert_eq!(answer["held_rows"], json!(["w1", "w2"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The probe answer names the live-status rows the slot count left out,
+    /// as one `dropped` object and one note line, on an accepted answer and
+    /// on a refused one. A registry it cannot read answers `unknown`, and
+    /// that answer carries no tally.
+    #[test]
+    fn probe_names_the_live_rows_the_slot_count_drops() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-command-dropped-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        // An empty roster: no real worker on this machine answers a row's
+        // transport lookup.
+        let daemon = dir.join("daemon");
+        std::fs::create_dir_all(&daemon).unwrap();
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        let _env = TestEnvRestore::capture(&[
+            crate::paths::HOME_ENV,
+            "FNO_CLAIMS_ROOT",
+            "FNO_CONFIG",
+            "FNO_CLAUDE_DAEMON_DIR",
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+        ]);
+        std::env::set_var(crate::paths::HOME_ENV, &home);
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
+        std::env::set_var("FNO_CONFIG", fnodir.join("config.toml"));
+        std::env::set_var("FNO_CLAUDE_DAEMON_DIR", &daemon);
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let reported = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        // A codex row keeps the harness's blocked read, which shells out,
+        // out of this test. The kept row's fresh report stands in where no
+        // roster answers. 2^22+17 is realistically never a live pid.
+        let row = |name: &str, extra: &str| {
+            format!(
+                r#"{{"name":"{name}","harness":"codex","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z"{extra}}}"#
+            )
+        };
+        std::fs::write(
+            home.join("registry.json"),
+            format!(
+                r#"{{"schema_version":{},"entries":[{},{}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row("kept", &format!(r#","last_report_at":"{reported}""#)),
+                row("dead-pid", r#","pid":4194321"#)
+            ),
+        )
+        .unwrap();
+        #[derive(serde::Deserialize, Debug, Default, PartialEq)]
+        struct Dropped {
+            total: usize,
+            reported_done: usize,
+            terminal_run: usize,
+            dead_pid: usize,
+            roster_miss: usize,
+            stale_report: usize,
+            usage_blocked: usize,
+            leads: usize,
+        }
+        #[derive(serde::Deserialize)]
+        struct Answer {
+            verdict: String,
+            #[serde(default)]
+            reason: Option<String>,
+            #[serde(default)]
+            slots: Option<usize>,
+            #[serde(default)]
+            dropped: Option<Dropped>,
+            #[serde(default)]
+            warnings: Vec<String>,
+        }
+        // One answer per cap: `max_live` decides whether the probe refuses.
+        let probe_at = |max_live: u32| -> Answer {
+            std::fs::write(
+                fnodir.join("config.toml"),
+                format!("[agents]\nmax_live = {max_live}\nmin_free_gb = 0\nmax_swap_pct = 0\n"),
+            )
+            .unwrap();
+            serde_json::from_value(probe::answer(None, &json!({}))).expect("typed probe answer")
+        };
+        let accepted = probe_at(28);
+        assert_eq!(accepted.verdict, "accepted");
+        // The kept row and the dropped one are the two live-status rows.
+        assert_eq!(accepted.slots, Some(1));
+        assert_eq!(
+            accepted.dropped,
+            Some(Dropped {
+                total: 1,
+                dead_pid: 1,
+                ..Default::default()
+            })
+        );
+        let note = format!(
+            "{NOTE} 1 live worker row(s) dropped from the slot count: reported done 0, \
+             terminal run 0, dead pid 1, roster miss 0, stale report 0, usage blocked 0",
+            NOTE = spawn_gate::NOTE
+        );
+        assert!(
+            accepted.warnings.iter().any(|line| line == &note),
+            "{:?}",
+            accepted.warnings
+        );
+        // A refusal carries both. A fleet at cap is when the count is most
+        // read.
+        let refused = probe_at(1);
+        assert_eq!(
+            (refused.verdict.as_str(), refused.reason.as_deref()),
+            ("refused", Some("max_live"))
+        );
+        assert_eq!(
+            (refused.slots, refused.dropped),
+            (accepted.slots, accepted.dropped)
+        );
+        assert!(
+            refused.warnings.iter().any(|line| line == &note),
+            "{:?}",
+            refused.warnings
+        );
+        // A registry the probe cannot read answers `unknown`, with no slots
+        // and no tally. The reads above moved the rows into the registry
+        // store and left a fence directory at `registry.json`, so the
+        // unreadable one gets its own home.
+        let unreadable_home = dir.join("agents-home-unreadable");
+        std::fs::create_dir_all(&unreadable_home).unwrap();
+        std::fs::write(unreadable_home.join("registry.json"), "not json at all").unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &unreadable_home);
+        let unreadable = probe_at(28);
+        assert_eq!(unreadable.verdict, "unknown");
+        assert_eq!((unreadable.slots, unreadable.dropped), (None, None));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

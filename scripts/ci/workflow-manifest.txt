@@ -30,3 +30,4 @@ stacked-base-guard.yml
 install-channels.yml
 tracker-live.yml
 ci-required.yml
+sandbox-e2e.yml

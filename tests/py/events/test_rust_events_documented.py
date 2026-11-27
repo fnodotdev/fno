@@ -59,6 +59,13 @@ RUST_CLIENT_EVENT_SOURCES = {
     # the front door, the rules hook, pr create and the backlog close.
     "cli_command": "cli",
     "skill_invoked": "hook",
+    # The Stop front's context-nudge leg emits under the hook source its
+    # shell script declared.
+    "session_context_nudge": "hook",
+    "lead_context_nudge": "hook",
+    "lead_orphan_block": "hook",
+    "context_flush_nudge": "hook",
+    "context_flush_refused": "hook",
     "pr_opened": "target",
     "node_done": "backlog",
 }

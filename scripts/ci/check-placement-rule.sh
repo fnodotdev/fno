@@ -61,6 +61,9 @@
 #      crates/fno-agent/src/backlog/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
+#      crates/fno-agent/src/spawn/auto_approve.rs names the .claude folder in a
+#      Claude Code permission rule that keeps the prompt for edits there. It
+#      reads and writes nothing under .claude.
 #      context_audit.rs (the ported census; was context_audit.py) reads
 #      project-owned .claude/rules/*.md to census the
 #      exact progressive instructions Claude loads; it never writes there.
@@ -141,6 +144,9 @@
 #      login writes there; footnote stores nothing of its own inside it.
 #      The probe touches marker files under the sandbox home for the reset
 #      check.
+#      spawn/sandbox_launch.rs names the in-container harness transcript
+#      folder (`/home/fno/.claude/projects`) the guest tails. It is a path
+#      inside the container image, never the host's ~/.claude.
 #      accounts/reconcile.rs ports reconcile-slot: it names the canonical
 #      ~/.claude slot in its sign-in remedy text, for the reason above.
 #      test_run.rs's hold-marker tests build fixture checkouts under a
@@ -340,6 +346,7 @@ add_violation() {
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
 crates/fno-agent/src/backlog/decision_reach.rs
+crates/fno-agent/src/spawn/auto_approve.rs
 crates/fno/src/config/config_doctor/checks.rs
 crates/fno/src/checks/doctor/report.rs
 crates/fno/src/checks/doctor/report/advisors.rs
@@ -356,12 +363,20 @@ crates/fno-agent/src/spawn/accounts/launch.rs
 crates/fno-agent/src/spawn/accounts/staging.rs
 crates/fno-agent/src/spawn/accounts/store.rs
 crates/fno-agent/src/spawn/project_sandbox.rs
+crates/fno-agent/src/spawn/sandbox_launch.rs
 scripts/ops/sandbox-leak-probe.sh
 # mux-demo-snapshot.sh builds its .claude paths under the throwaway demo
 # world root: the rig exports HOME=$ROOT before any of them resolve, so the
 # shim's session records, the seeded daemon roster and the trust store all
 # land inside the world and nothing writes into a real .claude dir.
 scripts/ops/mux-demo-snapshot.sh
+# read-count-hook.sh and the retire-unread-pass leg (hook/front/session_start.rs)
+# derive the project memory dir under $CLAUDE_CONFIG_DIR (or $HOME/.claude) the same way
+# decision_reach.rs writes auto memory there: the memory dir is Claude
+# Code's own per-project store that the harness itself reads, not
+# footnote state. The sidecar and the .archived/ dir live inside it.
+scripts/memory/read-count-hook.sh
+crates/fno-agent/src/runtime/hook/front/session_start.rs
 # install-journey.sh builds CLAUDE_CONFIG_DIR under a throwaway run home and
 # reads the plugin cache there to prove the wiring; it writes no fno state
 # into any real .claude dir.

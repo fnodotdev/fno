@@ -192,6 +192,11 @@ pub(super) struct PrInfo {
     /// `required_bots: []`). Recorded in loop_check events so the skip is
     /// observable, not silently absent (AC3-UI).
     pub(super) review_skipped: bool,
+    /// The person gate (review.human = always) is owed and no fresh
+    /// non-author approval is at the head: the block reason names it, so a
+    /// session blocked on the gate reads the person sentence instead of the
+    /// generic config lecture. False on every default/early-return shape.
+    pub(super) human_approval_owed: bool,
     /// Configured `config.review.reviewers` with no head-pinned attestation.
     /// The sole failing term whenever the login gate is vacuous, and the reason
     /// the block message can name real local work instead of an absent bot.
@@ -519,6 +524,18 @@ pub(super) fn live_fixes_pr(
     pick_live_fixes_pr(&found, node_id, closed).map(|n| n.to_string())
 }
 
+/// The person-gate satisfier over the in-hand coverage verdicts
+/// (review.human = always): a fresh non-author human approval. Mirrors the
+/// classify contract it reads: `verdict == Reviewed` already encodes
+/// freshness at the head, and the author's own approval (or an unreadable PR
+/// author, which asserts the same) never satisfies.
+fn human_approval_at_head(coverage: &CoverageReport, human_required: bool) -> bool {
+    !human_required
+        || coverage.verdicts.iter().any(|v| {
+            v.human_approval && !v.author_approval && v.verdict == CoverageVerdict::Reviewed
+        })
+}
+
 /// The newest open or merged search hit, other than the closed PR, whose
 /// `Fixes` line names the node. A merely mentioned node never binds.
 pub(super) fn pick_live_fixes_pr(found: &Value, node_id: &str, closed: i64) -> Option<i64> {
@@ -566,6 +583,12 @@ pub(super) fn read_pr_info(
     pr_selector: Option<&str>,
     prefetched_pr_json: Option<Value>,
     github_approval_satisfies: bool,
+    // config.review.human = always: a person's GitHub approval is owed at the
+    // head. Keeps the external review read on (the human axis populates only
+    // from review objects, so a skipped read would hold the gate forever with
+    // no named cause) and ANDs the satisfier into the loop's reviewed
+    // conjunct, so DonePRGreen cannot fire while pr status reads not ready.
+    human_required: bool,
     max_rounds: i64,
     // The resolved `review.carry_interdiff_lines` (law d-608344c1): how many
     // interdiff lines a rebase or fix may add and still carry an attestation.
@@ -873,7 +896,7 @@ pub(super) fn read_pr_info(
     // (fixes a fail-open the sigma review caught). `reviewers` is empty for
     // every pre- config, so `reviewers_all_attested` is vacuously true
     // there and this changes nothing for them.
-    let login_gate_active = !required_bots.is_empty() || optional_lane_configured;
+    let login_gate_active = !required_bots.is_empty() || optional_lane_configured || human_required;
     let login_skipped = no_external || !login_gate_active;
     // One scan feeds both the gate and its explanation, so the two cannot
     // disagree the way the decision and the message did on PR #618.
@@ -1032,7 +1055,9 @@ pub(super) fn read_pr_info(
         }
         (
             "none".to_string(),
-            reviewers_ok && !blockers_withhold(&blockers, tiling.rounds_exhausted),
+            reviewers_ok
+                && human_approval_at_head(&coverage, human_required)
+                && !blockers_withhold(&blockers, tiling.rounds_exhausted),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -1306,12 +1331,14 @@ pub(super) fn read_pr_info(
             &info.stale_bots,
             &coverage,
         );
-        // Locked Decision 1, same conjunct as the solo lane arm: the pass
-        // condition is disposition-complete, withheld below the cap only.
+        // Locked Decision 1, same conjunct as the skip arm's shared satisfier
+        // (`human_approval_at_head`): the pass condition is
+        // disposition-complete, withheld below the cap only.
         let blockers = disposition_blockers(&events_text, &head_branch, head_sha);
         let reviewed = (info.all_required_passed() || local_recovery || tiling.rounds_exhausted)
             && unaddressed.is_empty()
             && reviewers_ok
+            && human_approval_at_head(&coverage, human_required)
             && !blockers_withhold(&blockers, tiling.rounds_exhausted);
         (
             activity_ts,
@@ -1398,6 +1425,7 @@ pub(super) fn read_pr_info(
     } else {
         None
     };
+    let human_approval_owed = !human_approval_at_head(&coverage, human_required);
     Ok(PrInfo {
         range_tiling: tiling,
         state,
@@ -1427,6 +1455,7 @@ pub(super) fn read_pr_info(
         malformed_attestations,
         posture: posture_v,
         coverage,
+        human_approval_owed,
     })
 }
 

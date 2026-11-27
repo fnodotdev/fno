@@ -379,26 +379,43 @@ pub fn blocking_call(
     params: Value,
     budget: std::time::Duration,
 ) -> Option<Value> {
+    match blocking_response(sock, method, params, budget)
+        .ok()?
+        .payload
+    {
+        ResponsePayload::Ok(v) if !v.is_null() => Some(v),
+        _ => None,
+    }
+}
+
+/// The typed form of [`blocking_call`]: the daemon's whole response, or the
+/// io error that kept it from answering.
+pub fn blocking_response(
+    sock: &std::path::Path,
+    method: &str,
+    params: Value,
+    budget: std::time::Duration,
+) -> std::io::Result<Response> {
     use std::io::{Read, Write};
-    let mut stream = std::os::unix::net::UnixStream::connect(sock).ok()?;
-    stream.set_read_timeout(Some(budget)).ok()?;
-    stream.set_write_timeout(Some(budget)).ok()?;
-    let body = serde_json::to_vec(&Request::new(1, method, params)).ok()?;
-    stream.write_all(&(body.len() as u32).to_le_bytes()).ok()?;
-    stream.write_all(&body).ok()?;
+    let bad = |e: serde_json::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
+    let mut stream = std::os::unix::net::UnixStream::connect(sock)?;
+    stream.set_read_timeout(Some(budget))?;
+    stream.set_write_timeout(Some(budget))?;
+    let body = serde_json::to_vec(&Request::new(1, method, params)).map_err(bad)?;
+    stream.write_all(&(body.len() as u32).to_le_bytes())?;
+    stream.write_all(&body)?;
     let mut len = [0u8; 4];
-    stream.read_exact(&mut len).ok()?;
+    stream.read_exact(&mut len)?;
     let len = u32::from_le_bytes(len);
     if len > MAX_FRAME_BYTES {
-        return None;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("reply frame of {len} bytes is over the cap"),
+        ));
     }
     let mut reply = vec![0u8; len as usize];
-    stream.read_exact(&mut reply).ok()?;
-    let reply: Value = serde_json::from_slice(&reply).ok()?;
-    if reply.get("error").is_some() {
-        return None;
-    }
-    reply.get("result").filter(|r| !r.is_null()).cloned()
+    stream.read_exact(&mut reply)?;
+    serde_json::from_slice(&reply).map_err(bad)
 }
 
 #[cfg(test)]

@@ -265,14 +265,22 @@ fn happy_on_path() -> bool {
 /// `inject_route_model_argv` (mux_spawn.py:466-488): pin the route's model on
 /// argv ahead of every settings rung. An argv that already names a model is
 /// caller intent and wins; the token lands flags-first, where it can never sit
-/// inside a `--` seed fence.
-fn inject_route_model_argv(argv: Vec<String>, route_env: &BTreeMap<String, String>) -> Vec<String> {
+/// inside a `--` seed fence. A route whose env carries no model (a bare tier
+/// alias answers an empty pin) still pins the route's own model token, so the
+/// CLI resolves the alias natively.
+fn inject_route_model_argv(
+    argv: Vec<String>,
+    route_env: &BTreeMap<String, String>,
+    route_model: Option<&str>,
+) -> Vec<String> {
     if argv.first().map(String::as_str) != Some("claude") {
         return argv;
     }
     let model = route_env
         .get("ANTHROPIC_MODEL")
         .map(|s| s.trim())
+        .filter(|m| !m.is_empty())
+        .or_else(|| route_model.map(str::trim).filter(|m| !m.is_empty()))
         .unwrap_or_default();
     if model.is_empty()
         || argv
@@ -286,6 +294,36 @@ fn inject_route_model_argv(argv: Vec<String>, route_env: &BTreeMap<String, Strin
     out
 }
 
+/// Happy discards `--settings`. A settings file that carries only permission
+/// rules has no route to lose, so the happy lane drops it and says so.
+fn drop_rules_only_settings(argv: Vec<String>) -> Vec<String> {
+    let Some(at) = argv.iter().position(|tok| tok == "--settings") else {
+        return argv;
+    };
+    let rules_only = argv
+        .get(at + 1)
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|doc| {
+            // The writer always emits `env`, so an empty one is no route.
+            doc.as_object().map(|obj| {
+                obj.iter().all(|(key, value)| match key.as_str() {
+                    "permissions" | "theme" => true,
+                    "env" => value.as_object().is_some_and(|env| env.is_empty()),
+                    _ => false,
+                })
+            })
+        })
+        .unwrap_or(false);
+    if !rules_only {
+        return argv;
+    }
+    eprintln!("fno: skipping the auto-approve rules for the happy lane, which discards --settings");
+    let mut out = argv;
+    out.drain(at..=at + 1);
+    out
+}
+
 /// The happy wrap (`happy_pane_argv` port): refuse the two flags happy eats,
 /// demand the binary, then carry the argv on `happy` with the route's
 /// non-secret keys as `--claude-env` pairs. The secrets (ANTHROPIC_API_KEY,
@@ -295,6 +333,7 @@ fn happy_wrap(
     argv: Vec<String>,
     route_env: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, PaneRefusal> {
+    let argv = drop_rules_only_settings(argv);
     if argv
         .iter()
         .any(|tok| tok == "--settings" || tok.starts_with("--settings="))
@@ -366,7 +405,7 @@ pub(crate) fn make_claude_plan(ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal
     // The model pin runs before the happy wrap so happy forwards it like any
     // other claude option (mux_spawn.py:3545-3550).
     if let Some(route) = &route {
-        argv = inject_route_model_argv(argv, &route.env);
+        argv = inject_route_model_argv(argv, &route.env, Some(&route.model));
     }
     if happy {
         let env = &route
@@ -395,6 +434,7 @@ pub(crate) fn make_claude_plan(ctx: &PaneContext) -> Result<ArmPlan, PaneRefusal
     Ok(ArmPlan {
         wrapped,
         held_seed: None,
+        delivered_seed: (!seed.is_empty()).then(|| seed.clone()),
         preassigned_id: uuid,
     })
 }
@@ -451,5 +491,82 @@ impl PaneArm for ClaudeArm {
         plan: &ArmPlan,
     ) -> Result<ArmBind, PaneRefusal> {
         bind_claude(ctx, pane, plan)
+    }
+}
+
+#[cfg(test)]
+mod happy_rules_tests {
+    use super::*;
+
+    #[test]
+    fn the_happy_lane_drops_a_rules_only_settings_file_and_keeps_a_route() {
+        let dir = tempfile::tempdir().unwrap();
+        let rules = dir.path().join("rules.json");
+        let route = dir.path().join("route.json");
+        // Both files come from the writer's own bytes, so the fixture holds
+        // the empty `env` object the writer always emits.
+        let allow = crate::spawn::auto_approve::Rules {
+            allow: vec!["Read(//w/**)".into()],
+            ask: Vec::new(),
+        };
+        let mut model = serde_json::Map::new();
+        model.insert("ANTHROPIC_MODEL".into(), "glm-5.2".into());
+        std::fs::write(
+            &rules,
+            crate::route_settings::payload_bytes(&serde_json::Map::new(), None, &allow),
+        )
+        .unwrap();
+        std::fs::write(
+            &route,
+            crate::route_settings::payload_bytes(&model, None, &allow),
+        )
+        .unwrap();
+        let argv = |path: &std::path::Path| {
+            vec![
+                "claude".to_string(),
+                "--settings".to_string(),
+                path.to_string_lossy().into_owned(),
+                "--print".to_string(),
+            ]
+        };
+        assert_eq!(
+            drop_rules_only_settings(argv(&rules)),
+            ["claude", "--print"]
+        );
+        assert_eq!(drop_rules_only_settings(argv(&route)), argv(&route));
+        assert_eq!(drop_rules_only_settings(vec!["claude".into()]), ["claude"]);
+    }
+}
+
+#[cfg(test)]
+mod delivered_seed_tests {
+    use super::*;
+
+    #[test]
+    fn the_row_records_the_seed_it_delivers_and_that_seed_is_not_attended() {
+        let ctx = PaneContext::from_params(&serde_json::json!({
+            "provider": "claude",
+            "message": "/fno:target fn-1 redesign the prompt",
+            "cwd": "/tmp",
+            "name": "w",
+        }))
+        .expect("pane params");
+        let plan = make_claude_plan(&ctx).expect("claude plan");
+        let delivered = plan.delivered_seed.expect("the plan names its seed");
+        assert_eq!(delivered, seed_text(&ctx));
+        assert_ne!(
+            delivered, ctx.message,
+            "the delivered seed carries the brevity trailer the raw message lacks"
+        );
+        let (command, rest) = delivered.split_once(char::is_whitespace).unwrap();
+        let turn = format!(
+            "<command-message>fno:target</command-message>\n<command-name>/fno:{}</command-name>\n<command-args>{}</command-args>",
+            command.trim_start_matches('/'),
+            rest.trim()
+        );
+        assert!(
+            crate::attended::is_spawn_seed_turn(&turn, &delivered),
+            "claude's rendering of the delivered seed is the machine's turn"
+        );
     }
 }

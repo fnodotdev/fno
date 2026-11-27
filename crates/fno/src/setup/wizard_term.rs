@@ -48,7 +48,7 @@ Interactive onboarding: asks, probes one harness until one works, then applies t
 const SEARCH_MIN: usize = 12;
 
 fn sidecar() -> PathBuf {
-    model_catalog::state_dir().join("sidecar")
+    crate::state_layout::place(&model_catalog::state_dir(), "sidecar")
 }
 
 fn report_path() -> PathBuf {
@@ -67,7 +67,7 @@ fn lock_path() -> PathBuf {
 /// inventory already owns: a finished or skipped wizard writes it, so the
 /// bare-`fno` gate fires once per machine, never on every launch.
 fn done_marker_in(state_dir: &std::path::Path) -> PathBuf {
-    state_dir.join("sidecar").join("wizard-done")
+    crate::state_layout::place(state_dir, "sidecar").join("wizard-done")
 }
 
 fn done_marker_path() -> PathBuf {
@@ -99,7 +99,7 @@ fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
 /// A machine counts as set up when its global config sets any key, or an
 /// older setup run left its done marker or a joined profile behind.
 fn machine_configured_in(state_dir: &std::path::Path) -> bool {
-    let sidecar = state_dir.join("sidecar");
+    let sidecar = crate::state_layout::place(state_dir, "sidecar");
     if sidecar.join("setup-done").exists() || sidecar.join("setup-profile.toml").exists() {
         return true;
     }
@@ -1232,6 +1232,28 @@ fn run_inner(tail: &[OsString], quiet_cancel: bool) -> i32 {
     // inside `step_join`; on the wizard's own rows the host backs up the
     // global config first, because the wizard is the only writer here.
     let skip = state.skip_all;
+    // The quota offer's exchange runs here, outside the pure flow: the
+    // redirect code is a credential and the screen walk never reads a secret.
+    if let Some(wizard::Answer::Yes) = state.answers.get("github-app") {
+        match wizard::github_app_round_trip(&mut pr) {
+            wizard::RoundTrip::Created {
+                app_id,
+                installation_pin,
+            } => {
+                state
+                    .answers
+                    .insert("github-app", wizard::Answer::Text(app_id));
+                if let Some(pin) = installation_pin {
+                    state
+                        .answers
+                        .insert("github-app-pin", wizard::Answer::Text(pin));
+                }
+            }
+            _ => {
+                state.answers.insert("github-app", wizard::Answer::No);
+            }
+        }
+    }
     let rows = wizard::pending(&state);
     let mut apply_join = serde_json::Value::Null;
     let mut apply_wizard = serde_json::Value::Null;
@@ -1370,7 +1392,7 @@ mod done_marker_tests {
     fn the_first_run_gate_reads_one_marker_path() {
         let dir = tempfile::tempdir().unwrap();
         let marker = done_marker_in(dir.path());
-        assert_eq!(marker, dir.path().join("sidecar").join("wizard-done"));
+        assert_eq!(marker, dir.path().join("db/sidecar/wizard-done"));
         // No marker: the gate fires. After a finished wizard writes it,
         // the gate stands down.
         assert!(first_run_needed_in(dir.path()));
