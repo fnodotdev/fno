@@ -1,6 +1,6 @@
 //! The claude control.sock adapter: the one place fno opens a claude session's control socket, attaches, and types into it. `scripts/ci/check-control-sock-writers.sh` fails a change that opens the socket anywhere else.
 //!
-//! Post-attach the socket is a raw keystroke pipe, so a turn is typed as keystrokes and submitted with a separate wire-level CR. Any new line parks the turn in the harness queue until a turn boundary, so the mail lane types a paneless session's turn as one line (`NewlineRule::OneLine`).
+//! Post-attach the socket is a raw keystroke pipe, so a turn is typed as keystrokes and submitted with a separate wire-level CR. A typed LF (ctrl+j) does not submit, and a mid-turn session absorbs the turn with the header kept on its own line (measured on claude 2.1.325, `absorbed_mid_turn`). Only an explicit `--steer` flattens the turn to one line (`NewlineRule::OneLine`).
 
 use super::*;
 use crate::claude_attach::{perform_attach, AttachRequest, UnixControlTransport};
