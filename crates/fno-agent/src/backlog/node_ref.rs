@@ -171,6 +171,9 @@ pub fn resolve_tiers<'a>(entries: &'a [Value], query: &str) -> Option<&'a Value>
             .iter()
             .find(|e| e.get("id").and_then(Value::as_str) == Some(id.as_str()))
         {
+            if let Some(line) = number_only_notice(query, &id) {
+                eprintln!("{line}");
+            }
             return Some(hit);
         }
     }
