@@ -460,7 +460,7 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
 }
 
 /// The stderr line for a token that is both a display number and the shape of
-/// an all-digit hash id (`x-2844`: four to eight decimal digits), served by the
+/// an all-digit hash id (`pre-2844`: four to eight decimal digits), served by the
 /// number tier alone. It names both readings so a typo of a hash id is seen
 /// before a write lands on the node the number names. `None` for any other
 /// token.
@@ -809,12 +809,12 @@ mod tests {
 
     #[test]
     fn a_hash_width_number_served_by_the_number_tier_names_both_readings() {
-        let note = number_only_notice("x-2844", "x-ea0e").unwrap();
-        assert!(note.contains("no node has id 'x-2844'"));
-        assert!(note.contains("display number of x-ea0e"));
-        assert!(number_only_notice("x-15", "x-ea0e").is_none());
-        assert!(number_only_notice("x-2844", "x-2844").is_none());
-        assert!(number_only_notice("x-ea0e", "x-ea0e").is_none());
+        let note = number_only_notice("pre-2844", "pre-ea0e").unwrap();
+        assert!(note.contains("no node has id 'pre-2844'"));
+        assert!(note.contains("display number of pre-ea0e"));
+        assert!(number_only_notice("pre-15", "pre-ea0e").is_none());
+        assert!(number_only_notice("pre-2844", "pre-2844").is_none());
+        assert!(number_only_notice("pre-ea0e", "pre-ea0e").is_none());
     }
 
     #[test]
