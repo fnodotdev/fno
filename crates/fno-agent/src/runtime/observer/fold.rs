@@ -667,9 +667,9 @@ impl InvocationFold {
     ) {
         self.absorb_results(message, timestamp.as_deref(), tool_result);
         if !is_meta {
-            if let Some(text) = command_text(message) {
+            if let Some((name, text)) = command_text(message) {
                 self.close_command();
-                self.open_command_row(text, timestamp);
+                self.open_command_row(name, text, timestamp);
                 return;
             }
             if opens_turn(message) {
@@ -801,13 +801,9 @@ impl InvocationFold {
         }
     }
 
-    /// A typed command opens a row. Its tags are read one at a time, because
-    /// their order differs between harness builds.
-    fn open_command_row(&mut self, text: &str, timestamp: Option<String>) {
-        let Some(name) = xml_block(text, "<command-name>", "</command-name>") else {
-            self.last_activity = timestamp;
-            return;
-        };
+    /// A typed command opens a row. Its args are read on their own, because
+    /// the tag order differs between harness builds.
+    fn open_command_row(&mut self, name: &str, text: &str, timestamp: Option<String>) {
         let node = xml_block(text, "<command-args>", "</command-args>")
             .and_then(crate::rules_source::node_in_text);
         self.command_node = node.clone();
@@ -864,18 +860,19 @@ fn opens_turn(message: &TranscriptMessage) -> bool {
     }
 }
 
-/// The text of a typed command: a `user` line whose content opens with the
-/// command envelope. A compaction summary and a local command's output quote
-/// both tags inside their own text, so a tag anywhere else opens no command.
-fn command_text(message: &TranscriptMessage) -> Option<&str> {
-    match &message.content {
-        Some(MessageContent::Text(text)) => {
-            let text = text.trim_start();
-            (text.starts_with("<command-message>") || text.starts_with("<command-name>"))
-                .then_some(text)
-        }
-        _ => None,
+/// A typed command on a `user` line: the name inside its `command-name` tag
+/// and the line's text. The command envelope opens the text. A compaction
+/// summary and a local command's output quote both tags inside their own
+/// text, so a tag anywhere else opens no command.
+fn command_text(message: &TranscriptMessage) -> Option<(&str, &str)> {
+    let text = match &message.content {
+        Some(MessageContent::Text(text)) => text.trim_start(),
+        _ => return None,
+    };
+    if !(text.starts_with("<command-message>") || text.starts_with("<command-name>")) {
+        return None;
     }
+    Some((xml_block(text, "<command-name>", "</command-name>")?, text))
 }
 
 /// The kind=skill slice of [`invocations_from_transcript`]: the `input.skill`
