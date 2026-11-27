@@ -122,7 +122,7 @@ impl TurnHeader {
 pub enum NewlineRule {
     /// A keystroke lane (a mux pane, a keeper): each new line run is typed as one LF byte, the non-submitting ctrl+j. The submit is a separate CR the lane sends after.
     NonSubmittingKey,
-    /// A paneless claude session over control.sock: any new line parks the turn in the harness queue, so every whitespace run becomes one space and the turn absorbs mid-turn (user law d-5641722b).
+    /// An explicit `--steer` to a paneless claude session over control.sock: every whitespace run becomes one space. A typed LF also absorbs mid-turn (measured on claude 2.1.325), so only a caller that asks for one line gets it (user law d-5641722b).
     OneLine,
     /// A lane that carries the text as data, not keystrokes (codex `turn/start`, the daemon RPC, the switchboard): the text rides unchanged.
     Verbatim,
