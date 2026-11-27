@@ -141,6 +141,50 @@ pub fn parse(text: &str) -> Result<Runbook, RunbookError> {
     Ok(book)
 }
 
+/// Why a runbook door action failed.
+#[derive(Debug, thiserror::Error)]
+pub enum DoorError {
+    #[error("cannot {what} {}: {source}", .path.display())]
+    Io {
+        what: &'static str,
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("runbook {}: {source}", .path.display())]
+    Invalid { path: PathBuf, source: RunbookError },
+    #[error("run file {} holds a bad line: {source}", .path.display())]
+    BadLine {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    #[error("run file {} has no header", .0.display())]
+    NoHeader(PathBuf),
+    /// The door refuses the action; the text names the next step.
+    #[error("{0}")]
+    Refused(String),
+}
+
+impl From<String> for DoorError {
+    fn from(text: String) -> Self {
+        DoorError::Refused(text)
+    }
+}
+
+impl From<&str> for DoorError {
+    fn from(text: &str) -> Self {
+        DoorError::Refused(text.to_string())
+    }
+}
+
+fn refused<T>(text: String) -> Result<T, DoorError> {
+    Err(DoorError::Refused(text))
+}
+
+fn io(what: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> DoorError {
+    let path = path.to_path_buf();
+    move |source| DoorError::Io { what, path, source }
+}
+
 impl Runbook {
     /// Preflight then steps: the order the run walks, with each entry's phase.
     fn sequence(&self) -> Vec<(&'static str, &Step)> {
@@ -152,10 +196,12 @@ impl Runbook {
     }
 }
 
-fn read_runbook(path: &Path) -> Result<(Runbook, String), String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read runbook {}: {e}", path.display()))?;
-    let book = parse(&text).map_err(|e| format!("runbook {}: {e}", path.display()))?;
+fn read_runbook(path: &Path) -> Result<(Runbook, String), DoorError> {
+    let text = std::fs::read_to_string(path).map_err(io("read runbook", path))?;
+    let book = parse(&text).map_err(|source| DoorError::Invalid {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok((book, sha256_hex(&text)))
 }
 
@@ -254,13 +300,13 @@ fn flag_value(args: &[String], start: usize, end: usize, flag: &str) -> Option<S
 /// the absolute path so the fire reads the same file from any cwd. `args`
 /// excludes the leading `spawn` token. The token count never changes, so the
 /// caller's name index stays valid.
-pub fn absolutize(args: &[String]) -> Result<Vec<String>, String> {
+pub fn absolutize(args: &[String]) -> Result<Vec<String>, DoorError> {
     let end = head_end(args);
     let mut out = args.to_vec();
     let Some((i, value, width)) = find_runbook(args, 0, end) else {
         return Ok(out);
     };
-    let raw = value.ok_or_else(|| "--runbook needs a file".to_string())?;
+    let raw = value.ok_or("--runbook needs a file")?;
     let path = absolute(&raw);
     read_runbook(&path)?;
     let shown = path.display().to_string();
@@ -277,7 +323,18 @@ pub fn absolutize(args: &[String]) -> Result<Vec<String>, String> {
 /// Fire time (and a spawn that runs now): parse the runbook, write the run
 /// file header, and splice the fixed prompt as `--message=`. `args` starts
 /// with `spawn`. A line with no `--runbook` passes unchanged.
-pub fn resolve_runbook(mut args: Vec<String>) -> Result<Vec<String>, (String, i32)> {
+pub fn resolve_runbook(args: Vec<String>) -> Result<Vec<String>, (String, i32)> {
+    expand(args).map_err(|(reason, code)| (format!("fno agent spawn: {reason}"), code))
+}
+
+/// The seam's one prompt read: a `--prompt-file`, then a `--runbook`.
+pub(crate) fn resolve_prompts(args: Vec<String>) -> Result<Vec<String>, (String, i32)> {
+    crate::spawn_admission::resolve_prompt_file(args).and_then(resolve_runbook)
+}
+
+// The slices below index at bounds the walk just computed.
+#[allow(clippy::indexing_slicing)]
+fn expand(mut args: Vec<String>) -> Result<Vec<String>, (String, i32)> {
     let end = head_end(&args);
     let head = &args[1.min(args.len())..end];
     if head.iter().any(|t| t == "--help" || t == "-h") {
@@ -302,7 +359,7 @@ pub fn resolve_runbook(mut args: Vec<String>) -> Result<Vec<String>, (String, i3
         ));
     }
     let path = absolute(&raw);
-    let (book, sha) = read_runbook(&path).map_err(|e| (e, 2))?;
+    let (book, sha) = read_runbook(&path).map_err(|e| (e.to_string(), 2))?;
     let scheduler = flag_value(&args, 1, end, "--spawned-by")
         .or_else(|| crate::claims::ambient_parent_edge().0)
         .unwrap_or_default();
@@ -313,7 +370,7 @@ pub fn resolve_runbook(mut args: Vec<String>) -> Result<Vec<String>, (String, i3
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
     let rehearse = rehearse_at.is_some();
     let run_file = create_run(&runs_dir(), &path, &sha, &book, rehearse, &scheduler, &cwd)
-        .map_err(|e| (e, 1))?;
+        .map_err(|e| (e.to_string(), 1))?;
     let prompt = prompt_text(&book, &path, &run_file, rehearse);
     // Drop the runbook tokens and --rehearse from the back, then put the
     // prompt where --runbook stood.
@@ -403,8 +460,8 @@ fn create_run(
     rehearse: bool,
     scheduler: &str,
     cwd: &Path,
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+) -> Result<PathBuf, DoorError> {
+    std::fs::create_dir_all(dir).map_err(io("create", dir))?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let mut nonce = [0u8; 2];
     if getrandom::fill(&mut nonce).is_err() {
@@ -434,23 +491,63 @@ fn create_run(
     Ok(path)
 }
 
-fn append(path: &Path, record: &Value) -> Result<(), String> {
+fn append(path: &Path, record: &Value) -> Result<(), DoorError> {
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|e| format!("cannot open run file {}: {e}", path.display()))?;
-    writeln!(f, "{record}").map_err(|e| format!("cannot write run file {}: {e}", path.display()))
+        .map_err(io("open run file", path))?;
+    writeln!(f, "{record}").map_err(io("write run file", path))
 }
 
 // ---------------------------------------------------------------------------
 // The receipt door: `fno do runbook step|check|rollback|close <run-file>`.
 // ---------------------------------------------------------------------------
 
+/// The run file header, as the seam wrote it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Header {
+    run_id: String,
+    runbook: String,
+    name: String,
+    sha256: String,
+    rehearse: bool,
+    scheduler: String,
+    cwd: String,
+    steps: Vec<HeaderStep>,
+    steps_declared: usize,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct HeaderStep {
+    id: String,
+}
+
+/// One run file line. Fields a fold does not read stay unparsed.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum Record {
+    Header(Header),
+    Receipt {
+        step: String,
+        check: String,
+    },
+    Check {
+        step: String,
+        verdict: String,
+    },
+    Rollback {},
+    Close {},
+    #[serde(other)]
+    Other,
+}
+
 /// What the run file says so far.
 #[derive(Debug, Default)]
 struct RunState {
-    header: Value,
+    header: Header,
     receipts: BTreeMap<String, String>,
     order: Vec<String>,
     pending: Option<String>,
@@ -459,19 +556,18 @@ struct RunState {
     closed: bool,
 }
 
-fn load_run(path: &Path) -> Result<RunState, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read run file {}: {e}", path.display()))?;
+fn load_run(path: &Path) -> Result<RunState, DoorError> {
+    let text = std::fs::read_to_string(path).map_err(io("read run file", path))?;
     let mut st = RunState::default();
+    let mut header = None;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        let v: Value = serde_json::from_str(line)
-            .map_err(|e| format!("run file {} holds a bad line: {e}", path.display()))?;
-        let field = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        match v.get("kind").and_then(Value::as_str) {
-            Some("header") => st.header = v.clone(),
-            Some("receipt") => {
-                let step = field("step");
-                let check = field("check");
+        let record: Record = serde_json::from_str(line).map_err(|source| DoorError::BadLine {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        match record {
+            Record::Header(h) => header = Some(h),
+            Record::Receipt { step, check } => {
                 if check == "fail" && st.failed_at.is_none() {
                     st.failed_at = Some(step.clone());
                 }
@@ -479,9 +575,7 @@ fn load_run(path: &Path) -> Result<RunState, String> {
                 st.order.push(step.clone());
                 st.receipts.insert(step, check);
             }
-            Some("check") => {
-                let step = field("step");
-                let verdict = field("verdict");
+            Record::Check { step, verdict } => {
                 if verdict == "fail" && st.failed_at.is_none() {
                     st.failed_at = Some(step.clone());
                 }
@@ -490,44 +584,23 @@ fn load_run(path: &Path) -> Result<RunState, String> {
                 }
                 st.receipts.insert(step, verdict);
             }
-            Some("rollback") => st.rolled_back = true,
-            Some("close") => st.closed = true,
-            _ => {}
+            Record::Rollback {} => st.rolled_back = true,
+            Record::Close {} => st.closed = true,
+            Record::Other => {}
         }
     }
-    if st.header.is_null() {
-        return Err(format!("run file {} has no header", path.display()));
-    }
+    st.header = header.ok_or_else(|| DoorError::NoHeader(path.to_path_buf()))?;
     Ok(st)
 }
 
-impl RunState {
-    fn rehearse(&self) -> bool {
-        self.header.get("rehearse").and_then(Value::as_bool) == Some(true)
-    }
-    fn str(&self, k: &str) -> String {
-        self.header
-            .get(k)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    }
-    fn declared(&self) -> usize {
-        self.header
-            .get("steps_declared")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize
-    }
-}
-
 /// Load the run and its runbook; refuse when the runbook changed under it.
-fn open(path: &Path) -> Result<(RunState, Runbook), String> {
+fn open(path: &Path) -> Result<(RunState, Runbook), DoorError> {
     let st = load_run(path)?;
-    let (book, sha) = read_runbook(Path::new(&st.str("runbook")))?;
-    if sha != st.str("sha256") {
-        return Err(format!(
+    let (book, sha) = read_runbook(Path::new(&st.header.runbook.clone()))?;
+    if sha != st.header.sha256.clone() {
+        return refused(format!(
             "the runbook {} changed since this run started; start a new run",
-            st.str("runbook")
+            st.header.runbook.clone()
         ));
     }
     Ok((st, book))
@@ -536,16 +609,17 @@ fn open(path: &Path) -> Result<(RunState, Runbook), String> {
 /// The door's entry: `args` is the tail after `fno do runbook`.
 pub fn cli_run(args: &[String]) -> i32 {
     let action = args.first().map(String::as_str);
+    let rest = args.get(1..).unwrap_or_default();
     let result = match action {
-        Some("step") => cmd_step(&args[1..]),
-        Some("check") => cmd_check(&args[1..]),
-        Some("rollback") => cmd_rollback(&args[1..]),
-        Some("close") => cmd_close(&args[1..]),
+        Some("step") => cmd_step(rest),
+        Some("check") => cmd_check(rest),
+        Some("rollback") => cmd_rollback(rest),
+        Some("close") => cmd_close(rest),
         None | Some("--help") | Some("-h") => {
             println!("{USAGE}");
             return 0;
         }
-        Some(other) => Err(format!("unknown runbook action {other:?}\n{USAGE}")),
+        Some(other) => refused(format!("unknown runbook action {other:?}\n{USAGE}")),
     };
     match result {
         Ok(()) => 0,
@@ -561,11 +635,11 @@ fno do runbook check <run-file> <step-id> --read <text> --verdict pass|fail [--c
 fno do runbook rollback <run-file>\n       \
 fno do runbook close <run-file>";
 
-fn positional(args: &[String], n: usize, what: &str) -> Result<String, String> {
+fn positional(args: &[String], n: usize, what: &str) -> Result<String, DoorError> {
     args.get(n)
         .filter(|a| !a.starts_with("--"))
         .cloned()
-        .ok_or_else(|| format!("missing {what}\n{USAGE}"))
+        .ok_or_else(|| DoorError::Refused(format!("missing {what}\n{USAGE}")))
 }
 
 fn opt(args: &[String], flag: &str) -> Option<String> {
@@ -574,7 +648,7 @@ fn opt(args: &[String], flag: &str) -> Option<String> {
         .and_then(|i| args.get(i + 1).cloned())
 }
 
-fn cmd_step(args: &[String]) -> Result<(), String> {
+fn cmd_step(args: &[String]) -> Result<(), DoorError> {
     let file = PathBuf::from(positional(args, 0, "<run-file>")?);
     let id = positional(args, 1, "<step-id>")?;
     let yes = opt(args, "--yes");
@@ -582,9 +656,9 @@ fn cmd_step(args: &[String]) -> Result<(), String> {
     let approval = gate_step(&st, &book, &id, yes.as_deref(), &|| question_stores(&st))?;
     let seq = book.sequence();
     let Some((phase, step)) = seq.iter().find(|(_, s)| s.id == id) else {
-        return Err(format!("no step {id:?} in this runbook"));
+        return refused(format!("no step {id:?} in this runbook"));
     };
-    if step.irreversible && st.rehearse() {
+    if step.irreversible && st.header.rehearse {
         append(
             &file,
             &json!({"kind": "receipt", "step": id, "phase": phase, "command": step.run,
@@ -593,7 +667,7 @@ fn cmd_step(args: &[String]) -> Result<(), String> {
         println!("{id}: skipped (rehearse run, irreversible step); receipt written");
         return Ok(());
     }
-    let cwd = PathBuf::from(st.str("cwd"));
+    let cwd = PathBuf::from(st.header.cwd.clone());
     let (exit, tail) = run_command(
         &step.run,
         &cwd,
@@ -637,17 +711,17 @@ fn gate_step(
     id: &str,
     yes: Option<&str>,
     stores: &dyn Fn() -> String,
-) -> Result<Value, String> {
+) -> Result<Value, DoorError> {
     if st.closed {
-        return Err("this run is closed".into());
+        return refused("this run is closed".into());
     }
     if let Some(at) = &st.failed_at {
-        return Err(format!(
+        return refused(format!(
             "the check at {at} failed, so no later step runs. Next: fno do runbook rollback <run-file>"
         ));
     }
     if let Some(p) = &st.pending {
-        return Err(format!(
+        return refused(format!(
             "record the check for {p} first: fno do runbook check <run-file> {p} --read \"...\" --verdict pass|fail"
         ));
     }
@@ -657,20 +731,20 @@ fn gate_step(
         .map(|(_, s)| s)
         .find(|s| !st.receipts.contains_key(&s.id));
     let Some(next) = next else {
-        return Err("every step has its receipt. Next: fno do runbook close <run-file>".into());
+        return refused("every step has its receipt. Next: fno do runbook close <run-file>".into());
     };
     if next.id != id {
-        return Err(format!(
+        return refused(format!(
             "out of order: the next step is {}, not {id}",
             next.id
         ));
     }
-    if !next.irreversible || st.rehearse() {
+    if !next.irreversible || st.header.rehearse {
         return Ok(Value::Null);
     }
-    let run_id = st.str("run_id");
+    let run_id = st.header.run_id.clone();
     let Some(qid) = yes else {
-        return Err(format!(
+        return refused(format!(
             "{id} is irreversible and needs the user's yes. Ask with fno inbox outstanding ask, \
              naming run {run_id} and step {id}, then rerun this step with --yes <question id>"
         ));
@@ -681,16 +755,16 @@ fn gate_step(
 /// A `--yes` holds only for a question that names this run and step, that
 /// the user answered themselves (not a delegate or a sink close), and whose
 /// answer starts with yes.
-fn yes_verdict(stores: &str, qid: &str, run_id: &str, step: &str) -> Result<Value, String> {
+fn yes_verdict(stores: &str, qid: &str, run_id: &str, step: &str) -> Result<Value, DoorError> {
     let asked = question_text(stores, qid)
         .ok_or_else(|| format!("question {qid} is not in the question stores"))?;
     if !names_token(&asked, run_id) || !names_token(&asked, step) {
-        return Err(format!(
+        return refused(format!(
             "question {qid} does not name run {run_id} and step {step}; ask one that does"
         ));
     }
     if !crate::attention::user_answered(stores).contains(qid) {
-        return Err(format!(
+        return refused(format!(
             "question {qid} has no answer from the user yet; wait for it"
         ));
     }
@@ -700,7 +774,7 @@ fn yes_verdict(stores: &str, qid: &str, run_id: &str, step: &str) -> Result<Valu
         .map(|c| c.answer.trim().to_string())
         .unwrap_or_default();
     if !answer.to_ascii_lowercase().starts_with("yes") {
-        return Err(format!(
+        return refused(format!(
             "question {qid} was answered {answer:?}, not yes; the step does not run"
         ));
     }
@@ -720,19 +794,28 @@ fn names_token(text: &str, token: &str) -> bool {
         })
 }
 
+#[derive(Deserialize)]
+struct AskRow {
+    #[serde(rename = "type")]
+    kind: String,
+    data: AskData,
+}
+
+#[derive(Deserialize)]
+struct AskData {
+    question_id: String,
+    #[serde(default)]
+    question: String,
+}
+
 /// The newest `operator_question` text for one question id.
 fn question_text(stores: &str, qid: &str) -> Option<String> {
     stores
         .lines()
         .filter(|l| l.contains("operator_question") && l.contains(qid))
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|v| v.get("type").and_then(Value::as_str) == Some("operator_question"))
-        .filter_map(|v| {
-            let d = v.get("data")?;
-            (d.get("question_id")?.as_str()? == qid)
-                .then(|| d.get("question")?.as_str().map(str::to_string))
-                .flatten()
-        })
+        .filter_map(|l| serde_json::from_str::<AskRow>(l).ok())
+        .filter(|r| r.kind == "operator_question" && r.data.question_id == qid)
+        .map(|r| r.data.question)
         .last()
 }
 
@@ -743,7 +826,7 @@ fn question_stores(st: &RunState) -> String {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    let cwd = PathBuf::from(st.str("cwd"));
+    let cwd = PathBuf::from(st.header.cwd.clone());
     let query = crate::event_store::EventQuery::of_types(&[
         "operator_question",
         "operator_question_closed",
@@ -767,7 +850,6 @@ fn question_stores(st: &RunState) -> String {
 /// Run one command under `/bin/sh -c` in `cwd`, bounded with the process
 /// group kill. `None` exit means it timed out or never started.
 fn run_command(command: &str, cwd: &Path, timeout_s: u64) -> (Option<i32>, String) {
-    use std::io::Read as _;
     let mut cmd = std::process::Command::new("/bin/sh");
     cmd.arg("-c").arg(command).current_dir(cwd);
     let mut child = match crate::bounded_spawn::spawn_bounded_command(cmd) {
@@ -825,13 +907,13 @@ fn tail(text: &str) -> String {
     text[start..].to_string()
 }
 
-fn cmd_check(args: &[String]) -> Result<(), String> {
+fn cmd_check(args: &[String]) -> Result<(), DoorError> {
     let file = PathBuf::from(positional(args, 0, "<run-file>")?);
     let id = positional(args, 1, "<step-id>")?;
     let read = opt(args, "--read").ok_or("--read <what you read> is required")?;
     let verdict = opt(args, "--verdict").ok_or("--verdict pass|fail is required")?;
     if verdict != "pass" && verdict != "fail" {
-        return Err(format!("--verdict takes pass or fail, got {verdict:?}"));
+        return refused(format!("--verdict takes pass or fail, got {verdict:?}"));
     }
     let mut counts = serde_json::Map::new();
     for (i, a) in args.iter().enumerate() {
@@ -849,7 +931,7 @@ fn cmd_check(args: &[String]) -> Result<(), String> {
     }
     let st = load_run(&file)?;
     if st.pending.as_deref() != Some(id.as_str()) {
-        return Err(format!("{id} has no check waiting for its read"));
+        return refused(format!("{id} has no check waiting for its read"));
     }
     append(
         &file,
@@ -867,17 +949,17 @@ fn cmd_check(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_rollback(args: &[String]) -> Result<(), String> {
+fn cmd_rollback(args: &[String]) -> Result<(), DoorError> {
     let file = PathBuf::from(positional(args, 0, "<run-file>")?);
     let (st, book) = open(&file)?;
     if st.closed {
-        return Err("this run is closed".into());
+        return refused("this run is closed".into());
     }
     if st.failed_at.is_none() {
-        return Err("no check failed, so there is nothing to roll back".into());
+        return refused("no check failed, so there is nothing to roll back".into());
     }
     if st.rolled_back {
-        return Err("the rollback already ran".into());
+        return refused("the rollback already ran".into());
     }
     match &book.rollback {
         Rollback::Text(_) => {
@@ -889,7 +971,7 @@ fn cmd_rollback(args: &[String]) -> Result<(), String> {
             println!("rollback: none - {why}");
         }
         Rollback::Steps(steps) => {
-            let cwd = PathBuf::from(st.str("cwd"));
+            let cwd = PathBuf::from(st.header.cwd.clone());
             for r in steps {
                 let (exit, tail) = run_command(&r.run, &cwd, DEFAULT_STEP_TIMEOUT_S);
                 append(
@@ -905,43 +987,39 @@ fn cmd_rollback(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_close(args: &[String]) -> Result<(), String> {
+fn cmd_close(args: &[String]) -> Result<(), DoorError> {
     let file = PathBuf::from(positional(args, 0, "<run-file>")?);
     let st = load_run(&file)?;
     if st.closed {
-        return Err("this run is already closed".into());
+        return refused("this run is already closed".into());
     }
     if st.failed_at.is_some() && !st.rolled_back {
-        return Err(format!(
+        return refused(format!(
             "the check at {} failed; run the rollback first: fno do runbook rollback {}",
             st.failed_at.as_deref().unwrap_or_default(),
             file.display()
         ));
     }
-    let declared = st.declared();
+    let declared = st.header.steps_declared;
     let receipts = st.order.len();
     let next = st
         .header
-        .get("steps")
-        .and_then(Value::as_array)
-        .and_then(|steps| {
-            steps
-                .iter()
-                .filter_map(|s| s.get("id").and_then(Value::as_str))
-                .find(|id| !st.receipts.contains_key(*id))
-                .map(str::to_string)
-        });
+        .steps
+        .iter()
+        .map(|s| s.id.as_str())
+        .find(|id| !st.receipts.contains_key(*id))
+        .map(str::to_string);
     let stopped_at = st.failed_at.clone().or(next);
     let verdict = match (&st.failed_at, &stopped_at) {
         (Some(at), _) => format!("stopped at {at}, rolled back"),
         (None, Some(at)) => format!("incomplete, stopped before {at}"),
         (None, None) => "complete".to_string(),
     };
-    let scheduler = st.str("scheduler");
+    let scheduler = st.header.scheduler.clone();
     let body = format!(
         "runbook {} run {}: {verdict}; {receipts} of {declared} receipts; run file {}",
-        st.str("name"),
-        st.str("run_id"),
+        st.header.name.clone(),
+        st.header.run_id.clone(),
         file.display()
     );
     let mailed = !scheduler.is_empty()
@@ -1051,7 +1129,9 @@ mod tests {
         let steps = "  - id: push\n    run: \"true\"\n    irreversible: true\n";
         let live = fixture(dir.path(), steps, false);
         let (st, book) = open(&live).unwrap();
-        let err = gate_step(&st, &book, "push", None, &String::new).unwrap_err();
+        let err = gate_step(&st, &book, "push", None, &String::new)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("fno inbox outstanding ask"), "{err}");
         assert_eq!(
             cli_run(&s(&["step", &live.display().to_string(), "push"])),
@@ -1067,12 +1147,8 @@ mod tests {
             0
         );
         assert_eq!(
-            load_run(&rehearse)
-                .unwrap()
-                .receipts
-                .get("push")
-                .map(String::as_str),
-            Some("skipped")
+            load_run(&rehearse).unwrap().receipts,
+            BTreeMap::from([("push".to_string(), "skipped".to_string())])
         );
     }
 
@@ -1111,7 +1187,10 @@ mod tests {
         std::fs::write(&book, EXAMPLE).unwrap();
         let p = book.display().to_string();
         assert!(absolutize(&s(&["r1", "--runbook", "missing.md"])).is_err());
-        assert_eq!(absolutize(&s(&["r1", "--runbook", &p])).unwrap()[2], p);
+        assert_eq!(
+            absolutize(&s(&["r1", "--runbook", &p])).unwrap().get(2),
+            Some(&p)
+        );
         let refused = resolve_runbook(s(&["spawn", "r1", "a prompt", "--runbook", &p]));
         assert!(refused.unwrap_err().0.contains("--runbook is the prompt"));
         assert!(resolve_runbook(s(&["spawn", "--rehearse", "r1"])).is_err());

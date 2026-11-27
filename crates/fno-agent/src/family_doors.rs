@@ -12,7 +12,9 @@ pub fn client_dispatch(args: &[String]) -> Option<i32> {
         Some("state-cli") => Some(crate::state::cli::run(&args[1..])),
         Some("stub-manifest") => Some(crate::stub_manifest::run(&args[1..])),
         Some("plan-cli") => Some(crate::plan_doc::cli::run(&args[1..])),
-        Some("runbook-cli") => Some(crate::spawn::runbook::cli_run(&args[1..])),
+        Some("runbook-cli") => Some(crate::spawn::runbook::cli_run(
+            args.get(1..).unwrap_or_default(),
+        )),
         _ => None,
     }
 }
