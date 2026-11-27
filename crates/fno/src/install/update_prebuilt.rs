@@ -33,12 +33,6 @@ const FETCH_SECS: &str = "45";
 /// without this list learning about it.
 pub(crate) const BINARIES: [&str; 4] = ["fno-agent", "fno-agent-daemon", "fno-agent-worker", "fno"];
 
-/// The carried extras `link_binaries` links into the PATH dir when the
-/// tarball carried them: `swap_into` already places every carried file, so
-/// only the link layer needs the name. fno-app is macOS-only, so a linux
-/// install links none; the if-present check decides, never the platform.
-pub(crate) const LINKED_EXTRAS: [&str; 1] = ["fno-app"];
-
 /// The compat stub's own markers: a sh shebang on the first line plus the
 /// retirement line anywhere in the file. Only a file carrying both is the
 /// no-op stub the old tarballs packed; a real binary fails the read or the

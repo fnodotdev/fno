@@ -1,6 +1,6 @@
 # Distribution
 
-How the Rust binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`, and `fno-app` on the macOS tarball) reach users.
+How the Rust binaries (`fno`, `fno-agent`, `fno-agent-daemon`, and `fno-agent-worker`) reach users. `fno-app` ships only on its own `fno-app-v*` line (`release-app.yml`), never in these tarballs.
 
 > **Three channels.** The nightly publishes itself. An rc or a stable release is a
 > deliberate act behind the `release` environment approval click (runbook at the
@@ -10,7 +10,7 @@ How the Rust binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker
 
 | Artifact | Built by | Installed by | Audience |
 |----------|----------|--------------|----------|
-| Standalone binary tarball (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`; `fno-app` on the macOS legs) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
+| Standalone binary tarball (`fno`, `fno-agent`, `fno-agent-daemon`, and `fno-agent-worker`) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
 | `fno-agent` crate | `release.yml` (stable promotion) | `cargo install fno-agent` / `cargo add fno-agent` | other Rust projects |
 
 Target platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. Windows is

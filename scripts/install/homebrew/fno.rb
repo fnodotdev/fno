@@ -52,17 +52,15 @@ class Fno < Formula
   def install
     # The release tarball carries the four core binaries at its root (no
     # wrapper dir), so brew's extraction lands them at buildpath. libexec
-    # holds them; the keg bin symlinks from there. The macOS tarball adds
-    # fno-app; the formula is macOS-only, so it always installs it. The
+    # holds them; the keg bin symlinks from there. The
     # fno-agent* symlinks are the load-bearing step (Locked Decision 4): the
     # CLI invokes the binaries by name on PATH. The `fno` symlink is the
     # advertised front door: the Rust mux that owns `fno` on PATH.
-    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker", "fno-app"
+    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"
     bin.install_symlink libexec/"fno"
     bin.install_symlink libexec/"fno-agent"
     bin.install_symlink libexec/"fno-agent-daemon"
     bin.install_symlink libexec/"fno-agent-worker"
-    bin.install_symlink libexec/"fno-app"
     # The old fno-agents names answer for one release.
     bin.install_symlink libexec/"fno-agent" => "fno-agents"
     bin.install_symlink libexec/"fno-agent-daemon" => "fno-agents-daemon"
@@ -78,7 +76,7 @@ class Fno < Formula
     # All four Rust executables must be present + executable on the keg bin,
     # or the front door or a daemon/loop command would 127 at runtime. Fail
     # the test on any miss (no silent success for a half-installed CLI).
-    %w[fno fno-agent fno-agent-daemon fno-agent-worker fno-app].each do |b|
+    %w[fno fno-agent fno-agent-daemon fno-agent-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end
