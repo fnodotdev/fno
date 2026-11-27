@@ -205,7 +205,10 @@ pub(crate) fn present_mail_ids(
         }
         let line = String::from_utf8_lossy(&bytes);
         let tag_line = line.contains("<fno_mail");
-        if !tag_line && !line.contains("--- from ") {
+        // Three delivered shapes: the rendered `--- from ... id: ... ---`
+        // header, the legacy open tag, and the typed law header
+        // `` `@sender · id` `` a live lane lays down with the body.
+        if !tag_line && !line.contains("--- from ") && !line.contains(" · ") {
             continue;
         }
         // A JSONL record holds delivered text inside one JSON string, its
@@ -799,5 +802,24 @@ mod tests {
             present_mail_ids(&projects, "0000ffff-1111-2222-3333-444455556666"),
             None
         );
+    }
+
+    /// A typed law header (`` `@sender · id` ``) inside a JSON-escaped
+    /// transcript record dedups its id: the live lane laid the body down,
+    /// and a staged row without its receipt must not re-render.
+    #[test]
+    fn typed_header_ids_still_dedup() {
+        let session = "ffffabcd-1111-2222-3333-444455556666";
+        let dir = tempfile::tempdir().unwrap();
+        let projects = dir.path().join("projects");
+        std::fs::create_dir_all(projects.join("p")).unwrap();
+        let record = "{\"prompt\":\"`@lead · msg-typed-header`\\nbody the lane typed\"}";
+        std::fs::write(
+            projects.join("p").join(format!("{session}.jsonl")),
+            format!("{record}\n"),
+        )
+        .unwrap();
+        let present = present_mail_ids(&projects, session).expect("transcript readable");
+        assert!(present.contains("msg-typed-header"), "typed header missed");
     }
 }
