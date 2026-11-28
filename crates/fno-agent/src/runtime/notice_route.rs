@@ -1686,11 +1686,13 @@ mod tests {
             },
             warnings: warnings.clone(),
         };
-        let mut mail_sends = 0usize;
-        let mut resume_calls = 0usize;
+        // Cell counters: the runner must stay borrowed across both sweeps,
+        // so the asserts between them read through shared captures.
+        let mail_sends = std::cell::Cell::new(0usize);
+        let resume_calls = std::cell::Cell::new(0usize);
         let mut runner: crate::burn_watch::Runner = &mut |argv: &[String], _cwd: &str| {
             if argv[2] == "mail" {
-                mail_sends += 1;
+                mail_sends.set(mail_sends.get() + 1);
                 let stdout = format!(
                     "{}\n{}",
                     crate::mail_receipt::demotion(
@@ -1707,7 +1709,7 @@ mod tests {
                 );
                 (0, stdout, String::new())
             } else {
-                resume_calls += 1;
+                resume_calls.set(resume_calls.get() + 1);
                 (16, String::new(), String::new())
             }
         };
@@ -1719,8 +1721,8 @@ mod tests {
         let mut detail: Vec<String> = Vec::new();
         let (acted, terminal) = route_groups(groups, now, &mut detail, &read_sent(), &mut runner);
         assert_eq!(acted, 1);
-        assert_eq!(mail_sends, 1);
-        assert_eq!(resume_calls, 1);
+        assert_eq!(mail_sends.get(), 1);
+        assert_eq!(resume_calls.get(), 1);
         // Sweep 2, 20s later, same warnings, same store: nothing sends.
         let mut groups2 = BTreeMap::new();
         groups2.insert("g".to_string(), group());
@@ -1728,8 +1730,12 @@ mod tests {
         let (acted2, _t2) =
             route_groups(groups2, now + 20, &mut detail2, &read_sent(), &mut runner);
         assert_eq!(acted2, 0);
-        assert_eq!(mail_sends, 1, "the unchanged set must not send again");
-        assert_eq!(resume_calls, 1, "the unchanged set must not resume again");
+        assert_eq!(mail_sends.get(), 1, "the unchanged set must not send again");
+        assert_eq!(
+            resume_calls.get(),
+            1,
+            "the unchanged set must not resume again"
+        );
         assert!(terminal.contains("g"));
     }
 
