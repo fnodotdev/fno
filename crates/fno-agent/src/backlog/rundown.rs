@@ -871,8 +871,11 @@ fn ledger_budget_s() -> u64 {
 
 /// The render child runs under a wall budget. An unbounded `output()` let a
 /// child parked on the graph store hold the arm's one-in-flight gate for
-/// hours, so no tick ran again. The cap stays under the 300 s beat.
-const LEDGER_BUDGET_FLOOR_S: u64 = 60;
+/// hours, so no tick ran again. The floor sits above the child's measured
+/// loaded cost: 51 s wall at load 48 on the 16-core fleet machine, and every
+/// render beat after the 2026-11-28 09:40Z daemon restart was killed at the
+/// old 60 s floor for three hours. The cap stays under the 300 s beat.
+const LEDGER_BUDGET_FLOOR_S: u64 = 120;
 const LEDGER_BUDGET_CAP_S: u64 = 240;
 
 /// The production runner: the page render, cwd-bound (config, the graph and
@@ -1681,6 +1684,28 @@ mod tests {
         }
         assert!(started.elapsed().as_secs() < 20, "the stall was not cut");
         assert!(run.unwrap_err().contains("killed after 1s"));
+    }
+
+    #[test]
+    fn ledger_render_budget_covers_the_measured_loaded_cost_under_the_beat() {
+        // The 2026-11-28 band: the loaded render measured 51 s wall at load
+        // 48, one beat was killed at an 80 s scaled budget, and 38 more at
+        // the old 60 s floor. The floor must stay above that measured cost,
+        // or the stall guard kills real renders again; the cap must stay
+        // under the 300 s beat, or a stuck child holds the one-in-flight
+        // gate past the arm's own next tick.
+        assert!(
+            LEDGER_BUDGET_FLOOR_S >= 90,
+            "floor {LEDGER_BUDGET_FLOOR_S}s is back inside the measured 51-80s+ loaded render cost"
+        );
+        assert!(
+            LEDGER_BUDGET_CAP_S < TEAM_LEDGER_INTERVAL_S,
+            "cap {LEDGER_BUDGET_CAP_S}s must stay under the {TEAM_LEDGER_INTERVAL_S}s beat"
+        );
+        assert!(
+            LEDGER_BUDGET_FLOOR_S <= LEDGER_BUDGET_CAP_S,
+            "floor {LEDGER_BUDGET_FLOOR_S}s above cap {LEDGER_BUDGET_CAP_S}s"
+        );
     }
 
     #[test]
