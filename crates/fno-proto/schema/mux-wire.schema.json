@@ -82,6 +82,18 @@
             "null"
           ]
         },
+        "open_as": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PanePlacement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "(v135) Where a thread opens, snapshotted at Enter: the card's\nworkspace, tab id, anchor pane, split, and the portal or `portal_new`.\nIt wins over the three word fields above, which older clients send."
+        },
         "permission_mode": {
           "default": null,
           "type": [
@@ -606,7 +618,7 @@
           ]
         },
         "session_input_tokens": {
-          "description": "(v132) The raw token classes behind `session_tokens`: input, output,\ncache read and cache write, summed over every model the session's\ntranscript recorded. `None` before the first measurement; never a\nfabricated zero. `#[serde(default)]` keeps a v104 reader\nwire-tolerant.",
+          "description": "(v133) The raw token classes behind `session_tokens`: input, output,\ncache read and cache write, summed over every model the session's\ntranscript recorded. `None` before the first measurement; never a\nfabricated zero. `#[serde(default)]` keeps a v104 reader\nwire-tolerant.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -2065,6 +2077,19 @@
           },
           "required": [
             "AgentLaunch"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "(v135) The composer's one-shot `!` run: start, keys, move to a tab.",
+          "properties": {
+            "ShellRun": {
+              "$ref": "#/$defs/ShellRunRequest"
+            }
+          },
+          "required": [
+            "ShellRun"
           ],
           "type": "object"
         },
@@ -3994,6 +4019,17 @@
               "properties": {
                 "name": {
                   "type": "string"
+                },
+                "origin": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ThreadOrigin"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "(v135) The caller, for the pre-birth check and for a worker on\nanother machine. Additive, so the floor does not move."
                 },
                 "placement": {
                   "$ref": "#/$defs/PanePlacement",
@@ -6476,6 +6512,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "(v135) Where a one-shot `!` run stands, sent only to its client.",
+          "properties": {
+            "ShellRun": {
+              "$ref": "#/$defs/ShellRunUpdate"
+            }
+          },
+          "required": [
+            "ShellRun"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Answer to [`ControlCommand::TabLs`].",
           "properties": {
             "TabList": {
@@ -7069,6 +7118,220 @@
       ],
       "type": "string"
     },
+    "ShellRunRequest": {
+      "description": "What a client asks of its run. `run` is client-minted, and it names the\nrun in every later message of that client.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Run `line` with `shell -lc`. The line is one argv element, never\nscript text. `squad` is the workspace its tab opens in when it moves.",
+          "properties": {
+            "Start": {
+              "properties": {
+                "cols": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "cwd": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                },
+                "rows": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "run": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "shell": {
+                  "type": "string"
+                },
+                "squad": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "run",
+                "squad",
+                "cwd",
+                "shell",
+                "line",
+                "rows",
+                "cols"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Keys for the running command, as typed.",
+          "properties": {
+            "Input": {
+              "properties": {
+                "bytes": {
+                  "items": {
+                    "format": "uint8",
+                    "maximum": 255,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "run": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "run",
+                "bytes"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move the running command to a new tab. It is the same process.",
+          "properties": {
+            "ToTab": {
+              "properties": {
+                "run": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "run"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ToTab"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ShellRunState": {
+      "description": "Where a run stands. Its live screen rides [`crate::ServerMsg::Frame`]\nunder the pane that `Running` names.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Running": {
+              "properties": {
+                "pane": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "pane"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Running"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "Moved",
+          "description": "The run is a pane in a tab now, and the card lets it go.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`exit` is absent when the run was killed before it could record one.",
+          "properties": {
+            "Done": {
+              "properties": {
+                "exit": {
+                  "format": "int32",
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "output": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "output"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Done"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Refused": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Refused"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ShellRunUpdate": {
+      "description": "One run's progress, sent only to the client that started it.",
+      "properties": {
+        "run": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ShellRunState"
+        }
+      },
+      "required": [
+        "run",
+        "state"
+      ],
+      "type": "object"
+    },
     "SlotBinding": {
       "description": "What one template slot binds to (v42). Arrange-only: a slot names an\nexisting session or an intentional empty shell - it never spawns a worker\n(that arrives with the roles group). A `Role` variant lands later without a\nwire break; a v42 reader that predates it treats the unknown variant as a\nhard version-skew error, never a silent misbind.",
       "oneOf": [
@@ -7494,6 +7757,32 @@
         }
       ]
     },
+    "ThreadOrigin": {
+      "description": "(v135) Who asks a thread reach. It resolves the workspace of a worker that\nhas no row in this registry: one that is not born yet, or one that runs on\nanother machine.",
+      "properties": {
+        "check": {
+          "default": false,
+          "description": "Answer whether the reach would land, and change nothing. A caller\nsends this only to a server of v135 or later: an older one drops the\nfield and would act on the request.",
+          "type": "boolean"
+        },
+        "cwd": {
+          "description": "The folder the worker runs in, or the caller's for a remote worker.",
+          "type": "string"
+        },
+        "parent": {
+          "default": null,
+          "description": "The session that spawns the worker.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "type": "object"
+    },
     "ToolInput": {
       "anyOf": [
         {
@@ -7614,7 +7903,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 134,
+  "proto_version": 135,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

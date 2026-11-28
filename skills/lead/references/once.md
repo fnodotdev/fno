@@ -74,14 +74,13 @@ fno agent spawn --name lead-<epic> "<brief>" --effort high --model <your frontie
   --promote <epic> --substrate pane --workspace <epic>
 ```
 
-`--as pane` is explicit here rather than assumed. `pane` is the built-in default. When the flag is absent, `config.agents.defaults.substrate` takes precedence and is injected. If the user set `thread`, this command becomes a placement flag on a non-pane substrate and exits 2. Promotion then fails because you cannot see or change that config here.
+`--as pane` is explicit here rather than assumed. `thread` is the built-in default, and `config.agents.defaults.substrate` replaces it. On a thread this `--workspace` opens a portal in that workspace, and the lead has no pane of its own.
 
 What `pane` buys here is the ORG, not the role.
 
 The role itself rides `--substrate thread` for Claude: a Claude thread worker is persistent, attachable and resumable. Non-Claude thread spawns reject `--promote` because role support is Claude-only. For Claude, only the `headless` one-shot is refused, since it exits before it can lead. The retired `bg` spelling refuses with a redirect to `thread`.
-What a thread lead loses is placement.
-The placement flags are mux geometry and refuse outside a pane, and the exact anchor resolves from `FNO_PANE`, which a thread session does not have.
-So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
+
+What a thread lead loses is its own pane as an anchor. On a thread the placement flags open a portal. The exact anchor `--at current` resolves from `FNO_PANE`, which a thread session does not have. So a thread lead seats teammates in fresh tabs instead of beside itself, and the org stops cohering around one screen.
 
 Promote a thread lead for a pass, which steps down before layout matters. Promote a pane lead for a lead that runs an org.
 
@@ -174,9 +173,11 @@ The payload decides what it does: free text is a verbatim **seed** (it opens a s
 `fno backlog join <node>` hands a held node's remaining waves to joiners in its worktree.
 It refuses with a named exit code when it cannot, and [step 4](#4-kick-off) reads those codes.
 
-**Placement is a pane-only concern, and it applies to both shapes.**
+**An org places panes, and that applies to both shapes.**
 `--workspace <name>` (short `-s`) sends a new pane into a named mux workspace, and `--split left|right|up|down` tiles it there.
-Both are refused outside `--substrate pane`: `thread` and `headless` have no mux geometry, so a `thread` example carrying `--workspace` is a command that exits nonzero rather than a stricter one.
+
+On `thread` both open a portal. On `headless` both refuse, because it has no mux geometry.
+
 The consequence splits cleanly by substrate.
 A pass dispatching on `thread` or `headless` carries its mission in the graph and the spawn provenance, and names no placement flag at all.
 Which placement flag depends on whether you are already in the target workspace, and the two cases split by shape.

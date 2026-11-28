@@ -463,15 +463,7 @@ impl Root {
             metrics.font.family.to_string(),
             f32::from(metrics.font_size),
         );
-        let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-        let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
-        // The key layer (config.mux.prefix, [mux.keys]), installed before the
-        // scanner reads its first keystroke - the same loader the terminal
-        // client uses. A refused rebind surfaces as the startup notice rather
-        // than silently running the shipped default.
-        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
-        fno::ui::keys::install(keymap);
-        let key_warning = key_warnings.first().map(|w| w.0.clone());
+        let (theme_cwd, palette, notice) = Self::theme_and_keys(light);
         let mut root = Root {
             main,
             link: None,
@@ -480,7 +472,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             scanner: fno::ui::keys::Scanner::default(),
-            notice: key_warning.or(theme_warning),
+            notice,
             notice_failed: false,
             notice_gen: 0,
             shot: false,
@@ -554,19 +546,45 @@ impl Root {
             // first read happens here.
             window_active: window.is_window_active(),
         };
-        wire_window(&mut root, window, cx);
-        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        Self::start(&mut root, &session, sent_size, prewarmed, window, cx);
+        root
+    }
+
+    /// The theme folder, its palette, and the startup notice. The key layer
+    /// (config.mux.prefix, [mux.keys]) installs before the scanner reads its
+    /// first keystroke, through the loader the terminal client uses. A
+    /// refused rebind surfaces as the notice rather than silently running the
+    /// shipped default.
+    fn theme_and_keys(light: bool) -> (PathBuf, Palette, Option<String>) {
+        let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+        let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
+        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
+        fno::ui::keys::install(keymap);
+        let key_warning = key_warnings.first().map(|w| w.0.clone());
+        (theme_cwd, palette, key_warning.or(theme_warning))
+    }
+
+    /// Wire a built root to its window, session, board and plugins.
+    fn start(
+        root: &mut Root,
+        session: &str,
+        sent_size: (u16, u16),
+        prewarmed: Option<super::link::WarmedLink>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        wire_window(root, window, cx);
+        Self::attach_link(root, session, sent_size, prewarmed, cx);
         root.wire_alerts(cx);
         root.start_board_poll(cx);
         root.start_plugins(cx);
         // The control channel: the drain loop applies rows through the
         // same paths clicks ride (focus, view switch, quit).
-        crate::control::spawn_poll(session.clone(), cx);
+        crate::control::spawn_poll(session.to_string(), cx);
         // `--mode mods` opens on the view without a switch, so read here.
         if root.main == MainView::Mods {
             root.ext.read();
         }
-        root
     }
 
     /// The drive surface finds the live app through this pid file (the

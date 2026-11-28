@@ -275,7 +275,7 @@ impl SettingList {
         let mut events = Vec::new();
         let flush = bytes.is_empty();
         for key in self.page_esc.fold_carry(bytes, flush) {
-            match key {
+            match key.plain() {
                 LKey::Esc if flush => {
                     // The page closes and the value stays whatever it was.
                     self.page = None;

@@ -77,6 +77,7 @@ fn proto_agent_launch_roundtrips() {
         placement: Some("name:work".into()),
         portal: None,
         split: None,
+        open_as: None,
         node: None,
         message: "line one\nline \"two\" $ ` \u{1f600}".into(),
         extra_flags: vec!["--agent".into(), "abc".into(), "--name".into(), "x".into()],

@@ -1228,6 +1228,8 @@ impl FakeClient {
             ServerMsg::ServerStats { .. } => {}
             // (v83) Launcher progress: recorded for the launcher suites.
             ServerMsg::AgentLaunch(u) => self.launch_updates.push(u),
+            // (v135) A card's `!` run: only the client that started one hears it.
+            ServerMsg::ShellRun(_) => {}
             // Addressed reply receipts are consumed by the interactive client.
             ServerMsg::PaneInputResult(_) => {}
             // (v110) Desktop notice: the real client writes it to the user's

@@ -139,7 +139,15 @@ fno agent spawn --name w2 --substrate thread --portal 1 \
   "fix the failing test"
 ```
 
-When the command completes, portal 1 is open and already shows the new worker, and the receipt names the index. A bare spawn seats the thread and opens nothing, inside a mux or out. The index runs from 0 to 255. Each index holds one portal, and each portal shows one thread. `--portal new` also works in the spawn itself. The server picks the next free index, so two callers racing on the same number cannot repoint each other's portal.
+When the command completes, portal 1 is open and already shows the new worker. The last stderr line names the portal, the workspace, the tab and the split. A bare spawn seats the thread and opens nothing, inside a mux or out. The index runs from 0 to 255. Each index holds one portal, and each portal shows one thread. `--portal new` also works in the spawn itself. The server picks the next free index, so two callers racing on the same number cannot repoint each other's portal. `--tab`, `--split`, `--from` and `--workspace` each ask for a new portal. `--portal` is then optional.
+
+```bash
+fno agent spawn --machine buildbox --tab 1 --portal 2 --split down "fix the failing test"
+```
+
+With `--machine`, the worker runs on that host and the portal opens in your own mux. The portal shows `name@host` through the link.
+
+After the birth, a placement that fails never changes the exit code. The last stderr line then reads `launched, not shown: <reason>` and gives the command that shows the worker.
 
 ### Choose the geometry
 
@@ -147,23 +155,29 @@ When the command completes, portal 1 is open and already shows the new worker, a
 fno mux thread w2 --portal new --split right --from portal 0
 ```
 
-`--portal new` opens the next free index. If N is not open, `--portal N` opens it. If N is open, the reach tunes it. A bare `--split DIR` halves the caller's own pane. `--from CELL` names another cell: `portal 0`, a worker name, or `current`. A caller with no pane names it or is refused. When the command runs inside a pane, it resolves `current` itself. Split right from portal 0, then down from portal 0, then down from portal 1: that is the 2x2.
+`--portal new` opens the next free index. If N is not open, `--portal N` opens it. If N is open, the reach tunes it. A `--split DIR` finds its cell in this order. The cell `--from` names is first. The focused pane of the `--tab` tab is second. The caller's own pane is last. A split with none of these refuses and names `--tab` and `--from`. A `--from` cell with no tab brings its own tab and workspace. `--from` takes `portal 0`, a worker name, or `current`. When the command runs inside a pane, it resolves `current` itself. Split right from portal 0, then down from portal 0, then down from portal 1: that is the 2x2.
 
-If the named portal already shows a live viewer, the reach tunes it. The portal keeps its geometry. The server prints the notice `a portal takes no split, target, or anchor`, so you see the refusal instead of a silent move.
+A `--split` beside an open `--portal N` halves N and opens a new portal. The agent in N keeps showing. N is then the cell of the split, so it needs no `--tab` and no `--from`. A `--tab` that does not hold N refuses and names N's tab.
+
+With no `--split`, a reach to an open portal tunes it. The portal keeps its geometry. The server says which flags it did not use, as in `portal 2 was open: it now shows w2; --tab was not used`.
 
 ### What the spawn refuses
 
-Every refusal below exits 2 before the worker starts, and each message names the fix.
+Every refusal below exits 2 before the worker starts, and each message names the fix. A running mux answers the tab, anchor and workspace rows. With no mux, or an older one, the spawn goes on and its last line says that the worker is not shown.
 
 | You passed | The refusal says |
 |---|---|
 | `--portal` with a pane or headless substrate | a pane hosts its own geometry, and headless hosts no session |
-| placement flags on a thread with no `--portal` | names `--portal N|new` as the missing piece |
+| `--tab new` with `--split` | drop one of the two |
+| `--split` with no tab, no `--from` and no calling pane | names `--tab` and `--from` |
+| a `--from` cell outside the named tab | the cell is not in the target tab, and the flag to change |
+| `--split` with an open `--portal N` and another `--tab` | the tab that holds N |
+| `--split` with an open `--portal N` and another `--from` | drop `--from`, or pass `--portal new` |
 | `--portal` with `--once` | a one-shot hosts no session to show |
-| `--portal` with `--bounded-placement` | a thread cannot be bounded |
-| `--at` on a thread | a thread has no calling pane |
+| `--portal` with `--bounded-placement` | a portal takes no placement lease |
+| `--at` on a thread | name the cell with `--from` |
 | an index outside 0 to 255 | the index range |
-| `--tab 7` when tab 7 is gone | refuses before any pane exists |
+| `--tab 7` when tab 7 is gone | the tab count of that workspace |
 
 ### Give a running thread a portal
 

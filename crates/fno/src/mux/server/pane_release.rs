@@ -30,6 +30,8 @@ impl Core {
     }
 
     fn drop_pane_entry(&mut self, pid: u64, kill: bool) {
+        // A `!` run reads its last screen before the entry goes.
+        self.shell_run_settle(pid);
         if let Some(entry) = self.panes.remove(&pid) {
             if let Ok(mut children) = self.pane_children.lock() {
                 if let Some(child_pid) = entry.pty.child_pid() {

@@ -1659,7 +1659,7 @@ fn portal_placement_rows() {
     assert!(
         notices
             .iter()
-            .any(|t| t.contains("a portal takes no split")),
+            .any(|t| t.contains("--split, --tab were not used")),
         "the geometry refusal is visible: {notices:?}"
     );
 
@@ -3632,6 +3632,203 @@ mod serve_setup {
         move || {
             serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "t");
             serve_attach::clear_pinned_health();
+        }
+    }
+}
+
+#[test]
+fn a_launch_receipt_opens_one_portal_where_enter_put_it() {
+    use crate::proto::agent_launch::{AgentLaunchUpdate, LaunchState};
+    use crate::proto::TabSel;
+    use crate::server::agent_launch::HeldPlacement;
+
+    set_attach_program(&["/bin/cat"]);
+    // (case, the index, the anchor is the first tab's pane, the tab, the notice)
+    let cases = [
+        ("a new tab", None, false, TabSel::New, None),
+        (
+            "a closed portal",
+            Some(5),
+            false,
+            TabSel::New,
+            Some("portal picked at Enter closed"),
+        ),
+        (
+            "a moved anchor",
+            None,
+            true,
+            TabSel::Id(2),
+            Some("pane picked at Enter moved"),
+        ),
+    ];
+    for (case, portal, anchored, tab, notice) in cases {
+        let (mut core, client_id, first, mut rx) = thread_core();
+        let second = core.spawn_pane(24, 40, "/tmp/seen").expect("pane 2");
+        let squad = core.session.squad_mut(1).expect("the workspace");
+        squad.tabs.push(Tab {
+            name: None,
+            id: 2,
+            root: Node::Leaf(second),
+            focus: second,
+        });
+        core.agents = vec![bg_row("kite", "/tmp/seen", Some("deadbee1"))];
+        let placement = PanePlacement {
+            portal,
+            portal_new: portal.is_none(),
+            at: anchored.then_some(first),
+            split: anchored.then_some(Dir::Down),
+            tab: Some(tab),
+            ..Default::default()
+        };
+        let held = HeldPlacement {
+            placement,
+            picked_open: portal.is_some(),
+        };
+        core.launch_desk.mark_started(client_id, 7, Some(held));
+        let update = AgentLaunchUpdate {
+            request_id: 7,
+            state: LaunchState::Launched {
+                name: "kite".into(),
+                pane: None,
+                seed_delivered: None,
+            },
+        };
+        // A repeated receipt finds nothing left on the desk.
+        core.agent_launch_update(client_id, update.clone(), 0);
+        core.agent_launch_update(client_id, update, 0);
+        assert_eq!(core.portals.len(), 1, "{case}: one opener");
+        assert!(core.portals.contains_key(&0), "{case}: the server picks");
+        let tabs = core.session.squad(1).map_or(0, |s| s.tabs.len());
+        assert_eq!(tabs, 3, "{case}: it opens in a new tab");
+        let said = drain_notices(&mut rx);
+        match notice {
+            Some(text) => assert!(said.iter().any(|n| n.contains(text)), "{case}: {said:?}"),
+            None => assert!(!said.iter().any(|n| n.contains("at Enter")), "{case}"),
+        }
+    }
+}
+
+#[test]
+fn portal_split_decided_table() {
+    use crate::proto::TabSel;
+
+    set_attach_program(&["/bin/cat"]);
+    let (mut core, client_id, _first, _rx) = thread_core();
+    core.agents = vec![
+        bg_row("target-a", "/tmp/seen", Some("deadbee1")),
+        bg_row("target-b", "/tmp/seen", Some("deadbee2")),
+    ];
+    core.command(client_id, thread_reach_cmd("deadbee1"));
+    let (seat, tab) = core.portals.get(&0).map(|p| (p.seat, p.tab)).expect("open");
+    // (case, the index, the tab, the anchor or the refusal)
+    let cases = [
+        ("no tab", 0, None, Ok(seat)),
+        ("its own tab", 0, Some(TabSel::Id(tab)), Ok(seat)),
+        ("another tab", 0, Some(TabSel::Id(1)), Err("is in tab 2")),
+        ("closed, no anchor", 7, None, Err("is not open")),
+    ];
+    for (case, idx, named, want) in cases {
+        let mut placement = PanePlacement {
+            portal: Some(idx),
+            split: Some(Dir::Down),
+            tab: named,
+            ..Default::default()
+        };
+        match (core.split_open_portal(&mut placement), want) {
+            (Ok(()), Ok(anchor)) => {
+                assert_eq!(placement.at, Some(anchor), "{case}");
+                assert!(placement.portal_new && placement.portal.is_none(), "{case}");
+            }
+            (Err(refusal), Err(text)) => {
+                assert!(refusal.to_string().contains(text), "{case}: {refusal}");
+            }
+            (got, _) => panic!("{case}: {got:?}"),
+        }
+    }
+    let mut placement = PanePlacement {
+        portal: Some(0),
+        split: Some(Dir::Down),
+        ..Default::default()
+    };
+    core.split_open_portal(&mut placement).expect("it splits");
+    placement.portal_new = false;
+    placement.portal = Some(1);
+    core.command(
+        client_id,
+        Command::AttachAgent {
+            id: "deadbee2".into(),
+            placement,
+        },
+    );
+    let kept = core.portals.get(&0).map(|p| (p.seat, p.row_key.as_str()));
+    assert_eq!(kept, Some((seat, "deadbee1")), "N keeps showing");
+    assert_eq!(core.portals.get(&1).map(|p| p.tab), Some(tab), "below N");
+}
+
+#[test]
+fn thread_check_answers_by_the_reach_rule_and_changes_nothing() {
+    use crate::proto::{TabSel, ThreadOrigin};
+    let (mut core, _client_id, first, _rx) = thread_core();
+    let second = core.spawn_pane(24, 40, "/tmp/seen").expect("pane 2");
+    let squad = core.session.squad_mut(1).expect("the workspace");
+    squad.tabs.push(Tab {
+        name: None,
+        id: 2,
+        root: Node::Leaf(second),
+        focus: second,
+    });
+    squad.active_tab = 1;
+    let origin = ThreadOrigin {
+        cwd: "/tmp/seen".into(),
+        parent: None,
+        check: true,
+    };
+    let first_tab = || Some(TabSel::Id(1));
+    let cases = [
+        ("a named tab", None, first_tab(), Ok(first_tab())),
+        ("an anchor pins its tab", Some(first), None, Ok(first_tab())),
+        (
+            "no such tab",
+            None,
+            Some(TabSel::Id(9999)),
+            Err("has 2 tabs"),
+        ),
+        (
+            "an anchor outside the tab",
+            Some(first),
+            Some(TabSel::Id(2)),
+            Err("not in the target tab"),
+        ),
+        (
+            "a vanished anchor",
+            Some(9999),
+            None,
+            Err("no longer exists"),
+        ),
+    ];
+    for (case, at, tab, want) in cases {
+        let placement = PanePlacement {
+            portal_new: true,
+            split: Some(Dir::Down),
+            at,
+            tab,
+            ..Default::default()
+        };
+        let reach = core.fresh_landing(1, &placement, at);
+        let before = (core.panes.len(), core.portals.len());
+        let (tx, mut rx) = oneshot::channel();
+        core.thread_door("new", 0, placement, Some(origin.clone()), None, tx);
+        assert_eq!((core.panes.len(), core.portals.len()), before, "{case}");
+        let answer = rx.try_recv().expect("a check answers at once");
+        match (want, reach, answer) {
+            (Ok(tab), Ok((_, landing)), ServerMsg::Notice { .. }) => {
+                assert_eq!(landing.tab, tab, "{case}");
+            }
+            (Err(text), Err(refusal), ServerMsg::Err { msg, .. }) => {
+                assert_eq!(refusal.to_string(), msg, "{case}");
+                assert!(msg.contains(text), "{case}: {msg}");
+            }
+            (_, reach, answer) => panic!("{case}: reach {reach:?}, check {answer:?}"),
         }
     }
 }

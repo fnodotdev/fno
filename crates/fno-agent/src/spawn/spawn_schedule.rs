@@ -855,6 +855,90 @@ fn strip_schedule_flags(args: &[String]) -> Vec<String> {
     out
 }
 
+/// The flags an unshown fire drops, each with its value: the placement
+/// flags and the lane, which the fire sets to thread.
+const UNSHOWN_DROP_FLAGS: &[&str] = &[
+    "-s",
+    "--squad",
+    "--workspace",
+    "-x",
+    "--split",
+    "--from",
+    "--tab",
+    "--portal",
+    "--at",
+    "--as",
+];
+
+/// `(flag, value)` for each spawn-owned value flag before the fence, in both
+/// the `--flag value` and `--flag=value` spellings.
+fn owned_values(argv: &[String]) -> Vec<(&str, &str)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(tok) = argv.get(i).map(String::as_str) {
+        if tok == "--" || tok == "--argv" {
+            break;
+        }
+        if let Some((flag, value)) = tok.split_once('=').filter(|(f, _)| f.starts_with("--")) {
+            out.push((flag, value));
+        } else if crate::spawn_admission::is_value_flag(tok) {
+            if let Some(value) = argv.get(i + 1) {
+                out.push((tok, value.as_str()));
+            }
+            i += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Why this spawn's placement resolves against the calling pane, or `None`
+/// when every anchor is absolute. The daemon fires a row with its own
+/// environment, so a caller-relative anchor names no pane by then.
+pub(crate) fn relative_placement(argv: &[String]) -> Option<&'static str> {
+    let values = owned_values(argv);
+    let value = |names: &[&str]| {
+        values
+            .iter()
+            .find(|(flag, _)| names.contains(flag))
+            .map(|(_, v)| v.trim())
+    };
+    if value(&["--from"]) == Some("current") {
+        return Some("--from current names the calling pane");
+    }
+    let anchored = value(&["--tab"]).is_some()
+        || value(&["--from"]).is_some_and(|v| !v.is_empty())
+        || value(&["--portal"]).is_some_and(|v| v.parse::<u8>().is_ok());
+    (value(&["-x", "--split"]).is_some() && !anchored)
+        .then_some("a split with no --tab, --from or --portal N halves the calling pane")
+}
+
+/// The argv a stored row fires with when its placement is caller-relative:
+/// every placement flag dropped and `--as thread`, so the worker starts as
+/// an unshown thread rather than refusing.
+pub(crate) fn unshown_thread_argv(argv: &[String]) -> Vec<String> {
+    let mut out = vec!["--as".to_string(), "thread".to_string()];
+    let mut i = 0;
+    while let Some(tok) = argv.get(i).map(String::as_str) {
+        if tok == "--" || tok == "--argv" {
+            out.extend(argv.iter().skip(i).cloned());
+            return out;
+        }
+        let flag = tok.split_once('=').map_or(tok, |(f, _)| f);
+        if UNSHOWN_DROP_FLAGS.contains(&flag) {
+            i += if flag == tok { 2 } else { 1 };
+            continue;
+        }
+        if tok == "--bounded-placement" {
+            i += 1;
+            continue;
+        }
+        out.push(tok.to_string());
+        i += 1;
+    }
+    out
+}
+
 /// The spawn front door's schedule arm: intercepts `--list-scheduled`,
 /// `--cancel-scheduled <id>` and the trigger flags before the strict parse,
 /// answers, and never reaches the daemon RPC. `None` when the argv carries
@@ -1071,6 +1155,14 @@ fn run_front_door(
     // --wait waits at the gate for a spawn that never starts; refuse it.
     if args.iter().take(name_index).any(|a| a == "--wait") {
         eprintln!("fno agent spawn: --wait never fires: it waits at the gate for a spawn that starts now, not one queued for later");
+        return 2;
+    }
+    // Refuse here, while the caller can still fix the line.
+    if let Some(reason) = relative_placement(args) {
+        eprintln!(
+            "fno agent spawn: a scheduled spawn fires from the daemon, which has no calling \
+             pane: {reason}. Name the anchor with --tab <N> or --from <portal N|worker name>"
+        );
         return 2;
     }
     // A bad runbook refuses before a row exists; the row records its

@@ -92,6 +92,7 @@ mod pane_anchors;
 mod pane_scroll;
 mod search_nav;
 mod serve_attach;
+mod shell_run;
 use pane_scroll::{wheel_gate, WheelGateState};
 mod link_drive;
 pub(crate) mod links;
@@ -113,6 +114,7 @@ use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
 mod portal_journal;
 mod portal_reach;
+mod reach_landing;
 mod reflow;
 mod restore_route_gate;
 mod resume_argv;
@@ -634,6 +636,8 @@ pub(crate) enum CoreMsg {
         id: u64,
         request: crate::proto::AgentLaunchRequest,
     },
+    /// (v135) One client's one-shot `!` run, see [`shell_run`].
+    ShellRun(u64, crate::proto::shell_run::ShellRunRequest),
     /// (v116) A passive client tags itself as an observer of one pane.
     Observe(u64, crate::proto::ObserverHello),
     /// (v121) A passive client takes the link role for one pane.
@@ -647,6 +651,7 @@ pub(crate) enum CoreMsg {
         id: u64,
         update: crate::proto::AgentLaunchUpdate,
         retry: u8,
+        agents: Option<Vec<RegistryAgent>>,
     },
     /// (v29) The off-loop peek task's transcript, routed back so the
     /// `PeekBody` is sent from the core loop (which owns `clients`) to the
@@ -910,6 +915,7 @@ pub(crate) enum CoreMsg {
         name: String,
         portal: u8,
         placement: PanePlacement,
+        origin: Option<crate::proto::ThreadOrigin>,
         agents: Option<Vec<RegistryAgent>>,
         reply: ControlReply,
     },
@@ -1675,6 +1681,7 @@ pub(crate) struct Core {
     /// (v124) Focus-recall state behind the tmux parity commands; runtime
     /// only, see [`focus_recall::FocusRecall`].
     recall: focus_recall::FocusRecall,
+    shell_runs: shell_run::ShellRuns,
     /// The open PORTALS under the TV model: index -> entry (channel,
     /// screen pane, tab). A portal is never a pane and never a tab: it is
     /// the index plus the placement (which tab, which leaf) plus the
@@ -2751,143 +2758,6 @@ impl Core {
         sq.resolve_tab(sel)
     }
 
-    /// Placement that honors `placement.tab` / `placement.at` (v41), reaping
-    /// `pid` on any hard error so a bad anchor never orphans a pane. The
-    /// pre-v41 no-tab/no-anchor path delegates to [`Self::place_spawned_pane`]
-    /// unchanged.
-    fn place_with(
-        &mut self,
-        dest: Option<u64>,
-        squad_key: &str,
-        pid: u64,
-        placement: &PanePlacement,
-    ) -> Result<(u64, TabId, bool), (u32, String)> {
-        if placement.fit {
-            // Server-chosen tab; the tab/at/split combination is
-            // refused in run_pane, so the strict-anchor branch is unreachable.
-            return self.place_with_fit(dest, squad_key, pid, placement);
-        }
-        // Strict origin placement (--at current, fallback=Refuse): locate the
-        // anchor pane, infer its squad+tab, refuse a conflicting explicit
-        // selector, and never fall back to a new tab. Handled before the
-        // selector-resolved path, which assumes the active tab rather than the
-        // anchor's real location.
-        if placement.at.is_some() && placement.fallback == PlacementFallback::Refuse {
-            return self.place_strict_at_anchor(pid, placement);
-        }
-        if placement.tab.is_none() && placement.at.is_none() {
-            return self
-                .place_spawned_pane(dest, squad_key, pid, placement.split)
-                .map_err(|e| (err_code::SPAWN_FAILED, e));
-        }
-        let Some(sid) = dest else {
-            self.reap_pane(pid);
-            return Err((
-                err_code::BAD_REQUEST,
-                "a --tab/--at placement needs a resolved workspace".into(),
-            ));
-        };
-        let Some(si) = self.session.squads.iter().position(|s| s.id == sid) else {
-            self.reap_pane(pid);
-            return Err((err_code::SPAWN_FAILED, "selected workspace vanished".into()));
-        };
-        // An explicit `New` tab ignores any anchor - it is born with this pane.
-        if matches!(placement.tab, Some(TabSel::New)) {
-            let tid = self.session.mint_tab_id();
-            self.session.squads[si].tabs.push(Tab {
-                name: None,
-                id: tid,
-                root: Node::Leaf(pid),
-                focus: pid,
-            });
-            return Ok((sid, tid, false));
-        }
-        let ti = match &placement.tab {
-            Some(sel) => match self.resolve_tab_index(sid, sel) {
-                Ok(ti) => ti,
-                Err(e) => {
-                    self.reap_pane(pid);
-                    return Err((err_code::BAD_REQUEST, e));
-                }
-            },
-            None => {
-                let sq = &self.session.squads[si];
-                sq.active_tab.min(sq.tabs.len().saturating_sub(1))
-            }
-        };
-        let tid = self.session.squads[si].tabs[ti].id;
-        // Same pane cap as the strict path: a numeric anchor or explicit
-        // --tab resolves here instead, and the cap the caller believes in
-        // must not silently stop at one spelling of --at. The New-tab branch
-        // above is born with a single pane and needs no check.
-        if let Some(cap) = placement.max_panes {
-            let pane_count = tree::leaves(&self.session.squads[si].tabs[ti].root).len();
-            if pane_count >= cap {
-                self.reap_pane(pid);
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!(
-                        "placement refused: target tab has {pane_count} panes and the cap is {cap}. Use --workspace <name> to place this worker elsewhere"
-                    ),
-                ));
-            }
-        }
-        let vp = self.tab_rect(tid);
-        let anchor = placement
-            .at
-            .unwrap_or(self.session.squads[si].tabs[ti].focus);
-        let dir = placement.split.unwrap_or(Dir::Down);
-        if !tree::leaves(&self.session.squads[si].tabs[ti].root).contains(&anchor) {
-            self.reap_pane(pid);
-            return Err((
-                err_code::BAD_REQUEST,
-                format!("anchor pane {anchor} is not in the target tab"),
-            ));
-        }
-        let res = {
-            let tab = &mut self.session.squads[si].tabs[ti];
-            tree::split_at(tab, vp, anchor, dir, pid)
-        };
-        match res {
-            Ok(()) => {
-                self.maybe_reflow(sid, tid);
-                Ok((sid, tid, false))
-            }
-            // Min-size refusal falls back to a fresh tab, never a dead-end -
-            // mirroring place_spawned_pane. Strict placement never reaches here
-            // (it routes through place_strict_at_anchor), but a Refuse policy on
-            // any selector-resolved path still fails closed rather than minting.
-            Err(tree::SplitError::TooSmall { .. }) => {
-                if placement.fallback == PlacementFallback::Refuse {
-                    self.reap_pane(pid);
-                    return Err((
-                        err_code::BAD_REQUEST,
-                        "placement cannot fit: a resulting pane would be below the minimum size"
-                            .into(),
-                    ));
-                }
-                let ntid = self.session.mint_tab_id();
-                self.session.squads[si].tabs.push(Tab {
-                    name: None,
-                    id: ntid,
-                    root: Node::Leaf(pid),
-                    focus: pid,
-                });
-                Ok((sid, ntid, true))
-            }
-            Err(e) => {
-                self.reap_pane(pid);
-                Err((err_code::BAD_REQUEST, e.to_string()))
-            }
-        }
-    }
-
-    /// Strict origin placement for `--at current` (v44): the anchor is
-    /// pinned to the calling pane id, so focus races cannot redirect it. The
-    /// server locates the anchor once inside this (serialized) turn, infers its
-    /// squad+tab, refuses a conflicting explicit selector, splits beside it, and
-    /// never creates a tab or moves focus. Any failure reaps the pre-spawned
-    /// child and leaves the tree, focus, and registry untouched.
     /// Split an ARBITRARY pane (not just the focus) into a fresh shell pane on
     /// `direction`'s side. `no_focus` (default true on the wire) keeps every
     /// viewer's focus put (Locked Decision 3); focus moves only on the opt-in.
@@ -7619,6 +7489,7 @@ impl Core {
         if reemit {
             self.mark_topology_dirty();
         }
+        self.shell_runs_rehome();
         // Geometry pass: each distinct viewed tab, once, at its view-scoped
         // smallest-client clamp (Locked 1/5). The applied area is cached so
         // the tab keeps it when its last viewer leaves.
@@ -7783,6 +7654,7 @@ impl Core {
             self.push_layout(true);
         }
         self.publish_visible_panes();
+        self.shell_runs_reseed();
     }
 
     /// One client's `Layout`: the shared squad/tab catalog, with the
@@ -10474,9 +10346,18 @@ impl Core {
                 self.agent_launch(id, request);
                 Flow::Continue
             }
+            CoreMsg::ShellRun(id, request) => self.shell_run(id, request),
             CoreMsg::Observe(id, hello) => self.observe(id, hello),
             CoreMsg::Link(id, hello) => self.link(id, hello),
-            CoreMsg::AgentLaunchUpdate { id, update, retry } => {
+            CoreMsg::AgentLaunchUpdate {
+                id,
+                update,
+                retry,
+                agents,
+            } => {
+                if let Some(rows) = agents {
+                    self.agents = rows;
+                }
                 self.agent_launch_update(id, update, retry);
                 Flow::Continue
             }
@@ -10739,6 +10620,7 @@ impl Core {
                 self.sizing.forget(id);
                 self.link_gone(id);
                 self.clients.retain(|c| c.id != id);
+                self.shell_runs_client_gone(id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below
                     // must flush the topology unconditionally, not on the
@@ -11126,10 +11008,11 @@ impl Core {
                 name,
                 portal,
                 placement,
+                origin,
                 agents,
                 reply,
             } => {
-                self.portal_ctl(&name, portal, placement, agents, reply);
+                self.thread_door(&name, portal, placement, origin, agents, reply);
                 Flow::Continue
             }
             CoreMsg::ReseatPane {
@@ -11934,6 +11817,7 @@ async fn handle_control(
             name,
             portal,
             placement,
+            origin,
         } => {
             let agents = read_guard_agents().await;
             core_tx
@@ -11943,6 +11827,7 @@ async fn handle_control(
                     // pre-v64 caller landed.
                     portal: portal.unwrap_or(0),
                     placement,
+                    origin,
                     agents,
                     reply: reply_tx,
                 })

@@ -352,6 +352,7 @@ fn open_command_view(
             name: row_name.to_string(),
             portal: None,
             placement,
+            origin: None,
         },
     )
     .map_err(|error| format!("view open result unknown: {error}"))?

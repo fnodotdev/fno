@@ -227,7 +227,7 @@ pub use spawn::{
     spawn_bare, spawn_compose, spawn_context, spawn_contract, spawn_cwd, spawn_edge, spawn_gate,
     spawn_gate_admission, spawn_gate_command, spawn_gate_forced, spawn_gate_lanes,
     spawn_gate_reservations, spawn_guard, spawn_lineage, spawn_overlay, spawn_payload, spawn_phase,
-    spawn_place, spawn_promote, spawn_remote, spawn_role, spawn_route, spawn_seam,
+    spawn_place, spawn_portal, spawn_promote, spawn_remote, spawn_role, spawn_route, spawn_seam,
     spawn_transaction, spawn_watch, stale_lane, subprocess_ask, team_spawn, terminal_route,
     terminal_run, terminal_vocab, thread_host, usage, usage_refresh, zcode, zcode_ask,
 };

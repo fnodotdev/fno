@@ -174,6 +174,25 @@ pub struct PanePlacement {
     pub from: Option<String>,
 }
 
+/// (v135) Who asks a thread reach. It resolves the workspace of a worker that
+/// has no row in this registry: one that is not born yet, or one that runs on
+/// another machine.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ThreadOrigin {
+    /// The folder the worker runs in, or the caller's for a remote worker.
+    pub cwd: String,
+    /// The session that spawns the worker.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// Answer whether the reach would land, and change nothing. A caller
+    /// sends this only to a server of v135 or later: an older one drops the
+    /// field and would act on the request.
+    #[serde(default)]
+    pub check: bool,
+}
+
 impl PanePlacement {
     /// The portal this placement targets, folding the deprecated
     /// `thread_pane` alias. `portal` wins; `thread_pane: true` resolves to

@@ -27,6 +27,13 @@ pub(crate) fn line(view: &View) -> Result<String, String> {
         .as_ref()
         .is_some_and(|l| l.draft.project_idx == 0);
     let mut argv = drop_workspace_cwd(argv, at_default);
+    // The child carries no thread geometry, so the line adds the equal
+    // flags, ahead of the closing `--prompt-file -`.
+    if let Some(l) = view.launcher.as_ref() {
+        let flags = placement::Places::read(view, l.squad).flags(l.draft.placement);
+        let at = argv.len().saturating_sub(2);
+        argv.splice(at..at, flags);
+    }
     // The launch runs the routing word; the line shows the public spelling.
     if let Some(word) = argv.get_mut(1).filter(|w| *w == "agents") {
         *word = "agent".to_string();
@@ -93,7 +100,7 @@ pub(crate) fn apply(
     d.effort.clear();
     d.permission.clear();
     d.pills.clear();
-    d.placement = Placement::Thread;
+    let mut placed = placement::Flags::default();
     let rows = match catalog {
         Some(CatalogOutcome::Ok(rows, _, _)) => rows.as_slice(),
         _ => &[],
@@ -120,7 +127,7 @@ pub(crate) fn apply(
                     d.pills.push((name.to_string(), Some(v)));
                 }
             }
-            "--mux-session" | "--prompt-file" | "--node" | "--portal" => {
+            "--mux-session" | "--prompt-file" | "--node" => {
                 value(name)?;
             }
             "--harness" | "-H" => {
@@ -181,20 +188,10 @@ pub(crate) fn apply(
                         format!("folder {v} is not one of this workspace's folders")
                     })?;
             }
-            "--as" => {
-                if value(name)? == "pane" {
-                    d.placement = Placement::PaneActiveTab;
-                }
-            }
-            "--tab" => {
-                if value(name)? == "new" {
-                    d.placement = Placement::ThreadNewTab;
-                }
-            }
-            "--split" => {
-                value(name)?;
-                d.placement = Placement::ThreadSplitBeside;
-            }
+            "--as" => placed.pane = value(name)? == "pane",
+            "--tab" => placed.tab = Some(value(name)?),
+            "--split" | "-x" => placed.split = Some(value(name)?),
+            "--portal" => placed.portal = Some(value(name)?),
             other if COMPOSER_FLAGS.contains(&other) => {
                 return Err(format!("{other} cannot be changed on this line"));
             }
@@ -211,6 +208,14 @@ pub(crate) fn apply(
             }
         }
     }
+    let placement = l.places.from_flags(&placed).map_err(|e| e.to_string())?;
+    // The line spells no pick as the portal it takes now. That is still no pick.
+    let unpicked = l.draft.placement == Placement::LastPortal && l.places.is_default(placement);
+    d.placement = if unpicked {
+        Placement::LastPortal
+    } else {
+        placement
+    };
     d.bump();
     l.draft = d;
     Ok(())

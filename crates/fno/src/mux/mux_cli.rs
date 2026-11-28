@@ -2137,7 +2137,7 @@ fn parse_dir(s: &str, flag: &str) -> Result<Dir, String> {
 /// (explicit form of a bare integer) | `name:<s>` | a bare integer (the
 /// 1-based ordinal the UI shows as `·N`; convenience only - ordinals renumber
 /// when tabs close) | any other bare word (a tab Name).
-fn parse_tab_sel(s: &str) -> Result<TabSel, String> {
+pub(crate) fn parse_tab_sel(s: &str) -> Result<TabSel, String> {
     if let Some(n) = s.strip_prefix("id:") {
         return parse_u64(n, "--tab id:").map(TabSel::Id);
     }

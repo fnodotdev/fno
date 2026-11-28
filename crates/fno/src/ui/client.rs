@@ -1090,6 +1090,7 @@ pub(crate) struct View {
     /// The harness catalog read (`fno agent harnesses`), last outcome
     /// wins; `None` until the first launcher open kicks the probe.
     launcher_catalog: Option<agent_launcher::CatalogOutcome>,
+    last_portal: Option<u8>,
     /// A catalog probe is wanted/in flight (the update-probe discipline).
     catalog_want: bool,
     catalog_inflight: bool,
@@ -1610,6 +1611,7 @@ impl View {
             launcher_esc: Default::default(),
             launch_attempt: None,
             launcher_catalog: None,
+            last_portal: None,
             // Prefetch at attach: the whole session serves the first list.
             catalog_want: true,
             catalog_inflight: false,
@@ -3044,11 +3046,9 @@ impl View {
     /// operator's. Mirrors the cursor logic in [`View::clamp_sideline_scroll`],
     /// keyed on the focus row instead of the selector.
     fn reveal_focus_row(&mut self) {
-        // A live selector owns the scroll: `clamp_sideline_scroll` already keeps
-        // the actionable cursor on-screen, and stealing that to reveal a focus
-        // band (which a background focus-follows-mouse can move independently of
-        // the cursor) would leave Enter/lifecycle keys acting on a scrolled-off
-        // row. The selector-visibility invariant wins.
+        // A live selector owns the scroll: revealing a focus band (which a
+        // background focus-follows-mouse can move on its own) would leave the
+        // Enter/lifecycle keys on a scrolled-off row. The selector wins.
         if self.selector.is_some() {
             return;
         }
@@ -3758,7 +3758,7 @@ async fn attach_and_run(
                     }
                     // Frames for pane ids unknown to the current Layout are
                     // ignored (Concurrency: flush-then-re-emit ordering).
-                    let known = view.layout.panes.iter().any(|(id, _)| *id == pane_id);
+                    let known = agent_launcher::shell_box::take_frame(&mut view, pane_id, &frame) || view.layout.panes.iter().any(|(id, _)| *id == pane_id);
                     if known {
                         // (hover affordance) A new frame invalidates the
                         // accepted span and restarts the probe's quiet period
@@ -3862,8 +3862,8 @@ async fn attach_and_run(
                     }
                 }
                 Ok(ServerMsg::Info { .. }) => {} // pre-Attach-only answer; stray here
-                // v4 control-command replies belong to one-shot `fno mux pane`
-                // connections, never an attached client's stream: ignore.
+                Ok(ServerMsg::ShellRun(update)) => { agent_launcher::shell_box::apply(&mut view, update); if let Err(e) = compositor.draw(&view.compose()) { break Err(format!("draw: {e}")); } }
+                // v4 one-shot `fno mux pane` replies, never an attached client's: ignore.
                 Ok(ServerMsg::PaneList { .. }
                     | ServerMsg::PaneText { .. }
                     | ServerMsg::PaneSpawned { .. }

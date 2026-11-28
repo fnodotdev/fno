@@ -8,6 +8,7 @@ import type { LayoutSpec } from "./LayoutSpec";
 import type { PanePlacement } from "./PanePlacement";
 import type { PaneTarget } from "./PaneTarget";
 import type { TabSel } from "./TabSel";
+import type { ThreadOrigin } from "./ThreadOrigin";
 
 /**
  * The script-API commands (`fno mux pane ls|read|run|send|wait|kill`), each a
@@ -69,7 +70,12 @@ portal: number | null,
  * server ignores these fields on a repoint and says so; `here` is
  * refused outright, exactly as it always was.
  */
-placement: PanePlacement, } } | { "ThreadReseat": { pane: number, 
+placement: PanePlacement, 
+/**
+ * (v135) The caller, for the pre-birth check and for a worker on
+ * another machine. Additive, so the floor does not move.
+ */
+origin?: ThreadOrigin | null, } } | { "ThreadReseat": { pane: number, 
 /**
  * Which portal to seat through; `None` takes the next free index.
  */

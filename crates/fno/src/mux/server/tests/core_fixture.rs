@@ -60,6 +60,7 @@ pub(in crate::mux::server) fn empty_core() -> Core {
         detached_panes: HashMap::new(),
         diff_pane: None,
         recall: crate::server::focus_recall::FocusRecall::default(),
+        shell_runs: Default::default(),
         portals: BTreeMap::new(),
         portal_noticed: false,
         squad_members: HashMap::new(),

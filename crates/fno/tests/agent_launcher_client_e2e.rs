@@ -292,8 +292,8 @@ fn project_chip_focus_shows_the_working_directory_line() {
 
 #[test]
 fn where_chip_opens_the_local_and_placement_picker() {
-    // AC4-HP: the Where picker lists Local under `Run on` and the four
-    // placement rows under `Open as` - no Cloud, Remote Control or SSH row.
+    // AC4-HP: the Where picker lists Local under `Run on`, and the opens
+    // picker lists the placements - no Cloud, Remote Control or SSH row.
     let scratch = Scratch::new("composer-where");
     let mut h = ClientHarness::spawn_sized(&scratch, 40, 120);
     wait_input(&mut h);
@@ -304,11 +304,21 @@ fn where_chip_opens_the_local_and_placement_picker() {
     type_and_settle(&mut h, b"\t");
     h.wait_screen(35, |s| s.contains("auto") && !s.contains("worktree"));
     type_and_settle(&mut h, b"\x1b[Z");
-    // BackTab BackTab walks Message -> Project -> Where.
+    // BackTab walks Message -> Project -> Opens, and one more reaches Where.
     type_and_settle(&mut h, b"\x1b[Z\x1b[Z");
     type_and_settle(&mut h, b"\r");
+    let screen = h.wait_screen(10, |s| s.contains("last portal"));
+    for want in ["new tab", "split right"] {
+        assert!(
+            screen.contains(want),
+            "the opens picker lists {want}: {screen}"
+        );
+    }
+    type_and_settle(&mut h, b"\x1b");
+    type_and_settle(&mut h, b"\x1b[Z");
+    type_and_settle(&mut h, b"\r");
     let screen = h.wait_screen(10, |s| s.contains("Run on"));
-    for want in ["Run on", "Local", "Open as", "thread", "pane: active tab"] {
+    for want in ["Run on", "Local"] {
         assert!(
             screen.contains(want),
             "the Where picker lists {want}: {screen}"

@@ -52,24 +52,6 @@ fn path() -> std::path::PathBuf {
     crate::proto::mux_dir().join(FILE)
 }
 
-fn placement_word(p: Placement) -> &'static str {
-    match p {
-        Placement::Thread => "thread",
-        Placement::ThreadSplitBeside => "split",
-        Placement::ThreadNewTab => "tab",
-        Placement::PaneActiveTab => "pane",
-    }
-}
-
-fn placement_from(word: &str) -> Placement {
-    match word {
-        "split" => Placement::ThreadSplitBeside,
-        "tab" => Placement::ThreadNewTab,
-        "pane" => Placement::PaneActiveTab,
-        _ => Placement::Thread,
-    }
-}
-
 /// A set name is one word, so `:name` can find it: no whitespace, no leading
 /// sigil or dash.
 fn clean_name(raw: &str) -> String {
@@ -94,7 +76,7 @@ impl ComposerSet {
             effort: d.effort.clone(),
             permission: d.permission.clone(),
             host: d.host.clone(),
-            placement: placement_word(d.placement).to_string(),
+            placement: placement::set_word(d.placement).to_string(),
             worktree: d.worktree,
         }
     }
@@ -158,7 +140,7 @@ impl Sets {
 /// Apply set `i` onto the draft. A harness the catalog no longer lists leaves
 /// the model axes alone (they belong to that harness), applies the rest and
 /// says which harness is gone.
-pub(crate) fn apply(l: &mut Launcher, catalog: &Option<CatalogOutcome>, portal: u8, i: usize) {
+pub(crate) fn apply(l: &mut Launcher, catalog: &Option<CatalogOutcome>, i: usize) {
     let Some(set) = l.sets.list.get(i).cloned() else {
         return;
     };
@@ -178,8 +160,7 @@ pub(crate) fn apply(l: &mut Launcher, catalog: &Option<CatalogOutcome>, portal: 
     l.draft.effort = set.effort;
     l.draft.permission = set.permission;
     l.draft.host = set.host;
-    l.draft.placement = placement_from(&set.placement);
-    l.draft.placement_portal = portal;
+    l.draft.placement = placement::from_set_word(&set.placement);
     l.draft.worktree = set.worktree;
     l.draft.bump();
     clear_unoffered_pins(&mut l.draft, catalog);
@@ -194,16 +175,11 @@ pub(crate) fn apply(l: &mut Launcher, catalog: &Option<CatalogOutcome>, portal: 
 /// A digit key with focus off the prompt: `1` to `9` apply that set. True
 /// when the key was a set key, so a digit with no set behind it still reads
 /// as typed-and-dropped rather than as an error.
-pub(crate) fn apply_digit(
-    l: &mut Launcher,
-    catalog: &Option<CatalogOutcome>,
-    portal: u8,
-    c: char,
-) -> bool {
+pub(crate) fn apply_digit(l: &mut Launcher, catalog: &Option<CatalogOutcome>, c: char) -> bool {
     let Some(n) = c.to_digit(10).filter(|n| *n >= 1) else {
         return false;
     };
-    apply(l, catalog, portal, n as usize - 1);
+    apply(l, catalog, n as usize - 1);
     true
 }
 

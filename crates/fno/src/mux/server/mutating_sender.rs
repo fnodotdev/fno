@@ -39,6 +39,9 @@ pub(super) fn mutating_sender(msg: &CoreMsg) -> Option<u64> {
         // worker the same way, so it gates identically.
         CoreMsg::DispatchNext { id, .. } => Some(*id),
         CoreMsg::AgentLaunch { id, .. } => Some(*id),
+        // ShellRun starts a shell command and types into it, so a
+        // read-only observer must never send one.
+        CoreMsg::ShellRun(id, _) => Some(*id),
         CoreMsg::PaneInput(request) => Some(request.id),
         _ => None,
     }

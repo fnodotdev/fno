@@ -5,6 +5,10 @@
 //! types, the selector parsers) in exactly one place.
 use super::*;
 
+/// The refusal of a thread split that names neither a tab nor a cell.
+const THREAD_SPLIT_HELP: &str = "a --split needs an anchor: name its tab with --tab N, or \
+its cell with --from <portal N|worker name|current>";
+
 /// `fno mux thread <name> [--portal N|new] [--tab SEL] [--split DIR]
 /// [--from CELL] [--workspace NAME] [--at PANE]` (hidden): the outside-the-TUI
 /// reach behind `fno agent attach <name>`. Sends the ThreadPane control command,
@@ -19,12 +23,16 @@ use super::*;
 /// multiply from a reach).
 ///
 /// The placement flags reuse the pane path's spellings and ride the
-/// command's `placement` field. A `--split DIR` halves the caller's own pane
-/// (FNO_PANE); `--from portal N|worker|current` names another cell. A
-/// caller with no pane of its own names `--from` or is refused with the
-/// flag named. They steer a FRESH open; a portal that already has a live
-/// seat keeps its geometry (the server says so) - same contract the server
-/// holds for the TUI.
+/// command's `placement` field. A `--split DIR` halves, in this order: the
+/// cell `--from` or `--at` names, the focused pane of the `--tab` named, the
+/// caller's own pane (FNO_PANE). With none of them it is refused with both
+/// flags named. They steer a FRESH open. A split beside an open `--portal N`
+/// halves N and opens a new portal, so N keeps showing. With no split, a
+/// portal that already has a live seat keeps its geometry (the server says so).
+///
+/// The hidden `--check` asks the server whether the reach would land and
+/// changes nothing. A placement refusal exits 2. A server that cannot answer
+/// exits 1, so a caller can tell the two apart.
 pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
     let (session_flag, parsed) = match parse_thread_args(args) {
         Ok(t) => t,
@@ -120,29 +128,44 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
             placement.from = Some(v.clone());
         }
     }
-    // A split that named no anchor defaults to the caller's own pane; a
-    // pane-less caller is refused with --from named.
+    let tab_is_new = matches!(placement.tab, Some(proto::TabSel::New));
+    if tab_is_new && placement.split.is_some() {
+        eprintln!("fno mux thread: --tab new opens one pane, so drop --tab new or --split");
+        return EXIT_USAGE;
+    }
+    // A named tab brings its focused pane as the anchor. Only a split with
+    // no tab and no anchor falls back to the caller's own pane.
     match super::pane_args::anchor_or_refuse(
-        placement.split.is_some(),
+        placement.split.is_some() && placement.tab.is_none(),
         placement.at,
         placement.from.as_deref(),
         super::pane_args::pane_from_env(),
     ) {
         Ok(Some(pane)) => placement.at = Some(pane),
         Ok(None) => {}
-        Err(e) => {
-            eprintln!("fno mux thread: {e}");
+        // An open portal N is its own anchor, and only the server knows.
+        Err(_) if portal.is_some() => {}
+        Err(_) => {
+            eprintln!("fno mux thread: {THREAD_SPLIT_HELP}");
             return EXIT_USAGE;
         }
     }
-    let Some(name) = parsed
+    // A typed index rides the placement too. An absent one reads as portal 0
+    // on the wire, and that default never asks for a split of portal 0.
+    placement.portal = portal;
+    let check = parsed.check;
+    let name = parsed
         .name
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    // A check can run before the thread has a name.
+    if name.is_empty() && !check {
         eprintln!("fno mux thread: needs an agent name or attach id");
         return EXIT_USAGE;
-    };
+    }
+    let origin = thread_origin(&name, check, parsed.cwd, parsed.parent);
     // A paneless row owns no session routing: the operator's ambient server
     // (the flag, FNO_SERVER / FNO_SESSION, or the default) is the one whose
     // portal this drives. Flag and env stay separate so resolve_session can
@@ -155,7 +178,8 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(p) => p,
         Err(e) => {
             eprintln!("fno mux thread: {e}");
-            return EXIT_USAGE;
+            // Exit 2 under a check is the server's refusal, and none answered.
+            return if check { EXIT_ERROR } else { EXIT_USAGE };
         }
     };
     let stream = match proto::connect_unix_timeout(&sock, PROBE_TIMEOUT) {
@@ -165,12 +189,21 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
             return EXIT_NO_SERVER;
         }
     };
+    // An older server drops the origin and would act on a check.
+    if check && !crate::mux_rows::wire_at_least(&session, proto::LAUNCH_PLACEMENT_PROTO) {
+        eprintln!(
+            "fno mux thread: server {session} is too old to check a placement; restart it \
+             to get the check"
+        );
+        return EXIT_ERROR;
+    }
     match send_control(
         stream,
         ControlCommand::ThreadPane {
             name,
             portal,
             placement,
+            origin,
         },
         CONTROL_TIMEOUT,
         CONTROL_REPLY_DEADLINE,
@@ -180,9 +213,13 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
             println!("{text}");
             EXIT_OK
         }
-        Ok(ServerMsg::Err { msg, .. }) => {
+        Ok(ServerMsg::Err { code, msg }) => {
             eprintln!("fno mux thread: {msg}");
-            EXIT_ERROR
+            if check && code == proto::err_code::BAD_REQUEST {
+                EXIT_USAGE
+            } else {
+                EXIT_ERROR
+            }
         }
         Ok(other) => {
             eprintln!("fno mux thread: unexpected reply: {other:?}");
@@ -197,6 +234,25 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
             EXIT_ERROR
         }
     }
+}
+
+/// Who asks, sent for a check and for a worker on another machine. Neither
+/// has a row the server could read a workspace from.
+fn thread_origin(
+    name: &str,
+    check: bool,
+    cwd: Option<String>,
+    parent: Option<String>,
+) -> Option<proto::ThreadOrigin> {
+    if !check && !proto::is_remote_address(name) {
+        return None;
+    }
+    let cwd = cwd.unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    Some(proto::ThreadOrigin { cwd, parent, check })
 }
 
 /// The parse `thread` runs: the shared common flags ride [`MuxCommon::take`],

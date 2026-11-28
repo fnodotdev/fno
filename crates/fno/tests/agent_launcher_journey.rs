@@ -82,6 +82,7 @@ fn send_launch_full(
         placement: None,
         portal: None,
         split: None,
+        open_as: None,
         node: None,
         message: message.to_string(),
         extra_flags,
@@ -140,6 +141,7 @@ fn launcher_journey_forwards_model_effort_and_permission_chips() {
         placement: None,
         portal: None,
         split: None,
+        open_as: None,
         node: None,
         message: "hi".to_string(),
         extra_flags: Vec::new(),
@@ -320,8 +322,9 @@ fn launcher_journey_argv_stdin_and_birth_decode() {
 #[test]
 fn launcher_journey_empty_substrate_takes_the_door_default() {
     // AC6-HP: an EMPTY substrate omits --substrate so the door's thread
-    // default decides; a thread placement through a portal rides --portal
-    // and its geometry flag. The old pane-pinned argv stays pinned by
+    // default decides; a thread placement through a portal stays off the
+    // child, because the server is the one opener. The old pane-pinned argv
+    // stays pinned by
     // launcher_journey_argv_stdin_and_birth_decode.
     let scratch = Scratch::new("launcher-journey-thread");
     let record_dir = scratch.0.join("records");
@@ -352,6 +355,7 @@ fn launcher_journey_empty_substrate_takes_the_door_default() {
         placement: None,
         portal: Some(1),
         split: Some("right".into()),
+        open_as: None,
         node: None,
         message: "hi".to_string(),
         extra_flags: Vec::new(),
@@ -376,10 +380,6 @@ fn launcher_journey_empty_substrate_takes_the_door_default() {
         "--harness",
         "claude",
         "--no-wait",
-        "--portal",
-        "1",
-        "--split",
-        "right",
         "--prompt-file",
         "-",
     ];
@@ -422,6 +422,7 @@ fn launcher_journey_node_prefill_rides_the_door() {
         placement: None,
         portal: None,
         split: None,
+        open_as: None,
         node: Some("x-1".to_string()),
         message: message.to_string(),
         extra_flags: Vec::new(),
@@ -460,6 +461,7 @@ fn launcher_journey_refusal_and_unknown_are_named() {
     match &client.launch_updates.last().unwrap().state {
         fno::proto::LaunchState::Refused { reason } => {
             assert!(reason.contains("no free lane"), "reason: {reason}");
+            assert!(reason.starts_with("exit "), "the code is kept: {reason}");
         }
         other => panic!("expected Refused, got {other:?}"),
     }

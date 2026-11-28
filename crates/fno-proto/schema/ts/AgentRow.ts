@@ -140,7 +140,7 @@ session_cost_cents?: number | null, session_tokens?: number | null,
  */
 compaction_count?: number | null, 
 /**
- * (v132) The raw token classes behind `session_tokens`: input, output,
+ * (v133) The raw token classes behind `session_tokens`: input, output,
  * cache read and cache write, summed over every model the session's
  * transcript recorded. `None` before the first measurement; never a
  * fabricated zero. `#[serde(default)]` keeps a v104 reader

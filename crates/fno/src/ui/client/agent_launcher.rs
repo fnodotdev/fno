@@ -19,10 +19,14 @@ use crate::popup::{Anchor, NavDir, Popup, PopupRow};
 use crate::proto::agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 mod bang;
+pub(crate) use placement::Placement;
 pub(crate) mod card;
 pub(crate) mod grammar;
+pub(crate) mod placement;
 pub(crate) mod projects;
+mod refusal;
 pub(crate) mod sets;
+pub(crate) mod shell_box;
 pub(crate) mod will_run;
 
 /// A picker's rows paint inside the card, so its popup anchor is never read.
@@ -227,6 +231,8 @@ pub(crate) enum Focus {
     Harness,
     Model,
     Effort,
+    /// Open as: where the launched session shows.
+    Opens,
     /// The live will-run line: editable text, parsed back into the chips.
     WillRun,
 }
@@ -237,6 +243,7 @@ impl Focus {
     fn name(self) -> &'static str {
         match self {
             Self::Where => "where",
+            Self::Opens => "opens",
             Self::Project => "project",
             Self::Branch => "branch",
             Self::Worktree => "worktree",
@@ -255,7 +262,7 @@ impl Focus {
     /// project has neither); the effort chip joins only when the catalog
     /// says the harness has an effort surface.
     fn tab_order(launcher: &Launcher, catalog: &Option<CatalogOutcome>) -> Vec<Focus> {
-        let mut order = vec![Self::Where, Self::Project];
+        let mut order = vec![Self::Where, Self::Opens, Self::Project];
         if branch_offered(launcher, catalog) {
             order.extend([Self::Branch, Self::Worktree]);
         }
@@ -349,6 +356,10 @@ pub(crate) struct Launcher {
     /// A refused or unknown footer shows the full raw reason instead of its
     /// one-sentence head. Toggled with Ctrl+O; a fresh attempt clears it.
     pub show_detail: bool,
+    /// The card's `!` run: the live one, or the last one that ended.
+    pub run: Option<shell_box::ShellBox>,
+    /// The layout snapshot the Open as list reads.
+    pub places: placement::Places,
     /// The selected harness's `--help` flag rows (entry spelling + one-line
     /// description), captured once per binary version and cached on disk.
     /// Empty or harness-mismatched means the toml capture shows instead.
@@ -421,6 +432,11 @@ pub(crate) enum PickerAction {
     InsertNode(String),
     /// Set the placement.
     Place(Placement),
+    /// A tab row of the Open as list: opens that tab's direction step.
+    PickTab {
+        id: u64,
+        ordinal: usize,
+    },
     RunOn(Option<String>),
     /// The Model list's `more` row: rebuild the picker over the harness's
     /// full catalog tail, Esc stepping back to the main list.
@@ -478,6 +494,11 @@ pub(crate) enum PickerMode {
     Approval {
         sandbox: String,
     },
+    /// The Open as list's second step: the direction inside one tab.
+    Direction {
+        id: u64,
+        ordinal: usize,
+    },
     /// The `+`/`:` completion list under the prompt. `spaced` records that a
     /// phone put one space after the sigil, so a fold can give the typed
     /// text back byte for byte.
@@ -485,36 +506,6 @@ pub(crate) enum PickerMode {
         sigil: char,
         spaced: bool,
     },
-}
-
-/// Where the launched session goes. Thread placements are VIEW choices, not
-/// a substrate: the session is a thread shown through a portal, sent as
-/// `--substrate thread --portal N` with `--split` or `--tab` (operator
-/// ruling 2026-09-21). The one pane entry remains for harness args a thread
-/// lane cannot carry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum Placement {
-    /// The door's default: a thread where the harness seats one (the chip
-    /// reads `where: thread`), headless where it does not.
-    #[default]
-    Thread,
-    /// A thread through a new portal, split beside the focused pane.
-    ThreadSplitBeside,
-    /// A thread through a new portal in a new tab.
-    ThreadNewTab,
-    /// The one pane entry: a pane-hosted session in the active tab.
-    PaneActiveTab,
-}
-
-impl Placement {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Thread => "thread",
-            Self::ThreadSplitBeside => "thread split beside",
-            Self::ThreadNewTab => "thread new tab",
-            Self::PaneActiveTab => "pane: active tab",
-        }
-    }
 }
 
 /// The draft: every visible field plus the nonsecret session-remembered
@@ -556,9 +547,6 @@ pub(crate) struct LaunchDraft {
     pub permission: String,
     pub placement: Placement,
     pub host: Option<String>,
-    /// The portal index a thread placement opens through, resolved from the
-    /// live layout when the placement is picked (next free index).
-    pub placement_portal: u8,
     /// Typed launch flags as pills: each is one flag plus its value, joined
     /// into `extra_flags` argv in order at submit.
     pub pills: Vec<(String, Option<String>)>,
@@ -625,20 +613,14 @@ impl LaunchDraft {
     }
 
     pub(crate) fn request(&self, request_id: u64) -> AgentLaunchRequest {
-        // EMPTY substrate = the door's thread default; a thread placement
-        // names the lane explicitly because its placement flags need it, and
-        // the one pane entry pins the pane lane.
-        let (substrate, placement, portal, split): (&str, Option<&str>, Option<u8>, Option<&str>) =
-            match self.placement {
-                Placement::Thread => ("", None, None, None),
-                Placement::ThreadSplitBeside => {
-                    ("thread", None, Some(self.placement_portal), Some("right"))
-                }
-                Placement::ThreadNewTab => {
-                    ("thread", Some("new"), Some(self.placement_portal), None)
-                }
-                Placement::PaneActiveTab => ("pane", Some("active"), None, None),
-            };
+        // EMPTY substrate = the door's thread default. A picked thread
+        // placement names the lane, and `prepare` adds it typed. The one
+        // pane entry pins the pane lane and its tab.
+        let (substrate, placement): (&str, Option<&str>) = match self.placement {
+            Placement::LastPortal => ("", None),
+            Placement::PaneActiveTab => ("pane", Some("active")),
+            _ => ("thread", None),
+        };
         // A routing-row pick rides its ROUTE pin: a route owns the model, so
         // model and provider never join it. codex and opencode are the
         // carve-outs: their rows are slugs/ids their own CLI consumes, so the
@@ -672,8 +654,9 @@ impl LaunchDraft {
             effort: non_empty(&self.effort),
             permission_mode: non_empty(&self.permission),
             placement: placement.map(str::to_string),
-            portal,
-            split: split.map(str::to_string),
+            portal: None,
+            split: None,
+            open_as: None,
             // A board prefill's binding rides only while the message's
             // second whitespace word (trailing sentence punctuation
             // trimmed, the same charset as node_seed's) is still that id.
@@ -919,7 +902,6 @@ pub(crate) fn focus_chip_for_snapshot(view: &mut View, tabs: usize, show: u8) {
             l,
             &view.launcher_catalog,
             PickerAction::SetHarness("codex".to_string()),
-            0,
             Focus::Harness,
         );
         l.focus = Focus::Permission;
@@ -996,6 +978,8 @@ pub(crate) fn open_in(view: &mut View, squad: u64) {
             next_request_id: 1,
             shell: false,
             show_detail: false,
+            run: None,
+            places: Default::default(),
             runtime_flags: Vec::new(),
             runtime_flags_harness: String::new(),
             flags_inflight: false,
@@ -1018,6 +1002,7 @@ pub(crate) fn open_in(view: &mut View, squad: u64) {
     }
     launcher.machines = view.machine_tree.destinations();
     view.launcher = Some(launcher);
+    placement::sync(view);
     // A fresh open starts with a fresh esc carry: a lone ESC stranded in the
     // retained dock's carry must never close the reopened dock.
     view.launcher_esc = Default::default();
@@ -1233,7 +1218,6 @@ fn fresh_draft(view: &View, squad: u64) -> LaunchDraft {
         permission: String::new(),
         placement: Placement::default(),
         host: None,
-        placement_portal: 0,
         pills: Vec::new(),
         pill_value_capture: false,
         pill_value_draft: String::new(),
@@ -1449,6 +1433,10 @@ pub(crate) fn prepare_for(
         None
     };
     let mut request = l.draft.request(request_id);
+    // Read fresh, so a tab or portal that closed since the pick refuses here.
+    request.open_as = placement::Places::read(view, l.squad)
+        .open_as(l.squad, l.draft.placement)
+        .map_err(|e| e.to_string())?;
     request.extra_flags = extra_flags;
     request.worktree = worktree;
     request.branch = branch;
@@ -1462,6 +1450,10 @@ async fn submit(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    // A `!` line never becomes an agent's prompt, whichever gesture starts it.
+    if view.launcher.as_ref().is_some_and(|l| l.shell) {
+        return bang::run(view, sock_w).await;
+    }
     let Some(l) = view.launcher.as_mut() else {
         return Ok(());
     };
@@ -1499,6 +1491,17 @@ async fn submit(
             request_id,
             reason: "the mux server does not support remote launches; reconnect to current fno"
                 .into(),
+        };
+        return Ok(());
+    }
+    if !matches!(
+        l.draft.placement,
+        Placement::LastPortal | Placement::NewTab | Placement::PaneActiveTab
+    ) && !crate::mux_rows::wire_at_least(&view.session, crate::proto::LAUNCH_PLACEMENT_PROTO)
+    {
+        l.phase = Phase::Refused {
+            request_id,
+            reason: "the connected mux server does not support this placement; reconnect to a server running current fno".to_string(),
         };
         return Ok(());
     }
@@ -1566,6 +1569,8 @@ pub(crate) enum LKey {
     ShiftEnter,
     /// Ctrl+O toggles the raw refusal text in the footer.
     CtrlO,
+    /// A shift+arrow: a direction in the Open as list, else a plain arrow.
+    Shift(crate::tree::Dir),
     Left,
     Right,
     Up,
@@ -1820,6 +1825,18 @@ fn arrow_key(seq: &[u8]) -> Option<LKey> {
             });
         }
     }
+    if ok
+        && seq
+            .split_last()
+            .is_some_and(|(_, head)| head.starts_with(b"[") && head.ends_with(b";2"))
+    {
+        return Some(LKey::Shift(match arrow {
+            LKey::Left => crate::tree::Dir::Left,
+            LKey::Right => crate::tree::Dir::Right,
+            LKey::Up => crate::tree::Dir::Up,
+            _ => crate::tree::Dir::Down,
+        }));
+    }
     ok.then_some(arrow)
 }
 
@@ -1991,6 +2008,12 @@ pub(crate) async fn launcher_keys(
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<StdinFlow, String> {
+    if shell_box::keys(view, bytes, sock_w)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(StdinFlow::Continue);
+    }
     let mut esc = std::mem::take(&mut view.launcher_esc);
     let keys = esc.fold(bytes);
     view.launcher_esc = esc;
@@ -2001,6 +2024,12 @@ pub(crate) async fn launcher_keys(
         if view.launcher.is_none() {
             break;
         }
+        if let LKey::Shift(dir) = key {
+            if placement::shift_pick(view, dir) {
+                continue;
+            }
+        }
+        let key = key.plain();
         // A set name being typed takes every key until Enter or Esc.
         if view
             .launcher
@@ -2014,7 +2043,6 @@ pub(crate) async fn launcher_keys(
         // PICKER only (a second Esc closes the composer). Everything else -
         // Tab included - falls through to the dock.
         if view.launcher.as_ref().is_some_and(|l| l.picker.is_some()) {
-            let portal = next_free_portal(view);
             // Field-disjoint snapshot for the commit path (it may clear
             // unoffered pins against the catalog, and a step-down rebuilds
             // rows from both sources).
@@ -2026,13 +2054,13 @@ pub(crate) async fn launcher_keys(
                 };
                 match key {
                     LKey::Tab if matches!(picker.mode, PickerMode::Complete { .. }) => {
-                        accept_row(l, &catalog, portal, picker);
+                        accept_row(l, &catalog, picker);
                     }
                     LKey::Backspace
                         if matches!(picker.mode, PickerMode::Complete { .. })
                             && picker.filter.is_empty() => {}
                     LKey::Char(' ') if matches!(picker.mode, PickerMode::Complete { .. }) => {
-                        complete_space(l, &catalog, portal, picker);
+                        complete_space(l, &catalog, picker);
                     }
                     LKey::Esc | LKey::Tab | LKey::BackTab => {
                         // Esc steps a drilled Model picker back down its
@@ -2075,7 +2103,7 @@ pub(crate) async fn launcher_keys(
                         // rules and greyed rows are skipped); the commit
                         // action lives at the ROW index those targets point
                         // at, so resolve through selected(), never raw sel.
-                        accept_row(l, &catalog, portal, picker);
+                        accept_row(l, &catalog, picker);
                         // A disabled or header row: the picker closes.
                     }
                     LKey::Char(' ') if picker.field == Focus::Plus => {
@@ -2107,6 +2135,8 @@ pub(crate) async fn launcher_keys(
             continue;
         }
         match key {
+            // `plain` folded every shift+arrow above; the type cannot say so.
+            LKey::Shift(_) => {}
             LKey::Esc
                 if view
                     .launcher
@@ -2116,6 +2146,16 @@ pub(crate) async fn launcher_keys(
                 if let Some(l) = view.launcher.as_mut() {
                     l.focus = Focus::Message;
                     l.will_edit = None;
+                }
+            }
+            LKey::Esc
+                if view
+                    .launcher
+                    .as_ref()
+                    .is_some_and(|l| l.show_detail && matches!(l.phase, Phase::Refused { .. })) =>
+            {
+                if let Some(l) = view.launcher.as_mut() {
+                    l.show_detail = false;
                 }
             }
             LKey::Esc => {
@@ -2259,7 +2299,16 @@ pub(crate) async fn launcher_keys(
             LKey::CtrlO => {
                 // The raw refusal text toggles only when there is one to
                 // show; a refused/unknown footer carries it, editing does not.
-                if let Some(l) = view.launcher.as_mut() {
+                let logged = view.launcher.as_ref().is_some_and(|l| {
+                    l.show_detail
+                        && matches!(&l.phase, Phase::Refused { reason, .. }
+                            if refusal::report(reason).is_some())
+                });
+                if logged || refusal::run_log(view).is_some() {
+                    refusal::open_log(view, sock_w)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                } else if let Some(l) = view.launcher.as_mut() {
                     if matches!(l.phase, Phase::Refused { .. } | Phase::Unknown { .. }) {
                         l.show_detail = !l.show_detail;
                     }
@@ -2369,11 +2418,6 @@ pub(crate) async fn launcher_keys(
             LKey::Char(c) => {
                 // The palette's node gesture: `@` in the message opens the
                 // node picker; the glyph itself never lands.
-                let set_portal = if c.is_ascii_digit() {
-                    next_free_portal(view)
-                } else {
-                    0
-                };
                 if let Some(l) = view.launcher.as_mut() {
                     match l.focus {
                         // `?` on an empty input opens the composer help
@@ -2491,13 +2535,12 @@ pub(crate) async fn launcher_keys(
                         }
                         // Off the prompt, 1 to 9 apply that saved set.
                         _ => {
-                            sets::apply_digit(l, &view.launcher_catalog, set_portal, c);
+                            sets::apply_digit(l, &view.launcher_catalog, c);
                         }
                     }
                 }
             }
             LKey::Paste(text) => {
-                let portal = next_free_portal(view);
                 if let Some(l) = view.launcher.as_mut() {
                     if l.focus == Focus::Message {
                         if l.draft.pill_value_capture {
@@ -2526,7 +2569,6 @@ pub(crate) async fn launcher_keys(
                                     l,
                                     &view.launcher_catalog,
                                     action,
-                                    portal,
                                     field,
                                     Anchor::Center,
                                 );
@@ -2674,14 +2716,6 @@ fn flagship_slug(harness: &str) -> Option<String> {
             .unwrap_or_default()
     });
     map.get(harness).cloned()
-}
-
-/// The next free portal index in the active layout, smallest first. A
-/// thread placement opens its new portal here; a stale read costs one
-/// refusal the door renders verbatim, never a wrong lane.
-fn next_free_portal(view: &View) -> u8 {
-    let used: Vec<u8> = view.layout.agents.iter().filter_map(|a| a.portal).collect();
-    (0..=u8::MAX).find(|p| !used.contains(p)).unwrap_or(0)
 }
 
 /// The catalog read: a compiled-in table (each harness's model floor
@@ -3169,6 +3203,7 @@ fn title_for(field: Focus) -> String {
         Focus::Plus => "flags".to_string(),
         Focus::Permission => "mode".to_string(),
         Focus::Where => "where".to_string(),
+        Focus::Opens => "opens".to_string(),
         Focus::Effort => "effort".to_string(),
         Focus::Branch => "branch".to_string(),
         _ => String::new(),
@@ -3235,14 +3270,14 @@ fn open_complete(
 
 /// Commit the highlighted row of an open picker; a header or greyed row
 /// commits nothing and the picker closes.
-fn accept_row(l: &mut Launcher, catalog: &Option<CatalogOutcome>, portal: u8, picker: Picker) {
+fn accept_row(l: &mut Launcher, catalog: &Option<CatalogOutcome>, picker: Picker) {
     let action = picker
         .popup
         .selected()
         .and_then(|(ri, _)| picker.actions.get(ri).cloned().flatten());
     if let Some(action) = action {
         let anchor = picker.anchor;
-        commit_picker_action(l, catalog, action, portal, picker.field, anchor);
+        commit_picker_action(l, catalog, action, picker.field, anchor);
     }
 }
 
@@ -3251,12 +3286,7 @@ fn accept_row(l: &mut Launcher, catalog: &Option<CatalogOutcome>, portal: u8, pi
 /// later space commits when the filter names one row (or exactly the
 /// highlighted one) and folds the list when it names none, handing the typed
 /// text back to the prompt byte for byte.
-fn complete_space(
-    l: &mut Launcher,
-    catalog: &Option<CatalogOutcome>,
-    portal: u8,
-    mut picker: Picker,
-) {
+fn complete_space(l: &mut Launcher, catalog: &Option<CatalogOutcome>, mut picker: Picker) {
     let PickerMode::Complete { sigil, spaced } = picker.mode else {
         return;
     };
@@ -3290,7 +3320,7 @@ fn complete_space(
             insert_char(&mut l.draft, c);
         }
     } else if live == 1 || exact {
-        accept_row(l, catalog, portal, picker);
+        accept_row(l, catalog, picker);
     } else {
         l.picker = Some(picker);
     }
@@ -3302,6 +3332,7 @@ fn complete_space(
 /// The draw path paints the same refresh immutably; this one runs before
 /// the first key or click lands.
 fn refresh_stale_picker(view: &mut View) {
+    placement::sync(view);
     let fresh = view.launcher.as_ref().and_then(|l| {
         let pk = l.picker.as_ref()?;
         if pk.field == Focus::Message
@@ -3310,6 +3341,7 @@ fn refresh_stale_picker(view: &mut View) {
                 PickerMode::Steps { .. }
                     | PickerMode::Help
                     | PickerMode::Approval { .. }
+                    | PickerMode::Direction { .. }
                     | PickerMode::Complete { .. }
             )
         {
@@ -3819,30 +3851,8 @@ pub(crate) fn picker_rows(
                     Some(PickerAction::RunOn(host.clone())),
                 );
             }
-            // Open as: the placement (the view a thread shows through).
-            rows.push(PopupRow::Header("Open as".to_string()));
-            actions.push(None);
-            for p in [
-                Placement::Thread,
-                Placement::ThreadSplitBeside,
-                Placement::ThreadNewTab,
-                Placement::PaneActiveTab,
-            ] {
-                push_entry(
-                    &mut rows,
-                    &mut actions,
-                    if l.draft.placement == p {
-                        "\u{2713}"
-                    } else {
-                        "\u{2022}"
-                    },
-                    p.label(),
-                    "",
-                    true,
-                    Some(PickerAction::Place(p)),
-                );
-            }
         }
+        Focus::Opens => return placement::rows(l),
         Focus::Effort => {
             // "<harness> decides" clears the pin; the catalog's declared
             // efforts follow. A harness whose row declares no effort axis
@@ -4283,7 +4293,7 @@ pub(crate) fn picker_step_down(
             return;
         }
         PickerMode::Steps { .. } => PickerMode::More,
-        PickerMode::Approval { .. } => PickerMode::Main,
+        PickerMode::Approval { .. } | PickerMode::Direction { .. } => PickerMode::Main,
         // The help sheet never drills down to a row list; Esc closes it at
         // the key arm, so a Help picker only reaches here defensively.
         PickerMode::Help | PickerMode::Complete { .. } => {
@@ -4306,24 +4316,21 @@ pub(crate) fn picker_step_down(
     l.picker = Some(picker);
 }
 
-/// Commit a picked row. `portal` was resolved before the picker borrow; a
-/// stale index costs one verbatim door refusal, never a wrong lane. `field`
-/// is the picker's axis, so a commit lands on the axis it was picked from
-/// whatever holds sheet focus.
+/// Commit a picked row. `field` is the picker's axis, so a commit lands on
+/// the axis it was picked from whatever holds sheet focus.
 pub(crate) fn apply_picker_action(
     l: &mut Launcher,
     catalog: &Option<CatalogOutcome>,
     action: PickerAction,
-    portal: u8,
     field: Focus,
 ) {
     l.picker = None;
     match action {
         // The force arm commits in commit_picker_action; nothing to place here.
         PickerAction::Force => {}
-        PickerAction::Field(field, inner) => apply_picker_action(l, catalog, *inner, portal, field),
+        PickerAction::Field(field, inner) => apply_picker_action(l, catalog, *inner, field),
         PickerAction::ToggleWorktree => toggle_worktree(l, catalog),
-        PickerAction::ApplySet(i) => sets::apply(l, catalog, portal, i),
+        PickerAction::ApplySet(i) => sets::apply(l, catalog, i),
         PickerAction::SaveSet => sets::begin_naming(l),
         PickerAction::Set(name) => match field {
             Focus::Permission => {
@@ -4424,7 +4431,6 @@ pub(crate) fn apply_picker_action(
         }
         PickerAction::Place(p) => {
             l.draft.placement = p;
-            l.draft.placement_portal = portal;
             l.draft.bump();
         }
         PickerAction::Clear => {
@@ -4458,7 +4464,9 @@ pub(crate) fn apply_picker_action(
         // Drilled back into by commit_picker_action; a direct commit here
         // (a stale row action) should be unreachable from a fresh picker.
         PickerAction::OpenMore => {}
-        PickerAction::ShowSteps { .. } | PickerAction::ShowApprovals(_) => {}
+        PickerAction::ShowSteps { .. }
+        | PickerAction::ShowApprovals(_)
+        | PickerAction::PickTab { .. } => {}
     }
 }
 
@@ -4469,16 +4477,16 @@ fn commit_picker_action(
     l: &mut Launcher,
     catalog: &Option<CatalogOutcome>,
     action: PickerAction,
-    portal: u8,
     field: Focus,
     anchor: Anchor,
 ) {
     match action {
         PickerAction::OpenMore => open_more(l, catalog, anchor),
+        PickerAction::PickTab { id, ordinal } => placement::open_directions(l, id, ordinal, anchor),
         PickerAction::ShowSteps { title, lines } => show_steps(l, title, lines, anchor),
         PickerAction::ShowApprovals(sandbox) => open_approvals(l, catalog, sandbox, anchor),
         PickerAction::Field(field, inner) => {
-            commit_picker_action(l, catalog, *inner, portal, field, anchor);
+            commit_picker_action(l, catalog, *inner, field, anchor);
         }
         PickerAction::Force => {
             // The pill is the armed state: visible, removable, and it
@@ -4488,7 +4496,7 @@ fn commit_picker_action(
                 l.draft.bump();
             }
         }
-        action => apply_picker_action(l, catalog, action, portal, field),
+        action => apply_picker_action(l, catalog, action, field),
     }
 }
 
@@ -4581,6 +4589,9 @@ impl Launcher {
     /// machine-shaped; the head names the limit, the detail keeps the
     /// evidence and the remedy the gate printed.
     fn detail_text(&self, reason: &str) -> String {
+        if let Some((head, lines)) = refusal::report(reason) {
+            return refusal::footer(head, &lines, self.show_detail);
+        }
         if self.show_detail {
             return reason.to_string();
         }
@@ -4596,14 +4607,11 @@ impl Launcher {
     pub(crate) fn chip_label(&self, f: Focus, catalog: &Option<CatalogOutcome>) -> String {
         let d = &self.draft;
         match f {
-            Focus::Where => {
-                let host = d.host.as_deref().unwrap_or("Local");
-                if d.placement == Placement::default() {
-                    host.to_string()
-                } else {
-                    format!("{host} \u{b7} {}", d.placement.label())
-                }
+            Focus::Where => d.host.as_deref().unwrap_or("Local").to_string(),
+            Focus::Opens if self.shell && d.placement == Placement::LastPortal => {
+                shell_box::default_word(self).to_string()
             }
+            Focus::Opens => self.places.label(d.placement),
             Focus::Project => d
                 .cwd()
                 .rsplit('/')
@@ -4743,6 +4751,9 @@ impl Launcher {
         }
         if matches!(self.phase, Phase::Refused { .. }) {
             return "^o detail \u{b7} esc close".to_string();
+        }
+        if self.run.as_ref().is_some_and(shell_box::ShellBox::live) {
+            return "keys go to the command \u{b7} ^o move to a tab".to_string();
         }
         // Shell mode runs instead of launching: the bar names its own keys.
         if self.shell {

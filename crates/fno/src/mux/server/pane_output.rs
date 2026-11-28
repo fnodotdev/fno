@@ -27,6 +27,7 @@ pub(super) fn expire_sync_updates(core: &mut Core, now: Instant) {
         .collect();
     for &pid in &expired {
         core.broadcast_pane(pid);
+        core.shell_run_output(pid);
         core.note_pane_output(pid);
     }
     if !expired.is_empty() {
@@ -118,6 +119,7 @@ pub(super) fn drain_pty_output(
     }
     for pid in touched {
         core.broadcast_pane(pid);
+        core.shell_run_output(pid);
         core.note_pane_output(pid);
     }
     for (pid, body) in fired_notices {

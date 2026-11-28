@@ -64,6 +64,8 @@ Everything after the prompt is harness argv, never parsed. A spawn-owned flag th
 
 `--grace <duration>` bounds the retry: a refused fire retries every 5 minutes inside the grace (60 minutes default for a timed row), then the row reads `missed` and one mail goes to the scheduler. `--force` recorded at schedule time skips at fire time exactly what `spawn --force` skips now (seat caps, `--at` placement anchor aside), and never lifts the memory or disk axis. Rows due in one minute fire in live node priority order. A pending row holds the daemon's idle exit, never drift retirement. The gate is `config.schedule.enabled` (default true).
 
+The daemon fires a row with its own environment, so the calling pane is gone by then. At schedule time, a schedule flag refuses beside `--from current`, or beside a split with no `--tab`, `--from` or `--portal N`. Name the anchor with `--tab <N>` or `--from <portal N|worker name>`. A row stored with such an anchor before this refusal fires as an unshown thread, and the fire row records why. It never refuses at fire time, so one fire cannot end an `--every` series.
+
 ## Misc
 
 Without `--name`, an adjective-noun slug is minted. The one positional is the prompt, not the name. A prompt from `--prompt-file <path>` or `--prompt-file -` is read once before admission and naming. Do not supply an inline prompt beside a prompt file.

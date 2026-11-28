@@ -48,10 +48,12 @@ fn thread_pane_placement_field_is_additive() {
             name,
             portal,
             placement,
+            origin,
         } => {
             assert_eq!(name, "w2");
             assert_eq!(portal, Some(1));
             assert_eq!(placement, PanePlacement::default());
+            assert_eq!(origin, None);
         }
         other => panic!("wrong variant: {other:?}"),
     }
@@ -64,6 +66,11 @@ fn thread_pane_placement_field_is_additive() {
             split: Some(Dir::Right),
             ..Default::default()
         },
+        origin: Some(ThreadOrigin {
+            cwd: "/w".into(),
+            parent: Some("s1".into()),
+            check: true,
+        }),
     };
     let back: ControlCommand =
         serde_json::from_str(&serde_json::to_string(&command).unwrap()).unwrap();

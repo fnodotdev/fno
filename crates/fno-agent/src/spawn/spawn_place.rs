@@ -33,6 +33,7 @@ pub const THREAD_STRIP: &[&str] = &[
     "-x",
     "--from",
     "--workspace",
+    "--squad",
     "-s",
 ];
 
@@ -435,6 +436,11 @@ mod tests {
         // A workspace rides the caller side: stripped so the remote gate's
         // placement validation sees a bare thread, kept in the caller's
         // params for the portal placement after the receipt.
+        let a = args(&["--squad", "ops", "fix"]);
+        assert_eq!(
+            relay_args(&a, "mbp3", "t-abc", THREAD_STRIP),
+            args(&["--name", "t-abc@mbp3", "fix"])
+        );
         let a = args(&["--workspace", "ops", "--portal", "1", "fix"]);
         assert_eq!(
             relay_args(&a, "mbp3", "t-abc", THREAD_STRIP),

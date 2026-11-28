@@ -66,6 +66,7 @@ impl InputField {
     pub(crate) fn feed(&mut self, bytes: &[u8]) -> Vec<FieldEvent> {
         let mut events = Vec::new();
         for key in self.carry.fold_carry(bytes, bytes.is_empty()) {
+            let key = key.plain();
             match key {
                 LKey::Char(c) => self.insert(&c.to_string()),
                 LKey::Paste(s) => self.insert(&s.replace(['\r', '\n'], "")),

@@ -961,7 +961,7 @@ pub fn pane_group_help() -> String {
 /// `render_path_help(["mux", "thread"])` reads it.
 pub fn thread_group_help() -> String {
     "\
-The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agent spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
+The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open. A `--split DIR` with an open `--portal N` halves N and opens a new portal, so N keeps showing. A `--from` or `--tab` that names another place is then refused. Any other split halves the caller's own pane unless `--from portal N|worker|current` names another cell or `--tab` names a tab, whose focused pane it halves. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agent spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
 
   fno mux thread w2
   fno mux thread w2 --portal new --split right --from portal 0
@@ -1818,6 +1818,15 @@ pub struct ThreadArgs {
     /// The named cell a split halves: `portal N`, a worker name, or `current`
     #[arg(long)]
     pub from: Option<String>,
+    /// Answer whether the placement would land, and change nothing
+    #[arg(long, hide = true)]
+    pub check: bool,
+    /// The folder the thread runs in, for a thread with no row here
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub cwd: Option<String>,
+    /// The session that spawns the thread
+    #[arg(long, hide = true, value_name = "ID")]
+    pub parent: Option<String>,
     /// The agent name or attach id
     pub name: Option<String>,
 }

@@ -17,6 +17,18 @@ pub struct RemoteRow {
     pub name: String,
 }
 
+impl RemoteRow {
+    /// The remote row a `name@host` address names.
+    pub fn from_address(name: &str) -> Option<Self> {
+        let (key, host) = name.rsplit_once('@')?;
+        is_remote_address(name).then(|| Self {
+            host: host.to_string(),
+            key: key.to_string(),
+            name: name.to_string(),
+        })
+    }
+}
+
 /// Painted beside the `name@host` title of a pane that shows a remote session.
 pub const REMOTE_GLYPH: char = '\u{21c4}';
 

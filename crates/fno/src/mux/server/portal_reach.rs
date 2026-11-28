@@ -4,6 +4,7 @@
 //! it.
 
 use super::pane_spawn::{SpawnOrder, KEEPER_ROAD};
+use super::reach_landing::unused_geometry;
 use super::*;
 use crate::harness::Harness;
 
@@ -562,7 +563,7 @@ fn portal_reply(landed: bool, landing: Option<String>, name: &str, portal: u8) -
 /// caller's geometry (split, tab, target), so a claude-row reach opens the
 /// split the operator asked for instead of dropping to a new tab. `here`
 /// never reaches this point - reach_portal refuses it at the gate - and a
-/// replay that lands on a live seat is told "a portal takes no split" once,
+/// replay that lands on a live seat is told its geometry was not used, once,
 /// which matches the repoint arm's documented contract.
 pub(super) fn portal_replay_placement(placement: &PanePlacement, portal_idx: u8) -> PanePlacement {
     PanePlacement {
@@ -701,12 +702,9 @@ impl Core {
             return Flow::Continue;
         }
         // Geometry a fresh open could honor. Computed once, before the slot
-        // lookup: every live-seat arm ignores it (with a notice) and only
-        // the fresh-open arm consumes it.
-        let caller_geometry = placement.split.is_some()
-            || placement.at.is_some()
-            || placement.tab.is_some()
-            || !matches!(placement.target, PaneTarget::CurrentRoute);
+        // lookup: every live-seat arm ignores it (with a notice naming the
+        // unused flags) and only the fresh-open arm consumes it.
+        let unused = unused_geometry(placement);
         // A remote row has no registry row here. It stands in as a row that
         // carries only its `name@host`, which is also the key its portal
         // stores, and its seat runs the link instead of a tier argv.
@@ -800,20 +798,18 @@ impl Core {
             };
             match self.session.find_pane(other_seat) {
                 Some((sid, _)) => {
-                    // This focus ignores caller geometry; saying so
-                    // beats a silent drop.
-                    if caller_geometry {
-                        self.notice(client_id, "a portal takes no split, target, or anchor");
-                    }
                     self.set_view(client_id, sid, other_tab);
                     if let Some(tab) = self.viewed_tab_mut((sid, other_tab)) {
                         tab.focus = other_seat;
                     }
                     self.mark_seen_if_done(other_seat);
-                    self.notice(
-                        client_id,
-                        format!("portal {other_idx}: already showing {}", row.name),
-                    );
+                    let mut text = format!("portal {other_idx}: already showing {}", row.name);
+                    // This focus ignores caller geometry; saying so beats a
+                    // silent drop.
+                    if let Some(unused) = &unused {
+                        text = format!("{text}; {unused}");
+                    }
+                    self.notice(client_id, text);
                     self.push_layout(true);
                     return Flow::Continue;
                 }
@@ -963,8 +959,11 @@ impl Core {
                         // was taken above; put it back - a focus is not a
                         // close. Caller geometry is ignored here too (the
                         // seat keeps its place), visibly.
-                        if caller_geometry {
-                            self.notice(client_id, "a portal takes no split, target, or anchor");
+                        if let Some(unused) = &unused {
+                            self.notice(
+                                client_id,
+                                format!("portal {portal_idx} was open: {unused}"),
+                            );
                         }
                         self.portals.insert(
                             portal_idx,
@@ -996,9 +995,6 @@ impl Core {
                     // seat is replaced IN PLACE, the tab never moves - so
                     // caller geometry is ignored. The notice is what makes
                     // that a decision rather than a silent drop (AC2-REG).
-                    if caller_geometry {
-                        self.notice(client_id, "a portal takes no split, target, or anchor");
-                    }
                     let permit = match crate::process_admission::admit_tab(0, None) {
                         Ok(p) => p,
                         Err(error) => {
@@ -1112,6 +1108,15 @@ impl Core {
                             client_id,
                             format!("thread pane -> {} (portal {})", row.name, portal_idx),
                         );
+                        if let Some(unused) = &unused {
+                            core.notice(
+                                client_id,
+                                format!(
+                                    "portal {portal_idx} was open: it now shows {}; {unused}",
+                                    row.name
+                                ),
+                            );
+                        }
                         core.push_layout(true);
                         Flow::Continue
                     });
@@ -1149,20 +1154,12 @@ impl Core {
         // The named anchor cell (`--from`): resolved once, honored
         // wherever the caller's geometry is. `at` wins when both name a
         // pane.
-        let from_anchor = match placement
-            .from
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(from) => match self.resolve_from_anchor(from) {
-                Ok(pid) => Some(pid),
-                Err(e) => {
-                    self.notice(client_id, e);
-                    return Flow::Continue;
-                }
-            },
-            None => None,
+        let anchor = match self.named_anchor(placement) {
+            Ok(anchor) => anchor,
+            Err(e) => {
+                self.notice(client_id, e.to_string());
+                return Flow::Continue;
+            }
         };
         // Owner routing asks the one thread-workspace resolver: the row's
         // recorded member, then its spawner's workspace, then the project
@@ -1177,43 +1174,32 @@ impl Core {
                 let eff = PanePlacement {
                     tab: Some(crate::proto::TabSel::Id(tid)),
                     split: placement.split,
-                    at: placement.at.or(from_anchor),
+                    // An anchor in another tab cannot steer the remembered one.
+                    at: anchor.filter(|pane| {
+                        self.session.find_pane(*pane).is_some_and(|(found, ti)| {
+                            found == sid
+                                && self
+                                    .session
+                                    .squad(found)
+                                    .and_then(|s| s.tabs.get(ti))
+                                    .is_some_and(|tab| tab.id == tid)
+                        })
+                    }),
                     ..Default::default()
                 };
                 (Some(sid), eff)
             }
             None => {
-                let dest = match self.resolve_placement_target(&placement.target, Some(owner)) {
-                    Ok(d) => d,
+                // A tab or anchor the server cannot resolve refuses BEFORE a
+                // pane exists - never spawn-then-reap. The thread door's
+                // pre-birth check asks this same resolver.
+                match self.fresh_landing(owner, placement, anchor) {
+                    Ok(landing) => landing,
                     Err(e) => {
-                        self.notice(client_id, e);
+                        self.notice(client_id, e.to_string());
                         return Flow::Continue;
                     }
-                };
-                // AC4-EDGE: a tab the server cannot resolve refuses BEFORE a
-                // pane exists - never spawn-then-reap. `New` is born with the
-                // pane in place_with and needs no pre-check.
-                if let (Some(sid), Some(sel)) = (dest, placement.tab.as_ref()) {
-                    if !matches!(sel, crate::proto::TabSel::New) {
-                        if let Err(e) = self.resolve_tab_index(sid, sel) {
-                            self.notice(client_id, e);
-                            return Flow::Continue;
-                        }
-                    }
                 }
-                // The portal fields are this reach's ADDRESSING, not
-                // placement geometry: place_with reads none of them, and a
-                // portal inside a placement is the overlap the decode edge
-                // used to forbid. Strip them so the effective placement is
-                // pure geometry.
-                let mut eff = placement.clone();
-                eff.portal = None;
-                eff.portal_new = false;
-                eff.thread_pane = false;
-                eff.view = false;
-                eff.from = None;
-                eff.at = eff.at.or(from_anchor);
-                (dest, eff)
             }
         };
         let permit = match crate::process_admission::admit_tab(
@@ -1283,10 +1269,13 @@ impl Core {
             if fell_back {
                 core.notice(client_id, "tab full - opened as tab");
             }
-            core.notice(
-                client_id,
-                format!("thread pane -> {} (portal {})", row.name, portal_idx),
+            let line = core.landing_line(
+                &row.name,
+                portal_idx,
+                (sid, tid, fell_back),
+                effective.split,
             );
+            core.notice(client_id, line);
             core.push_layout(true);
             Flow::Continue
         })
@@ -1414,6 +1403,15 @@ impl Core {
             });
             return;
         }
+        let mut placement = placement;
+        if let Err(refusal) = self.split_open_portal(&mut placement) {
+            // A caller that gave up waiting needs no answer.
+            drop(reply.send(ServerMsg::Err {
+                code: err_code::BAD_REQUEST,
+                msg: refusal.to_string(),
+            }));
+            return;
+        }
         // `--portal new` resolves to the next free index HERE, before
         // any park, so the parked replay lands where the reply says. Same
         // allocator the TUI's new-portal gesture uses. The one-park guard
@@ -1459,7 +1457,6 @@ impl Core {
         // the reach's addressing in exactly one field, the way every pre-v66
         // caller already sent it. `portal` is the resolved index by
         // here, so a `new` reach names the index the server picked.
-        let mut placement = placement;
         let view = placement.view;
         if !view {
             placement.portal = Some(portal);
@@ -1488,13 +1485,18 @@ impl Core {
             });
             return;
         }
-        self.command(
-            CONTROL_CLIENT,
-            Command::AttachAgent {
+        // `name@host` with no row here is a worker on another machine: its
+        // seat runs the link, as a remote launch's portal does.
+        let remote = crate::proto::RemoteRow::from_address(name)
+            .filter(|_| !self.agents.iter().any(|a| row_answers_input(a, name)));
+        let reach = match remote {
+            Some(remote) => Command::ReachRemote { remote, placement },
+            None => Command::AttachAgent {
                 id: name.to_string(),
                 placement,
             },
-        );
+        };
+        self.command(CONTROL_CLIENT, reach);
         // A reach whose viewer is still spawning off the loop has emitted
         // nothing yet: park the reply, and the spawn's landing answers it.
         if self.spawn_in_flight_for(CONTROL_CLIENT) {

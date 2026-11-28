@@ -266,6 +266,8 @@ fn wait_for_raw_frame(
             | Ok(ServerMsg::AgentRowsReceipt { .. })
             // (v83) Launcher progress: asserted by the launcher suites.
             | Ok(ServerMsg::AgentLaunch(_))
+            // (v135) A card's `!` run: only the client that started one hears it.
+            | Ok(ServerMsg::ShellRun(_))
             // (v110) Desktop notice and its receipt: the notice rides to the
             // client's tty (asserted by the notify unit tests), the receipt
             // answers the one-shot notify connection.

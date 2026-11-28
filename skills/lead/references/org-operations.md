@@ -86,7 +86,7 @@ Drop `--print` to have spawn run the same line. If you hold the node's claim, do
 
 What a thread sub-lead gives up is placement, not authority.
 
-The placement flags are mux geometry and refuse outside a pane, and `--at current` resolves the anchor from `FNO_PANE`, which a thread session does not have.
+On a thread the placement flags open a portal. `--at current` resolves the anchor from `FNO_PANE`, which a thread session does not have.
 So a thread sub-lead seats its own teammates in fresh tabs and never forms a co-located org.
 Anoint on thread for a sub-lead that will pass; anoint on a pane for one that will hold org.
 
@@ -167,7 +167,7 @@ fno backlog update blocked_by+=<up>  # if a merge-order constraint applies
 ## Caveats
 
 - **`--workspace` is the canonical spelling.** A deprecated alias still resolves, which is the trap: a stale command runs clean in a manual test and teaches the wrong flag anyway. The migration note is in the [spawn guide](../../../docs/guides/fno-agent-spawn.md#place-a-pane-in-a-mux-workspace).
-- **Placement is pane-only.** `--workspace`/`-s`, `--split`/`-x`, and `--at` are refused for `thread` and `headless`, which have no mux geometry. A org teammate is a pane, so this never binds org; it binds a pass that dispatches unattended, which carries mission provenance in the graph instead.
+- **Org placement is for panes.** On `thread`, `--workspace`/`-s` and `--split`/`-x` open a portal, and `--at` refuses. `headless` refuses all three, because it has no mux geometry. An org teammate is a pane. An unattended pass carries its mission provenance in the graph instead.
 - **You never create a workspace first.** The first placement into a name creates it; there is no create command. A blank name is a CLI error, not a fallback to the default.
 - **Moving a running pane is a layout operation, not a pane command.** No `fno mux pane` command migrates one - `break` detaches a pane into a new tab in the same session. `fno mux layout apply` does relocate a bound live pane, PTY intact, but it applies a whole shape to the destination tab and needs that template's full slot set, so use it to shape a tab rather than to shuffle a worker. A human at the TUI also has lighter paths you do not: move-pane, move-tab, and recruiting a running agent into a named workspace as a watch-only member (create-if-absent, persisted). Default to adopting an already-running worker logically (claim + mail), and do not kill a healthy one for layout.
 - **Sweep at boundaries, not on a repeating clock.** A heartbeat poll re-reads context every pass. It surfaces nothing the teammate's projected events do not. But never stop with a live teammate and no armed wake. A report can land `queued (durable)`. A pane can die reporting nothing. So an expected report is not coverage. The teammate you counted on to write is the one that strands you. Cover every live teammate you have not yet reconciled, owed report or not. Use one `wait` each, or one `subscribe` stream for the whole fleet. A reconciled `done` row matches instantly and spins, so it leaves the set. One armed wake is a backstop. A timer that fires regardless is the poll.

@@ -51,6 +51,7 @@ impl View {
         observers: Vec<ObserverRow>,
     ) {
         self.set_layout(layout);
+        self.note_portal_focus();
         self.backlog = backlog;
         self.server_proto = proto;
         self.observers = observers;

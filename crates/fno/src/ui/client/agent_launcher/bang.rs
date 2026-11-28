@@ -1,5 +1,6 @@
-//! The composer's bang mode run path: one `!` line becomes one shell run
-//! in a new mux pane, plus its agents-journal rows (`composer_shell_ran`
+//! The composer's bang mode pane path: a bare `!`, or a line with a placement
+//! pick, becomes one shell run in a new mux pane. A line with no pick runs in
+//! the card (`shell_box`). Both write agents-journal rows (`composer_shell_ran`
 //! when a pane was born, `composer_shell_refused` when the run never
 //! started). The line rides as its own argv element and is never spliced
 //! into a script, so quotes, pipes and redirects pass through intact.
@@ -7,12 +8,10 @@
 use std::path::Path;
 use std::time::Duration;
 
-use super::{close, write_msg, ClientMsg, Phase, Placement, View};
+use super::{close, placement::Places, write_msg, ClientMsg, Phase, View};
 use crate::mux_cli::{control_roundtrip_with_timeouts, ControlError};
 use crate::pane_send_audit::{append_agents_event, pane_send_audit_events_path};
-use crate::proto::{
-    socket_path, Command, ControlCommand, PanePlacement, PaneTarget, ServerMsg, TabSel,
-};
+use crate::proto::{socket_path, Command, ControlCommand, ServerMsg};
 
 /// The journal line is data, not a transcript: past this the row truncates.
 const MAX_LINE_CHARS: usize = 512;
@@ -22,36 +21,23 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `/bin/sh` runs `<shell> -lc <line>`, prints `[exit N]`, then hands the
 /// pane to an interactive login shell. Positional args keep the line out of
-/// the script text; the pane never hangs because the command exited.
+/// the script text; the pane never hangs because the command exited. The
+/// trap lets Ctrl-C end the line and still leave the shell.
 fn shell_argv(shell: &str, line: &str) -> Vec<String> {
     vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        format!("\"$0\" -lc \"$1\"; s=$?; printf '\\n[exit %s]\\n' \"$s\"; exec \"$0\" -l"),
+        format!(
+            "trap : INT; \"$0\" -lc \"$1\"; s=$?; printf '\\n[exit %s]\\n' \"$s\"; exec \"$0\" -l"
+        ),
         shell.to_string(),
         line.to_string(),
     ]
 }
 
-/// Where a `!` shell lands: in the card's workspace, as a new tab unless the
-/// Open as token names a split beside the focused pane or the active tab.
-fn shell_placement(squad: u64, open_as: Placement) -> PanePlacement {
-    let (tab, split) = match open_as {
-        Placement::ThreadSplitBeside => (None, Some(crate::tree::Dir::Right)),
-        Placement::PaneActiveTab => (Some(TabSel::Active), None),
-        Placement::Thread | Placement::ThreadNewTab => (Some(TabSel::New), None),
-    };
-    PanePlacement {
-        target: PaneTarget::SquadId(squad),
-        split,
-        tab,
-        ..PanePlacement::default()
-    }
-}
-
 /// The user's login shell, resolved where the mux's own shell panes
 /// resolve theirs: `$SHELL`, else `/bin/sh`.
-fn user_shell() -> String {
+pub(super) fn user_shell() -> String {
     crate::pty::shell_candidates(std::env::var_os("SHELL").as_deref())
         .first()
         .map(|c| c.to_string_lossy().into_owned())
@@ -98,6 +84,20 @@ fn refused_row(
     })
 }
 
+/// What a refused pane run journals, and what the composer shows: one
+/// sentence naming the limit and the way out (the footer's shortener). The
+/// Debug wrapper never paints: an `Ok(other)` names the surprise instead of
+/// Debug-printing it.
+fn refusal_texts(reply: &Result<ServerMsg, ControlError>) -> (String, String) {
+    match reply {
+        Ok(other) => (
+            format!("{other:?}"),
+            "the pane never started: unexpected server reply".to_string(),
+        ),
+        Err(e) => (e.to_string(), e.to_string()),
+    }
+}
+
 /// Best-effort: record a failed append without painting over the client.
 fn emit(events: &Path, row: &serde_json::Value) {
     if append_agents_event(events, row).is_err() {
@@ -105,12 +105,30 @@ fn emit(events: &Path, row: &serde_json::Value) {
     }
 }
 
-/// Run the drafted line in a new pane through the session's control
-/// socket, journaling to the standard events path.
+/// Journal a run the card hosts.
+pub(super) fn journal_ran(session: &str, cwd: &str, shell: &str, line: &str, pane: u64) {
+    let row = ran_row(session, cwd, shell, line, pane);
+    emit(&pane_send_audit_events_path(), &row);
+}
+
+/// Journal a card run that never started.
+pub(super) fn journal_refused(session: &str, cwd: &str, line: &str, reason: &str) {
+    let row = refused_row(session, cwd, line, reason, "refused");
+    emit(&pane_send_audit_events_path(), &row);
+}
+
+/// Run the drafted line: in the card with no pick, else in a new pane
+/// through the session's control socket, journaling to the standard events
+/// path.
 pub(super) async fn run(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    if super::shell_box::takes(view) {
+        return super::shell_box::start(view, sock_w)
+            .await
+            .map_err(|e| e.to_string());
+    }
     let events = pane_send_audit_events_path();
     let session = view.session.clone();
     let sock = socket_path(&session)?;
@@ -129,7 +147,11 @@ pub(super) async fn run_with(
     events: &Path,
     roundtrip: impl FnOnce(ControlCommand) -> Result<ServerMsg, ControlError> + Send + 'static,
 ) -> Result<(), String> {
-    let Some(l) = view.launcher.as_mut() else {
+    let placed = view
+        .launcher
+        .as_ref()
+        .map(|l| Places::read(view, l.squad).shell(l.squad, l.draft.placement));
+    let (Some(l), Some(placed)) = (view.launcher.as_mut(), placed) else {
         return Ok(());
     };
     if !l.shell {
@@ -147,23 +169,19 @@ pub(super) async fn run_with(
     let cwd = l.draft.cwd();
     let request_id = l.next_request_id;
     l.next_request_id += 1;
+    let refuse = |reason: String| {
+        let row = refused_row(&session, &cwd, &line, &reason, "refused");
+        emit(events, &row);
+        Phase::Refused { request_id, reason }
+    };
     if let Some(host) = &l.draft.host {
         let reason =
             format!("shell runs on {host} are not supported; choose Local to run this line");
-        emit(
-            events,
-            &refused_row(&session, &cwd, &line, &reason, "refused"),
-        );
-        l.phase = Phase::Refused { request_id, reason };
+        l.phase = refuse(reason);
         return Ok(());
     }
     if cwd.is_empty() {
-        let reason = "no project chosen; pick one on the Project chip".to_string();
-        emit(
-            events,
-            &refused_row(&session, &cwd, &line, &reason, "refused"),
-        );
-        l.phase = Phase::Refused { request_id, reason };
+        l.phase = refuse("no project chosen; pick one on the Project chip".to_string());
         return Ok(());
     }
     let shell = user_shell();
@@ -172,7 +190,13 @@ pub(super) async fn run_with(
     } else {
         shell_argv(&shell, &line)
     };
-    let placement = shell_placement(l.squad, l.draft.placement);
+    let placement = match placed {
+        Ok(placement) => placement,
+        Err(e) => {
+            l.phase = refuse(e.to_string());
+            return Ok(());
+        }
+    };
     let command = ControlCommand::PaneRun {
         cwd: cwd.clone(),
         argv,
@@ -209,24 +233,8 @@ pub(super) async fn run_with(
             l.phase = Phase::Unknown { request_id, reason };
         }
         _ => {
-            // The composer shows one sentence naming the limit and the way
-            // out (the footer's shortener); the raw text stays in the
-            // journal row. The Debug wrapper never paints: an `Ok(other)`
-            // names the surprise instead of Debug-printing it.
-            let reason = match &reply {
-                Ok(other) => {
-                    emit(
-                        events,
-                        &refused_row(&session, &cwd, &line, &format!("{other:?}"), "refused"),
-                    );
-                    "the pane never started: unexpected server reply".to_string()
-                }
-                Err(e) => {
-                    let raw = e.to_string();
-                    emit(events, &refused_row(&session, &cwd, &line, &raw, "refused"));
-                    raw
-                }
-            };
+            let (raw, reason) = refusal_texts(&reply);
+            emit(events, &refused_row(&session, &cwd, &line, &raw, "refused"));
             l.phase = Phase::Refused { request_id, reason };
         }
     }
@@ -237,6 +245,7 @@ pub(super) async fn run_with(
 mod tests {
     use super::super::open;
     use super::*;
+    use crate::proto::{PaneTarget, TabSel};
 
     fn tmp_dir(tag: &str) -> std::path::PathBuf {
         let nonce = std::time::SystemTime::now()

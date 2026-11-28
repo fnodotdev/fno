@@ -787,12 +787,14 @@ fn chips_carry_values_not_axis_names() {
     assert_eq!(l.chip_label(Focus::Where, &v.launcher_catalog), "Local");
     assert_eq!(l.chip_label(Focus::Permission, &v.launcher_catalog), "auto");
     assert_eq!(l.chip_label(Focus::Effort, &v.launcher_catalog), "default");
-    // A non-default placement rides the Where chip's value.
+    // A non-default placement rides its own chip.
     let mut l = l.clone();
-    l.draft.placement = super::agent_launcher::Placement::ThreadSplitBeside;
-    assert!(l
-        .chip_label(Focus::Where, &v.launcher_catalog)
-        .contains("split beside"));
+    l.draft.placement = super::agent_launcher::Placement::Split(crate::tree::Dir::Right);
+    assert_eq!(
+        l.chip_label(Focus::Opens, &v.launcher_catalog),
+        "split right"
+    );
+    assert_eq!(l.chip_label(Focus::Where, &v.launcher_catalog), "Local");
 }
 /// The regression behind the model-floor contract: a claude account with no
 /// pinned model
@@ -1217,18 +1219,19 @@ fn where_picker_lists_local_and_the_placement_rows() {
         .collect();
     assert_eq!(
         labels,
-        vec![
-            "[Run on]",
-            "Local",
-            "remote-box",
-            "[Open as]",
-            "thread",
-            "thread split beside",
-            "thread new tab",
-            "pane: active tab",
-        ],
+        vec!["[Run on]", "Local", "remote-box",],
         "the Where picker's rows: {labels:?}"
     );
+    let (opens, _) =
+        super::agent_launcher::picker_rows(&l, Focus::Opens, &v.launcher_catalog, &v.backlog);
+    for want in ["new tab", "split down", "pane in active tab"] {
+        assert!(
+            opens
+                .iter()
+                .any(|r| matches!(r, crate::popup::PopupRow::Entry { label, .. } if label == want)),
+            "the Open as list offers {want}"
+        );
+    }
     // The Local row carries the check and no action (there is nothing to
     // switch to).
     let local_action = actions[1].clone();
@@ -1236,33 +1239,34 @@ fn where_picker_lists_local_and_the_placement_rows() {
         local_action,
         Some(super::agent_launcher::PickerAction::RunOn(None))
     );
-    // Committing split beside records the placement; request() turns it
-    // into --substrate thread --portal N --split right.
+    // Committing a split records the placement. The client picks no index.
     let mut l = v.launcher.take().unwrap();
     super::agent_launcher::apply_picker_action(
         &mut l,
         &v.launcher_catalog,
-        super::agent_launcher::PickerAction::Place(
-            super::agent_launcher::Placement::ThreadSplitBeside,
-        ),
-        2,
-        Focus::Where,
+        super::agent_launcher::PickerAction::Place(super::agent_launcher::Placement::Split(
+            crate::tree::Dir::Right,
+        )),
+        Focus::Opens,
     );
-    v.launcher = Some(l.clone());
-    let l = v.launcher.as_ref().unwrap();
-    assert_eq!(l.draft.placement_portal, 2);
-    assert!(
-        l.chip_label(Focus::Where, &v.launcher_catalog)
-            .contains("split beside"),
-        "the Where chip shows the picked view: {:?}",
-        l.chip_label(Focus::Where, &v.launcher_catalog)
+    let request = l.draft.request(1);
+    assert_eq!(
+        (request.substrate.as_str(), request.portal),
+        ("thread", None)
     );
+    assert_eq!(
+        l.chip_label(Focus::Opens, &v.launcher_catalog),
+        "split right",
+        "the opens chip shows the picked view"
+    );
+    // The default launch needs no placement wire.
+    l.draft.placement = Default::default();
+    v.launcher = Some(l);
     let mut l = v.launcher.take().unwrap();
     super::agent_launcher::apply_picker_action(
         &mut l,
         &v.launcher_catalog,
         super::agent_launcher::PickerAction::RunOn(Some("remote-box".into())),
-        2,
         Focus::Where,
     );
     assert_eq!(l.draft.request(1).host.as_deref(), Some("remote-box"));
@@ -1547,13 +1551,7 @@ fn at_opens_the_node_picker_and_picking_inserts_the_id() {
     assert!(entry_count >= 1, "cards list: {entry_count}");
     let mut l = v.launcher.take().unwrap();
     let action = super::agent_launcher::PickerAction::InsertNode(first_id.clone());
-    super::agent_launcher::apply_picker_action(
-        &mut l,
-        &v.launcher_catalog,
-        action,
-        0,
-        Focus::Message,
-    );
+    super::agent_launcher::apply_picker_action(&mut l, &v.launcher_catalog, action, Focus::Message);
     v.launcher = Some(l);
     assert_eq!(
         v.launcher.as_ref().unwrap().draft.message,
@@ -2338,7 +2336,7 @@ fn launch_refuses_a_pinned_pick_whose_key_does_not_resolve() {
         route: String::new(),
         provider: Some("deepseek".to_string()),
     };
-    super::agent_launcher::apply_picker_action(&mut l, &v.launcher_catalog, pin, 0, Focus::Model);
+    super::agent_launcher::apply_picker_action(&mut l, &v.launcher_catalog, pin, Focus::Model);
     v.launcher = Some(l);
     let sock: Vec<u8> = Vec::new();
     let mut sock = sock;
@@ -2725,7 +2723,7 @@ fn composer_sets_apply_by_digit_by_name_and_by_tap() {
         (Some("sonnet"), "low", "plan")
     );
     assert_eq!(d.worktree, Some(true));
-    assert_eq!(d.placement, super::agent_launcher::Placement::ThreadNewTab);
+    assert_eq!(d.placement, super::agent_launcher::Placement::NewTab);
     v.launcher.as_mut().unwrap().focus = Focus::Message;
     press(&mut v, b":daily ");
     let l = v.launcher.as_ref().unwrap();
