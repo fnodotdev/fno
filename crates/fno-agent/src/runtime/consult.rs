@@ -1215,16 +1215,37 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_registry_is_its_own_unresolved_cause() {
+    fn an_absent_registry_reads_as_empty_and_answers_no_row() {
         let dir = tempfile::tempdir().unwrap();
         lane_config(dir.path(), ONE_CLAUDE_ROW);
         let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-ghost"),
+            LaneResolution::NoRow,
+            "a fresh install has no rows, so the honest answer is the row-miss case"
+        );
+    }
+
+    #[test]
+    fn a_row_that_fails_validation_reads_as_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![json!({
+                "name": "t-broken",
+                "harness": "claude",
+                "harness_session_id": "sess-broken",
+                "status": "live",
+            })],
+        );
+        let d = deps(dir.path(), &silent_ok);
         assert!(
             matches!(
-                session_lane(&d, "claude", "sess-ghost"),
+                session_lane(&d, "claude", "sess-broken"),
                 LaneResolution::Unreadable(_)
             ),
-            "an unreadable registry never claims the row is absent"
+            "a row that fails the loader's validation reads as unreadable, never as a row claim"
         );
     }
 
