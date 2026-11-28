@@ -2045,14 +2045,20 @@ fn render_human(
                 .get("subject")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            // An unreadable index degrades to the plain refusal, and the
+            // reason rides the text: a miss that names nothing must say why
+            // it could not look (the law split's fail-open posture).
+            let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+            let open = subject
+                .map(|_| crate::outstanding::read_open_questions(&index))
+                .unwrap_or_else(|| Ok(Vec::new()));
             let holder = subject.and_then(|s| {
                 let resolved = crate::numbers::resolve('d', s);
-                let index =
-                    crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
-                crate::outstanding::read_open_questions(&index)
+                open.as_ref()
                     .ok()
-                    .and_then(|open| open_question_holding(s, resolved, &open))
+                    .and_then(|questions| open_question_holding(s, resolved, questions))
             });
+            let index_error = open.err();
             if let Some(q) = holder {
                 let host_tail = q
                     .host
@@ -2075,10 +2081,14 @@ fn render_human(
                     text = q.question,
                 );
             } else {
+                let degraded = index_error
+                    .map(|e| format!(" (open-question index unreadable: {e})"))
+                    .unwrap_or_default();
                 eprintln!(
                     "{LABEL}: '{subject_label}' is shaped like a decision id, and no \
-                     decision on this machine carries it{hint}. It is not indexed \
-                     as a subject either. Browse the store with: fno backlog decisions",
+                     decision on this machine carries it{hint}{degraded}. It is not \
+                     indexed as a subject either. Browse the store with: \
+                     fno backlog decisions",
                 );
             }
         } else {
