@@ -37,7 +37,6 @@ retry_split_args() {
     SPLIT_PRE=()
     SPLIT_POST=()
     local sep_seen=0 arg
-    local -a names=()
     for arg in "$@"; do
         if [ "$sep_seen" -eq 0 ]; then
             if [ "$arg" = "--" ]; then
@@ -48,8 +47,6 @@ retry_split_args() {
         elif [ "${arg#-}" != "$arg" ]; then
             [ "$arg" = "--exact" ] && continue
             SPLIT_POST+=("$arg")
-        else
-            names+=("$arg")
         fi
     done
     if [ "$sep_seen" -eq 0 ]; then
