@@ -80,6 +80,12 @@ A bare `Esc` is the first byte of the chord, so the mux holds it briefly to see 
 
 Emulators: iTerm2, Ghostty, kitty and WezTerm emit the xterm CSI form. Verify yours before relying on it: run `cat -v`, press `Ctrl+Opt+Left`, expect `^[[1;7D`. If your emulator sends something else, bind what it sends.
 
+## Click an image
+
+A plain click on an image reference opens it in the file viewer. If the app in the pane owns the mouse, as full-screen Claude does, the click still opens the image. The reference can be a path, a file name in the pane's directory, a file link, or a pasted-image placeholder such as `[Image #1]`. Hover underlines what a click opens. In Claude's agent view a placeholder does not open, because the pane has no one session. In the viewer, `Esc` closes the image and `o` opens it outside the mux.
+
+For any other link in a pane whose app owns the mouse, hold Option (Alt) and click.
+
 ## Inside the PR review
 
 `d` on a backlog node's detail opens the diff of the node's newest unmerged PR, full screen. If a seat's node has a PR, `r` on its org page opens the same review. `Esc` goes back to that page.

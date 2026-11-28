@@ -12,18 +12,21 @@ pub mod codex;
 pub mod opencode;
 
 use crate::harness::{AsHarness, Harness};
-use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef};
+use crate::proto::chat_event::{
+    ChatBody, ChatEvent, ContentPart, ImageRef, SessionKey, SourceRef, CHAT_IMAGE_INLINE_MAX,
+};
 use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ProtoError, ServerMsg};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-/// An image from base64 text. Bytes that do not decode still yield an image:
-/// its hash covers the text, and no data rides along.
+/// An image from base64 text, whole: [`SessionReader::poll`] applies the
+/// wire cap. Bytes that do not decode still yield an image: its hash covers
+/// the text, and no data rides along.
 pub(crate) fn image_from_base64(
     media_type: String,
     data: String,
 ) -> crate::proto::chat_event::ImageRef {
-    use crate::proto::chat_event::{decode_base64, ImageRef, CHAT_IMAGE_INLINE_MAX};
+    use crate::proto::chat_event::{decode_base64, ImageRef};
     use sha2::{Digest, Sha256};
     let decoded = decode_base64(&data);
     let bytes = decoded.as_deref().unwrap_or(data.as_bytes());
@@ -31,13 +34,111 @@ pub(crate) fn image_from_base64(
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let inline = decoded.is_some() && bytes.len() <= CHAT_IMAGE_INLINE_MAX;
+    let inline = decoded.is_some();
     ImageRef::Inline {
         media_type,
         bytes_len: bytes.len() as u64,
         sha256,
         data: inline.then_some(data),
     }
+}
+
+/// Drop each image's bytes past the wire cap. Only these two bodies hold parts.
+fn cap_images(body: &mut ChatBody) {
+    let parts = match body {
+        ChatBody::UserMessage { parts, .. } => parts,
+        ChatBody::ToolFinished { output, .. } => output,
+        _ => return,
+    };
+    for part in parts {
+        if let ContentPart::Image {
+            image: ImageRef::Inline {
+                bytes_len, data, ..
+            },
+        } = part
+        {
+            if *bytes_len > CHAT_IMAGE_INLINE_MAX as u64 {
+                *data = None;
+            }
+        }
+    }
+}
+
+/// One user turn that pasted images, with their bytes whole. Local only:
+/// this never goes on the wire.
+#[derive(Debug)]
+pub(crate) struct PastedTurn {
+    pub(crate) at_ms: Option<i64>,
+    pub(crate) text: String,
+    pub(crate) images: Vec<PastedImage>,
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct PastedImage {
+    pub(crate) number: u64,
+    /// `None` for an image the harness kept only as a URL or a path.
+    pub(crate) base64: Option<String>,
+}
+
+/// Every turn of `key`'s session that pasted images, oldest first. Claude
+/// numbers across the session, so its reader keeps the paste ids. Codex and
+/// OpenCode number from 1 in each message.
+pub(crate) fn pasted_turns(
+    key: &SessionKey,
+    roots: &ChatRoots,
+) -> Result<Vec<PastedTurn>, ChatReadError> {
+    let mut reader = SessionReader::open(key, roots, 0)?;
+    if key.harness.as_harness() == Harness::Claude {
+        if let Source::Lines { path, .. } = &reader.source {
+            return Ok(claude::pasted_turns(path)?);
+        }
+    }
+    reader.whole_images = true;
+    // Only OpenCode splits a message over events. A Codex row with no id takes
+    // its timestamp as one, so two messages can share it.
+    let split = key.harness.as_harness() == Harness::Opencode;
+    let mut messages: Vec<(String, PastedTurn)> = Vec::new();
+    for event in reader.poll()? {
+        let ChatBody::UserMessage { id, parts, .. } = event.body else {
+            continue;
+        };
+        let same = messages
+            .last()
+            .is_some_and(|(last, _)| split && !id.is_empty() && *last == id);
+        if !same {
+            let turn = PastedTurn {
+                at_ms: event.at_ms,
+                text: String::new(),
+                images: Vec::new(),
+            };
+            messages.push((id, turn));
+        }
+        let Some((_, turn)) = messages.last_mut() else {
+            continue;
+        };
+        for part in parts {
+            match part {
+                // Codex frames each image in tags that repeat its label.
+                ContentPart::Text { text }
+                    if text.starts_with("<image name=") || text == "</image>" => {}
+                ContentPart::Text { text } => {
+                    turn.text.push_str(&text);
+                    turn.text.push('\n');
+                }
+                ContentPart::Image { image } => turn.images.push(PastedImage {
+                    number: turn.images.len() as u64 + 1,
+                    base64: match image {
+                        ImageRef::Inline { data, .. } => data,
+                        // A transcript never picks a file for the mux to read.
+                        ImageRef::Url { .. } | ImageRef::Path { .. } => None,
+                    },
+                }),
+                ContentPart::File { .. } => {}
+            }
+        }
+    }
+    let turns = messages.into_iter().map(|(_, turn)| turn);
+    Ok(turns.filter(|turn| !turn.images.is_empty()).collect())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +211,8 @@ pub struct SessionReader {
     source: Source,
     next_seq: u64,
     from_seq: u64,
+    /// Set only by [`pasted_turns`], whose answer stays on this machine.
+    whole_images: bool,
 }
 
 impl SessionReader {
@@ -152,6 +255,7 @@ impl SessionReader {
             source,
             next_seq: 0,
             from_seq,
+            whole_images: false,
         })
     }
 
@@ -165,6 +269,7 @@ impl SessionReader {
             },
             next_seq: 0,
             from_seq,
+            whole_images: false,
         }
     }
 
@@ -180,7 +285,10 @@ impl SessionReader {
             Source::Store(store) => store.poll()?,
         };
         let mut out = Vec::with_capacity(mapped.len());
-        for (source, item) in mapped {
+        for (source, mut item) in mapped {
+            if !self.whole_images {
+                cap_images(&mut item.body);
+            }
             let seq = self.next_seq;
             self.next_seq += 1;
             if seq >= self.from_seq {
@@ -383,6 +491,30 @@ mod tests {
     use super::*;
     use crate::proto::chat_event::{ChatBody, UserOrigin};
     use std::io::Write;
+
+    #[test]
+    fn the_wire_keeps_its_image_cap() {
+        let big = crate::clipboard::base64(&vec![7u8; CHAT_IMAGE_INLINE_MAX + 1]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let row = serde_json::json!({"type": "user", "uuid": "u", "message": {"role": "user",
+            "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": big}}]}});
+        std::fs::write(&path, format!("{row}\n")).unwrap();
+        let mapper = Box::new(claude::ClaudeMapper::new(&path));
+        let events = SessionReader::lines(path, mapper, 0).poll().unwrap();
+        let ChatBody::UserMessage { parts, .. } = &events[0].body else {
+            panic!("{events:?}");
+        };
+        assert!(
+            matches!(
+                &parts[0],
+                ContentPart::Image {
+                    image: ImageRef::Inline { data: None, .. }
+                }
+            ),
+            "bytes past the cap never ride the wire"
+        );
+    }
 
     #[test]
     fn chat_events_seq_is_stable_across_a_chunked_live_tail() {

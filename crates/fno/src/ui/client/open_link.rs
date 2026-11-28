@@ -7,7 +7,7 @@
 //! is pure ([`route`]); [`start`] only dispatches, so a new pseudo scheme is
 //! one arm here and never a fourth inline branch in the select loop.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -22,6 +22,8 @@ pub enum Route {
     Sender(String),
     Handle(String),
     File(PathBuf, Option<u32>),
+    /// A pasted image, and the number its placeholder shows.
+    Pasted(PathBuf, u64),
     Web,
 }
 
@@ -43,6 +45,9 @@ pub fn route(url: &str) -> Route {
     }
     if let Some((path, line)) = crate::link::file_uri_parts(url) {
         return Route::File(path, line);
+    }
+    if let Some((path, number)) = crate::link::pasted_uri_parts(url) {
+        return Route::Pasted(path, number);
     }
     Route::Web
 }
@@ -109,12 +114,10 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
             let url = url.to_string();
             tokio::task::spawn_blocking(move || {
                 let outcome = match r {
-                    Route::File(path, line) => match crate::open_router::resolve(&path, line) {
-                        Target::Viewer { path, line, shape } => Ok(LinkDone::View(Box::new(
-                            super::file_viewer::load(path, line, shape),
-                        ))),
-                        outside => crate::open_router::launch(&outside).map(LinkDone::Opened),
-                    },
+                    Route::File(path, line) => open_file(&path, line, None),
+                    Route::Pasted(path, number) => {
+                        open_file(&path, None, Some(format!("Image #{number}")))
+                    }
                     Route::Web => crate::link::open_url_for_session(&url).map(LinkDone::Opened),
                     _ => unreachable!("message, handle and sender routes return early"),
                 };
@@ -124,6 +127,16 @@ pub fn start(url: &str, link_tx: LinkTx) -> Option<Routed> {
         }
     };
     Some(Routed { kind })
+}
+
+/// Open one file where the router says. Blocking: call it off the UI loop.
+fn open_file(path: &Path, line: Option<u32>, title: Option<String>) -> LinkOutcome {
+    match crate::open_router::resolve(path, line) {
+        Target::Viewer { path, line, shape } => Ok(LinkDone::View(Box::new(
+            super::file_viewer::load(path, line, shape).titled(title),
+        ))),
+        outside => crate::open_router::launch(&outside).map(LinkDone::Opened),
+    }
 }
 
 /// Land a routed UI-loop leg: open the message, filter Messages to the
@@ -158,7 +171,16 @@ mod tests {
             ),
             ("fno-file:relative/path.md", Route::Web),
             ("fno-file:/has space.md", Route::Web),
+            (
+                "fno-file:/tmp/Screen Shot.png",
+                Route::File(PathBuf::from("/tmp/Screen Shot.png"), None),
+            ),
             ("fno-file:", Route::Web),
+            (
+                "fno-image:3:fno-file:/tmp/0a1b.png",
+                Route::Pasted(PathBuf::from("/tmp/0a1b.png"), 3),
+            ),
+            ("fno-image:3:fno-file:relative.png", Route::Web),
             ("https://example.com/a", Route::Web),
         ] {
             assert_eq!(route(url), want, "{url}");

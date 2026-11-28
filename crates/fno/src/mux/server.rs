@@ -37,13 +37,15 @@ use tokio::sync::{mpsc, oneshot, watch, Notify};
 use crate::agents_view::{self, RegistryAgent};
 use crate::backlog_view;
 use crate::mux_log::server_breadcrumb as e2e_log;
+#[cfg(test)]
+use crate::proto::MouseButton;
 use crate::proto::{
     bind_or_probe, check_attach_version, err_code, read_msg, write_msg, AgentBadge,
     AgentNoPaneReason, AnchoredLayoutSpec, BacklogCard, BindOutcome, BlockDir, BlockSel, CardState,
     ClientMsg, Command, ControlCommand, Frame, LayoutBinding, LayoutScope, LayoutSlot, LayoutSpec,
-    LayoutTreeChild, LayoutTreeSpec, MouseButton, MouseEvent, MouseKind, PaneInfo, PanePlacement,
-    PaneTarget, PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow,
-    ServerMsg, SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
+    LayoutTreeChild, LayoutTreeSpec, MouseEvent, MouseKind, PaneInfo, PanePlacement, PaneTarget,
+    PlacementFallback, PortalSlot, ProtoError, Reach, ResolvedPlacement, RestoreRow, ServerMsg,
+    SlotBinding, SlotOutcome, SlotResult, SquadLayout, SquadMeta, TabInfo, TabLayout,
     TabPaneOccupant, TabSel, WaitOutcome, MAX_SQUAD_NAME, MAX_TAB_NAME,
 };
 use crate::pty::{shell_candidates, PaneChunk, PtyShell};
@@ -83,6 +85,7 @@ mod focus_recall;
 mod fresh_attach;
 mod grid_reconcile;
 mod human_input;
+pub(crate) mod image_refs;
 mod input_echo;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
@@ -108,6 +111,7 @@ mod pane_release;
 mod pane_reseat;
 mod pane_run;
 mod pane_spawn;
+pub(crate) mod pasted_images;
 mod place;
 use pane_spawn::{SpawnOrder, KEEPER_ROAD};
 pub(crate) mod placement_fit;
@@ -1608,13 +1612,9 @@ pub(crate) struct Core {
     /// Code, Codex) reads "too big, too fast" - the gate clips the flood
     /// instead of forwarding every tick the app then multiplies.
     wheel_passthrough_rate: u32,
-    /// Per-pane claimed fno-token click pair `(row, col, client)`; see
-    /// [`Core::claim_fno_token_click`]. Purged with the pane, `wheel_gate`'s
-    /// pattern.
-    fno_token_claims: HashMap<u64, (u16, u16, u64)>,
-    /// Per-pane claimed alt-click link pair `(row, col, client)`; see
-    /// [`Core::claim_link_click`]. Purged with the pane, same pattern.
-    link_click_claims: HashMap<u64, (u16, u16, u64)>,
+    /// Per-pane claimed click pair; see [`Core::claim_click`]. Purged with
+    /// the pane, `wheel_gate`'s pattern.
+    click_claims: HashMap<u64, open_link::ClickClaim>,
     /// Failed `human_touch` emits (AC4-ERR): counted, never raised to the
     /// steering path; read by the scoreboard stats answer (v78).
     touch_emit_failures: Arc<AtomicU64>,
@@ -8081,9 +8081,8 @@ impl Core {
     /// Route a client's pane-rect mouse event (brief Locked 2, US1/US2/US3).
     /// An app that negotiated SGR mouse reporting owns its mouse: the event is
     /// SGR-encoded onto its PTY and the mux consumes nothing (AC3-HP) - except
-    /// a click pair on an fno token cell (see [`Core::claim_fno_token_click`])
-    /// and an alt-click pair over a link (see [`Core::claim_link_click`]),
-    /// which the mux claims and answers itself. Otherwise the mux
+    /// the click pairs [`Core::claim_click`] claims (a token, an image, an
+    /// alt-click on a link). Otherwise the mux
     /// interprets it - wheel scrolls the pane's history (US1), a left drag
     /// paints a server-side selection all viewers see (US2), and release
     /// auto-copies (Warp behavior). Selection is per-pane, independent of
@@ -8097,14 +8096,9 @@ impl Core {
                 // Rate-gate ONLY wheel ticks (brief Locked 2): drop stale ticks
                 // beyond the budget before the PTY; everything else forwards
                 // byte-identical. The gate runs before the pane borrow; the
-                // top-of-fn return proved the pane live. An fno-token click
-                // pair is claimed first (the helper below owns the why), then
-                // an alt-click pair over a link (the v112 link-open gesture on
-                // a pane the app owns).
-                if self.claim_fno_token_click(client_id, pane, &event) {
-                    return;
-                }
-                if self.claim_link_click(client_id, pane, &event) {
+                // top-of-fn return proved the pane live. A click the mux
+                // owns is claimed first (the helper owns the why).
+                if self.claim_click(client_id, pane, &event) {
                     return;
                 }
                 let forward = match event.kind {
@@ -8163,13 +8157,7 @@ impl Core {
                             .and_then(|c| c.last_press.take())
                             == Some((pane, event.row, event.col));
                         if clicked {
-                            let url = self.panes.get(&pane).and_then(|e| {
-                                let cwd = crate::pane_cwd::live_or_spawn(e.pty.child_pid(), &e.cwd);
-                                e.vt.link_at(event.row, event.col, &cwd)
-                            });
-                            if let Some(url) = url {
-                                self.send_open_link(client_id, url);
-                            }
+                            self.open_click(client_id, pane, event.row, event.col);
                         }
                         if let Some(e) = self.panes.get_mut(&pane) {
                             e.vt.selection_clear();
@@ -8194,54 +8182,6 @@ impl Core {
         };
         if c.reliable_tx.try_send(ServerMsg::Copy { text }).is_err() {
             crate::mux_log!(error; "fno mux: client {client_id} reliable channel wedged on Copy; dropping it");
-            self.clients.retain(|c| c.id != client_id);
-            self.push_layout(true);
-        }
-    }
-
-    /// (v56, hover affordance) One link-span lookup for the requesting client
-    /// only: resolve the link under pane-local `(row, col)` and reply with its
-    /// visible cells. The guards mirror the click path's ownership rule: the
-    /// pane must be in the requester's live view, and a plain left click must
-    /// be MUX-owned - a pane whose app negotiated mouse reporting gets no
-    /// hover affordance, because its grid interaction belongs to the app.
-    /// Coordinates only, never text; every miss (non-link cell, invisible
-    /// pane, app-owned click) answers an EMPTY cell list so the client clears
-    /// the underline instead of waiting. No pane state changes, no broadcast:
-    /// co-viewers never see another viewer's hover.
-    fn link_hover(&mut self, client_id: u64, pane: u64, row: u16, col: u16, seq: u64) {
-        // Bind the requester once: the visibility check and the reply send
-        // name the same client, and two independent finds are two places to
-        // drift. The wedge path mutates `clients`, so it runs after the
-        // borrows drop.
-        let wedged = {
-            let Some(c) = self.clients.iter().find(|c| c.id == client_id) else {
-                return;
-            };
-            let cells = match self.panes.get(&pane) {
-                Some(e)
-                    if route_mouse(e.vt.modes(), MouseKind::Release(MouseButton::Left))
-                        == MouseAction::SelectRelease
-                        && c.visible.contains(&pane) =>
-                {
-                    self.pane_link_span(pane, row, col)
-                        .map(|span| span.cells)
-                        .unwrap_or_default()
-                }
-                _ => Vec::new(),
-            };
-            c.reliable_tx
-                .try_send(ServerMsg::LinkHover {
-                    pane_id: pane,
-                    seq,
-                    cells,
-                })
-                .is_err()
-        };
-        if wedged {
-            crate::mux_log!(error;
-                "fno mux: client {client_id} reliable channel wedged on LinkHover; dropping it"
-            );
             self.clients.retain(|c| c.id != client_id);
             self.push_layout(true);
         }

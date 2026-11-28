@@ -151,7 +151,7 @@ impl Chrome {
 
     /// The flat frame (construction-time, like [`Self::full`]): border,
     /// title, chip and footer resolve through the panel slots - thin rules,
-    /// bold head, dim meta - with no INVERSE band anywhere on the frame.
+    /// bold head, plain keys - with no INVERSE band anywhere on the frame.
     pub fn flat(mut self) -> Self {
         self.flat = true;
         self
@@ -535,13 +535,15 @@ pub fn frame(body: &[BodyLine], chrome: &Chrome, body_w: usize, scroll: Option<S
 
 /// The flat frame's role map: chrome rank becomes panel rank. INVERSE
 /// disappears with the roles that carried it - a border reads as a thin
-/// rule, a footer as dim text, and no row of the frame is a band.
+/// rule, and no row of the frame is a band. The keys (chip and footer) take
+/// the default fg: slot 3 vanishes on a light ground and slot 8 on a dark one.
 fn flat_role(r: Role) -> Role {
     match r {
         Role::Border => Role::Text(TextStyle::Meta),
         Role::Title => Role::Text(TextStyle::Title),
-        Role::Chip => Role::Text(TextStyle::Badge),
-        Role::Subtitle | Role::Footer | Role::Tab(_) => Role::Text(TextStyle::Meta),
+        Role::Chip => Role::Text(TextStyle::Title),
+        Role::Footer => Role::Text(TextStyle::Item),
+        Role::Subtitle | Role::Tab(_) => Role::Text(TextStyle::Meta),
         Role::ScrollTrack => Role::Text(TextStyle::Meta),
         Role::ScrollThumb => Role::Text(TextStyle::Title),
         other => other,
@@ -1644,7 +1646,7 @@ mod tests {
     #[test]
     fn flat_frame_carries_no_inverse_or_bg_under_any_theme() {
         // The backlog surfaces' frame: every chrome row resolves through the
-        // panel slots - thin rule, bold head, dim meta - so the framed board
+        // panel slots - thin rule, bold head, plain keys - so the framed board
         // sits on the terminal's own bg under every theme, cursor band
         // aside (that pair is explicit and readable by design).
         let chrome = Chrome::new("backlog", Anchor::Center)
@@ -1657,6 +1659,19 @@ mod tests {
         let framed = frame(&[body_line], &chrome, 20, None);
         for name in ["", "catppuccin", "tokyo-night", "gruvbox"] {
             let t = crate::theme::Theme::from_name(name).0;
+            // No palette slot reads on both grounds, so the keys take the default fg.
+            let top = framed.lines.first().expect("a top border");
+            let footer = framed.lines.iter().nth_back(1).expect("a footer row");
+            for (line, word) in [(top, "esc"), (footer, "j/k")] {
+                let (before, _) = line.text.split_once(word).expect("the key is painted");
+                let at = before.chars().count();
+                let role = line.roles.get(at).copied().expect("the key has a role");
+                assert_eq!(
+                    cell_style(role, &t).0,
+                    crate::proto::Color::Default,
+                    "{word}"
+                );
+            }
             for line in &framed.lines {
                 for &r in &line.roles {
                     let (_, bg, flags) = cell_style(r, &t);

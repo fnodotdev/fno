@@ -1,19 +1,84 @@
-use super::{Core, ServerMsg};
+//! What does a click or a hover on a pane cell mean, and who gets the answer?
+//!
+//! One lookup ([`Core::click_target`]) answers both, so they cannot disagree.
+//! The lookup reads the grid and stats. Anything that reads a file runs off
+//! the core loop and answers over the asking client's reliable channel.
+
+use super::image_refs::{self, ImageSource};
+use super::pasted_images::{PaneSession, Stores};
+use super::{route_mouse, Core, MouseAction, ServerMsg};
+use crate::proto::{MouseButton, MouseEvent, MouseKind};
+
+/// What one cell opens.
+#[derive(Debug)]
+enum ClickTarget {
+    /// An fno token (`@handle`, a mail id). The mux's on every pane.
+    Token(String),
+    /// A local image reference. The mux's on every pane too.
+    Image(ImageSource, Option<PaneSession>),
+    /// Any other link. An Alt-click on a pane whose app owns the mouse.
+    Link(String),
+}
+
+impl ClickTarget {
+    /// Whether the mux takes this click from an app that owns the mouse.
+    fn claims(&self, alt: bool) -> bool {
+        match self {
+            Self::Token(_) | Self::Image(..) => true,
+            Self::Link(_) => alt,
+        }
+    }
+}
+
+/// A claimed left press, waiting for its release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ClickClaim {
+    pub(super) row: u16,
+    pub(super) col: u16,
+    pub(super) client: u64,
+    pub(super) alt: bool,
+}
 
 impl Core {
-    /// The resolved link under viewport cell `(row, col)` of `pane`, or
-    /// `None`. The pane's LIVE cwd (kernel cwd while the child pid resolves,
-    /// else its spawn cwd) is what bare relative candidates resolve against,
-    /// so click and hover read one pane entry and derive the cwd once.
-    pub(super) fn pane_link_span(
+    /// The target under viewport cell `(row, col)` of `pane`, with its visible
+    /// cells. The pane's LIVE cwd (kernel cwd while the child pid resolves,
+    /// else its spawn cwd) is what relative candidates resolve against.
+    fn click_target(
         &self,
         pane: u64,
         row: u16,
         col: u16,
-    ) -> Option<crate::vt::LinkSpan> {
-        let e = self.panes.get(&pane)?;
-        let cwd = crate::pane_cwd::live_or_spawn(e.pty.child_pid(), &e.cwd);
-        e.vt.link_span(row, col, &cwd)
+    ) -> Option<(ClickTarget, Vec<(u16, u16)>)> {
+        let entry = self.panes.get(&pane)?;
+        let cwd = crate::pane_cwd::live_or_spawn(entry.pty.child_pid(), &entry.cwd);
+        let link = entry.vt.link_span(row, col, &cwd);
+        if let Some(span) = &link {
+            if crate::link::is_fno_uri(&span.uri) {
+                return Some((ClickTarget::Token(span.uri.clone()), span.cells.clone()));
+            }
+            if crate::link::is_openable(&span.uri) {
+                return Some((ClickTarget::Link(span.uri.clone()), span.cells.clone()));
+            }
+        }
+        // A remote portal prints another machine's paths.
+        if !self.is_remote_portal(pane) {
+            let image = entry
+                .vt
+                .link_window(row, col)
+                .and_then(|window| image_refs::find_here(&window, &cwd));
+            if let Some(image) = image {
+                let session = match image.source {
+                    ImageSource::Pasted(_) => Some(self.pane_session(pane)?),
+                    ImageSource::File(_) => None,
+                };
+                return Some((ClickTarget::Image(image.source, session), image.cells));
+            }
+        }
+        let span = link?;
+        // An image name links only through the resolver's checks.
+        let unverified = crate::link::file_uri_parts(&span.uri)
+            .is_some_and(|(path, _)| image_refs::has_image_ext(&path));
+        (!unverified).then_some((ClickTarget::Link(span.uri), span.cells))
     }
 
     /// Send a validated link only to the client that clicked it.
@@ -38,186 +103,187 @@ impl Core {
         }
     }
 
-    /// The claim half of an fno-token click on a mouse-owning pane. A LEFT
-    /// press whose cell carries an fno token URI (`@handle`, a bare or
-    /// headered `fmail-` id) claims the pair instead of forwarding; the
-    /// matching release consumes the claim and answers OpenLink, and a
-    /// release on any other cell is swallowed with it (the app saw no press,
-    /// so it gets no torn tail). A drag off a claimed press replays the
-    /// press ahead of the drag, so an app-side text selection starting on a
-    /// token still begins whole. Claims are PER PANE, so one client's plain
-    /// events never consume another client's pending pair; every unclaimed
-    /// event forwards (return `false`) and drops only its own pane's claim.
-    /// A release for which no claim is held forwards untouched, so an
-    /// app-owned click pair stays byte-identical.
-    pub(super) fn claim_fno_token_click(
-        &mut self,
-        client_id: u64,
-        pane: u64,
-        event: &crate::proto::MouseEvent,
-    ) -> bool {
-        let token_at = |core: &Self, row: u16, col: u16| {
-            core.pane_link_span(pane, row, col)
-                .map(|span| span.uri)
-                .filter(|url| crate::link::is_fno_uri(url))
+    fn open_target(&mut self, client_id: u64, target: ClickTarget) {
+        let (source, session) = match target {
+            ClickTarget::Token(url) | ClickTarget::Link(url) => {
+                return self.send_open_link(client_id, url)
+            }
+            ClickTarget::Image(source, session) => (source, session),
         };
+        let Some(client) = self.clients.iter().find(|c| c.id == client_id) else {
+            return;
+        };
+        let (tx, notify) = (client.reliable_tx.clone(), client.notify.clone());
+        let pasted = match &source {
+            ImageSource::Pasted(paste) => Some(paste.number),
+            ImageSource::File(_) => None,
+        };
+        tokio::spawn(async move {
+            let found = tokio::task::spawn_blocking(move || {
+                image_refs::resolve(&source, session.as_ref(), &Stores::host())
+            })
+            .await;
+            let msg = match found {
+                Ok(Ok(path)) => ServerMsg::OpenLink {
+                    url: match pasted {
+                        Some(number) => crate::link::pasted_uri(&path, number),
+                        None => crate::link::file_uri(&path, None),
+                    },
+                },
+                Ok(Err(error)) => ServerMsg::Notice {
+                    text: error.to_string(),
+                },
+                Err(error) => ServerMsg::Notice {
+                    text: format!("image lookup stopped: {error}"),
+                },
+            };
+            // A send fails only for a client that has already gone.
+            if tx.send(msg).await.is_ok() {
+                notify.notify_one();
+            }
+        });
+    }
+
+    /// A plain click in a pane the mux owns the mouse of.
+    pub(super) fn open_click(&mut self, client_id: u64, pane: u64, row: u16, col: u16) {
+        if let Some((target, _)) = self.click_target(pane, row, col) {
+            self.open_target(client_id, target);
+        }
+    }
+
+    /// The claim half of a click in a pane whose app owns the mouse.
+    ///
+    /// A plain LEFT press on an fno token or an image reference claims the
+    /// pair, and so does an ALT press on any link: alt is the gesture because
+    /// SGR reports it and cmd has no SGR bit. The matching release consumes
+    /// the claim and opens on the same cell. A release on any other cell is
+    /// swallowed with it (the app saw no press, so it gets no torn tail). A
+    /// drag off a claimed press replays the press ahead of the drag, so an
+    /// app-side selection starting on a link still begins whole. Claims are
+    /// PER PANE, so one client's events never consume another client's pair.
+    /// Every unclaimed event forwards byte-identical (return `false`).
+    pub(super) fn claim_click(&mut self, client_id: u64, pane: u64, event: &MouseEvent) -> bool {
         match event.kind {
-            crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
+            MouseKind::Press(MouseButton::Left) => {
                 // A second press means the previous gesture's release never
-                // came (dragged off-pane, or dropped client-side on chrome):
-                // that pair is abandoned. Drop it so the new gesture's
-                // release can never consume a stale claim.
-                self.fno_token_claims.remove(&pane);
-                let claimed = token_at(self, event.row, event.col).is_some();
+                // came (dragged off-pane, or dropped client-side on chrome).
+                self.click_claims.remove(&pane);
+                let claimed = self
+                    .click_target(pane, event.row, event.col)
+                    .is_some_and(|(target, _)| target.claims(event.alt));
                 if claimed {
-                    self.fno_token_claims
-                        .insert(pane, (event.row, event.col, client_id));
+                    let claim = ClickClaim {
+                        row: event.row,
+                        col: event.col,
+                        client: client_id,
+                        alt: event.alt,
+                    };
+                    self.click_claims.insert(pane, claim);
                 }
                 claimed
             }
-            crate::proto::MouseKind::Release(crate::proto::MouseButton::Left) => {
-                match self.fno_token_claims.remove(&pane) {
-                    Some((row, col, c)) if c == client_id => {
-                        // The pair is ours wherever it ended: the app saw no
-                        // press, so it gets no torn tail. Same cell is the
-                        // click that opens; any other cell was a tiny drag.
-                        if (row, col) == (event.row, event.col) {
-                            if let Some(url) = token_at(self, event.row, event.col) {
-                                self.send_open_link(client_id, url);
-                            }
+            MouseKind::Release(MouseButton::Left) => {
+                let Some(claim) = self.click_claims.get(&pane).copied() else {
+                    return false;
+                };
+                if claim.client != client_id {
+                    return false;
+                }
+                self.click_claims.remove(&pane);
+                if (claim.row, claim.col) == (event.row, event.col) {
+                    if let Some((target, _)) = self.click_target(pane, event.row, event.col) {
+                        // The grid may have changed under a held button.
+                        if target.claims(claim.alt) {
+                            self.open_target(client_id, target);
                         }
-                        true
-                    }
-                    other => {
-                        if let Some(claim) = other {
-                            self.fno_token_claims.insert(pane, claim);
-                        }
-                        false
                     }
                 }
+                true
             }
-            crate::proto::MouseKind::Drag(crate::proto::MouseButton::Left) => {
-                // A drag off a claimed press is an app-owned selection whose
-                // press the mux swallowed: replay the press ahead of this
-                // drag so the gesture starts whole, then hand the pair back.
-                // The replay carries the CLAIMED press's cell, never this
-                // drag event's (a selection must begin where it began).
-                if let Some((row, col, c)) = self.fno_token_claims.remove(&pane) {
-                    if c == client_id {
-                        let press = crate::proto::MouseEvent {
-                            row,
-                            col,
-                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
-                            alt: event.alt,
-                        };
-                        let bytes = super::sgr_mouse_bytes(&press);
-                        if let Some(entry) = self.panes.get(&pane) {
-                            let _ = entry.pty.write_input(&bytes);
-                        }
-                    } else {
-                        self.fno_token_claims.insert(pane, (row, col, c));
+            MouseKind::Drag(MouseButton::Left) => {
+                let Some(claim) = self.click_claims.get(&pane).copied() else {
+                    return false;
+                };
+                if claim.client == client_id {
+                    self.click_claims.remove(&pane);
+                    // The replay carries the CLAIMED press's cell and alt bit:
+                    // a selection must begin where it began.
+                    let press = MouseEvent {
+                        row: claim.row,
+                        col: claim.col,
+                        kind: MouseKind::Press(MouseButton::Left),
+                        alt: claim.alt,
+                    };
+                    let bytes = super::sgr_mouse_bytes(&press);
+                    if let Some(entry) = self.panes.get(&pane) {
+                        // A failed write is a closing pty, whose selection is moot.
+                        let _ = entry.pty.write_input(&bytes);
                     }
                 }
                 false
             }
             _ => {
-                // A non-press event on the pane breaks its own pending pair
-                // (the pointer moved on); other panes' claims are untouched.
-                self.fno_token_claims.remove(&pane);
+                // A non-press event on the pane breaks its own pending pair.
+                self.click_claims.remove(&pane);
                 false
             }
         }
     }
 
-    /// The claim half of an alt-click link open on a mouse-reporting pane
-    /// (v112). The SelectRelease open path only runs in panes that never
-    /// negotiated mouse reporting, so in a Claude Code / codex TUI pane - both
-    /// ask for the mouse - no link was ever openable from the mux. The alt
-    /// modifier is the gesture: SGR reports alt (bit 8) from Ghostty, iTerm2
-    /// and WezTerm alike, while cmd has no SGR bit and is invisible to every
-    /// client. An ALT left press whose cell resolves a link claims the pair
-    /// instead of forwarding; the matching release consumes the claim and
-    /// answers OpenLink; a plain press and a link-less alt press forward
-    /// byte-identical (the alt bit rides `sgr_mouse_bytes`). Pair mechanics -
-    /// same-cell open, drag replay, per-pane claims, non-press break - mirror
-    /// [`Core::claim_fno_token_click`]; read there for the why. Runs AFTER the
-    /// token claim, so an alt press on a token cell stays a token open.
-    /// Hover stays app-owned on these panes (`link_hover`'s guard), so the
-    /// gesture is documented, not underlined.
-    pub(super) fn claim_link_click(
-        &mut self,
-        client_id: u64,
-        pane: u64,
-        event: &crate::proto::MouseEvent,
-    ) -> bool {
-        let link_at = |core: &Self, row: u16, col: u16| {
-            core.pane_link_span(pane, row, col).map(|span| span.uri)
+    /// (v56, hover affordance) One link-span lookup for the requesting client
+    /// only. The guards mirror the click path: the pane must be in the
+    /// requester's live view, and the click must be the mux's. That is any
+    /// link where the mux owns the mouse, and an image reference everywhere.
+    /// Coordinates only, never text. Every miss answers an EMPTY cell list so
+    /// the client clears the underline. An image file answers after its bytes
+    /// are checked, and the client drops a late answer by `seq`. No pane
+    /// state changes and no broadcast: co-viewers never see another's hover.
+    pub(super) fn link_hover(&mut self, client_id: u64, pane: u64, row: u16, col: u16, seq: u64) {
+        let wedged = {
+            let Some(client) = self.clients.iter().find(|c| c.id == client_id) else {
+                return;
+            };
+            let modes = self.panes.get(&pane).map(|entry| entry.vt.modes());
+            let hit = match modes {
+                Some(modes) if client.visible.contains(&pane) => {
+                    let mux_owns = route_mouse(modes, MouseKind::Release(MouseButton::Left))
+                        == MouseAction::SelectRelease;
+                    self.click_target(pane, row, col)
+                        .filter(|(target, _)| mux_owns || matches!(target, ClickTarget::Image(..)))
+                }
+                _ => None,
+            };
+            let reply = move |cells| ServerMsg::LinkHover {
+                pane_id: pane,
+                seq,
+                cells,
+            };
+            match hit {
+                Some((ClickTarget::Image(ImageSource::File(path), _), cells)) => {
+                    let tx = client.reliable_tx.clone();
+                    tokio::spawn(async move {
+                        let readable = matches!(
+                            tokio::task::spawn_blocking(move || image_refs::verify(&path)).await,
+                            Ok(Ok(()))
+                        );
+                        let cells = if readable { cells } else { Vec::new() };
+                        // A send fails only for a client that has already gone.
+                        tx.send(reply(cells)).await.ok();
+                    });
+                    false
+                }
+                hit => {
+                    let cells = hit.map(|(_, cells)| cells).unwrap_or_default();
+                    client.reliable_tx.try_send(reply(cells)).is_err()
+                }
+            }
         };
-        match event.kind {
-            crate::proto::MouseKind::Press(crate::proto::MouseButton::Left) => {
-                // A second press means the previous gesture's release never
-                // came (dragged off-pane, or dropped client-side on chrome):
-                // that pair is abandoned. Drop it so the new gesture's plain
-                // press - which forwarded - keeps its release too.
-                self.link_click_claims.remove(&pane);
-                let claimed = event.alt && link_at(self, event.row, event.col).is_some();
-                if claimed {
-                    self.link_click_claims
-                        .insert(pane, (event.row, event.col, client_id));
-                }
-                claimed
-            }
-            crate::proto::MouseKind::Release(crate::proto::MouseButton::Left) => {
-                match self.link_click_claims.remove(&pane) {
-                    Some((row, col, c)) if c == client_id => {
-                        // The pair is ours wherever it ended (a tiny drag off
-                        // the link swallows, never mis-opens); same cell opens.
-                        if (row, col) == (event.row, event.col) {
-                            if let Some(url) = link_at(self, event.row, event.col) {
-                                self.send_open_link(client_id, url);
-                            }
-                        }
-                        true
-                    }
-                    other => {
-                        if let Some(claim) = other {
-                            self.link_click_claims.insert(pane, claim);
-                        }
-                        false
-                    }
-                }
-            }
-            crate::proto::MouseKind::Drag(crate::proto::MouseButton::Left) => {
-                // A drag off a claimed alt press is an app-owned selection
-                // whose press the mux swallowed: replay it (alt bit included)
-                // ahead of this drag so the gesture starts whole, then hand
-                // the pair back. The replay carries the CLAIMED press's
-                // cell, never this drag event's (a selection must begin
-                // where it began).
-                if let Some((row, col, c)) = self.link_click_claims.remove(&pane) {
-                    if c == client_id {
-                        let press = crate::proto::MouseEvent {
-                            row,
-                            col,
-                            kind: crate::proto::MouseKind::Press(crate::proto::MouseButton::Left),
-                            alt: event.alt,
-                        };
-                        let bytes = super::sgr_mouse_bytes(&press);
-                        if let Some(entry) = self.panes.get(&pane) {
-                            let _ = entry.pty.write_input(&bytes);
-                        }
-                    } else {
-                        self.link_click_claims.insert(pane, (row, col, c));
-                    }
-                }
-                false
-            }
-            _ => {
-                // A non-press event on the pane breaks its own pending pair;
-                // other panes' claims are untouched.
-                self.link_click_claims.remove(&pane);
-                false
-            }
+        if wedged {
+            crate::mux_log!(error;
+                "fno mux: client {client_id} reliable channel wedged on LinkHover; dropping it"
+            );
+            self.clients.retain(|c| c.id != client_id);
+            self.push_layout(true);
         }
     }
 }

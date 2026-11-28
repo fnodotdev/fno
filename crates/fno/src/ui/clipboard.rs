@@ -169,7 +169,7 @@ pub fn osc52_payload(text: &str) -> (Vec<u8>, bool) {
 
 /// Standard base64 (no line wrap) - the only encoder the crate needs, so a
 /// dependency would be overkill.
-fn base64(input: &[u8]) -> String {
+pub(crate) fn base64(input: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {

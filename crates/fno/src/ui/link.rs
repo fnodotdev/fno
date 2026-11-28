@@ -5,7 +5,7 @@
 //! everything else is plain text, which is the common case (a printed PR URL
 //! from `gh`, a session link from a coding agent). [`find_urls`] covers the
 //! second. Detection is pure and unit-tested; the grid walk lives in
-//! [`crate::vt::Pane::link_at`], and the impure openers live here
+//! [`crate::vt::Pane::link_span`], and the impure openers live here
 //! ([`open_url`] for a local attach, [`open_url_for_session`] for either) so
 //! the scheme allowlist and the calls that act on it cannot drift apart.
 
@@ -114,7 +114,7 @@ fn scheme_at(chars: &[char], i: usize) -> Option<usize> {
 }
 
 /// The longest URL we will act on. Also bounds the soft-wrap walk in
-/// [`crate::vt::Pane::link_at`]: a walk that stops short of this while the line
+/// [`crate::vt::Pane::link_span`]: a walk that stops short of this while the line
 /// is still wrapping has only a PREFIX, and a prefix of a URL is a different
 /// URL, so the two limits have to agree.
 pub const MAX_URL_LEN: usize = 4096;
@@ -176,10 +176,27 @@ pub const HANDLE_SCHEME: &str = "fno-handle:";
 /// opener through the pane-sourced door.
 pub const FILE_SCHEME: &str = "fno-file:";
 
+/// A resolved `[Image #N]`: the number, then the image's [`FILE_SCHEME`] URI.
+/// Only the server's resolver builds one. No gate on pane bytes accepts it.
+const PASTED_SCHEME: &str = "fno-image:";
+
+/// Build the URI that opens a pasted image under its placeholder's number.
+pub(crate) fn pasted_uri(path: &Path, number: u64) -> String {
+    format!("{PASTED_SCHEME}{number}:{}", file_uri(path, None))
+}
+
+/// Parse a [`pasted_uri`] into its path and number.
+pub(crate) fn pasted_uri_parts(uri: &str) -> Option<(PathBuf, u64)> {
+    let (number, file) = uri.strip_prefix(PASTED_SCHEME)?.split_once(':')?;
+    let (path, _) = file_uri_parts(file)?;
+    Some((path, number.parse().ok()?))
+}
+
 /// Parse an exact [`FILE_SCHEME`] URI into its canonical path and optional
 /// line. Strict, because it is the trust gate on pane-sourced bytes: the path
-/// must be absolute and free of whitespace or control characters, or the URI
-/// resolves nothing.
+/// must be absolute and free of control characters, and only an image path
+/// may hold a space (screenshots are named that way), or the URI resolves
+/// nothing.
 pub fn file_uri_parts(uri: &str) -> Option<(PathBuf, Option<u32>)> {
     let rest = uri.strip_prefix(FILE_SCHEME)?;
     let (path, line) = match rest.rfind(':') {
@@ -191,7 +208,9 @@ pub fn file_uri_parts(uri: &str) -> Option<(PathBuf, Option<u32>)> {
     };
     if !Path::new(path).is_absolute()
         || path.is_empty()
-        || path.chars().any(|c| c.is_whitespace() || c.is_control())
+        || path.chars().any(char::is_control)
+        || (path.chars().any(char::is_whitespace)
+            && !crate::server::image_refs::has_image_ext(Path::new(path)))
     {
         return None;
     }

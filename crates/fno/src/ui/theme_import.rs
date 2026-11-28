@@ -278,7 +278,7 @@ fn source_stem(source_name: &str) -> String {
         .to_string()
 }
 
-fn percent_decode_component(encoded: &str) -> Option<String> {
+pub(crate) fn percent_decode_component(encoded: &str) -> Option<String> {
     let bytes = encoded.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut at = 0;

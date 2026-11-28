@@ -40,6 +40,38 @@ pub struct LinkSpan {
     pub cells: Vec<(u16, u16)>,
 }
 
+/// One soft-wrap-joined line of pane text: each char, and the viewport cell
+/// it shows in (`None` when scrolled out of view).
+#[derive(Debug, Clone)]
+pub struct TextLine {
+    pub chars: Vec<char>,
+    pub cells: Vec<Option<(u16, u16)>>,
+    /// Its last ink sits at the content edge, so an app may have hard-wrapped
+    /// it onto the next line.
+    pub reaches_edge: bool,
+}
+
+/// The raw text around one cell, for the image resolver. Nothing in it is
+/// validated: the hyperlink's target is whatever the pane printed.
+#[derive(Debug, Clone)]
+pub struct LinkWindow {
+    /// The pointed line and up to two lines either side of it.
+    pub lines: Vec<TextLine>,
+    /// The pointed line's index in `lines`, and the pointed char in it.
+    pub line: usize,
+    pub at: usize,
+    pub hyperlink: Option<LinkSpan>,
+    /// The pointed line is in the draft that holds the cursor.
+    pub composing: bool,
+}
+
+/// How many columns of border and padding an app keeps right of its text.
+const CONTENT_EDGE_SLOP: usize = 8;
+
+/// How a row starts where a draft ends: Claude's rules around its composer,
+/// and the prompt glyph that opens a Claude or Codex message.
+const DRAFT_EDGES: [&str; 4] = ["────", "━━━━", "❯", "›"];
+
 /// Default grid until the first client reports its real size. 24x80 is the
 /// historical terminal default (matches the fno-agent drive fallback).
 pub const DEFAULT_ROWS: u16 = 24;
@@ -609,31 +641,18 @@ impl Pane {
 
     // -- Links --------------------------------------------------------
 
-    /// The URL under viewport cell `(row, col)`, or `None`.
-    ///
-    /// OSC 8 wins when present: an app that declared a hyperlink knows where
-    /// the cell points, and its display text need not resemble a URL at all.
-    /// Everything else is linkified from the text, because the common case is a
-    /// plain URL printed by a tool that never heard of OSC 8.
-    ///
-    /// Returns only what the pane-sourced gates accept: web URLs pass
-    /// [`crate::link::is_openable`], and a detected path comes back as a
-    /// strict [`crate::link::FILE_SCHEME`] URI. The OSC 8 URI is chosen by
-    /// whatever runs in the pane, so the allowlist is applied at this end
-    /// rather than trusted to the client.
-    pub fn link_at(&self, row: u16, col: u16, cwd: &str) -> Option<String> {
-        self.link_span(row, col, cwd).map(|span| span.uri)
-    }
-
     /// One resolved link: the validated URI plus every VISIBLE pane-local cell
     /// belonging to it, so a hover affordance can underline exactly what a
-    /// click would open. The click path keeps [`Pane::link_at`] as the URI-only
-    /// projection of this match, so click and hover cannot disagree.
+    /// click would open. Click and hover read this one match, so they cannot
+    /// disagree.
     ///
     /// fno's own protocol tokens (`@handle`, a bare `fmail-` id) outrank
     /// everything else on the line, OSC 8 included: an app may hyperlink-wrap
     /// them, but the landing (the Messages thread) is fno's to name. OSC 8
-    /// then wins over the plain-text linkify pass (see `link_at`).
+    /// then wins over the plain-text linkify pass: an app that declared a link
+    /// knows where the cell points. The pane chose that URI, so only what
+    /// [`crate::link::is_openable`] passes comes back, and a detected path is a
+    /// strict [`crate::link::FILE_SCHEME`] URI.
     ///
     /// `cwd` is the pane's live working directory, from which bare relative
     /// candidates are resolved; see [`crate::link::find_paths`].
@@ -701,7 +720,7 @@ impl Pane {
             }
         }
         if let Some(h) = self.term.cell_hyperlink(point.row, point.col) {
-            // OSC 8 wins when present (see `link_at`); the span is the run of
+            // OSC 8 wins when present (see `link_span`); the span is the run of
             // cells carrying the SAME anchor, soft wraps included.
             let uri = h.uri().to_string();
             let anchor = h.clone();
@@ -729,6 +748,108 @@ impl Pane {
             uri: hit.uri,
             cells: self.visible_cells(&points[hit.start..hit.end]),
         })
+    }
+
+    /// The text and raw hyperlink around viewport cell `(row, col)`.
+    pub fn link_window(&self, row: u16, col: u16) -> Option<LinkWindow> {
+        let point = self.viewport_point(row, col);
+        let (text, points) = self.logical_line(point.row)?;
+        let at = points.iter().position(|p| *p == point)?;
+        let ((first, last), _, _) = self.wrap_region(point.row);
+        let grid = &self.term.grid;
+        let (top, bottom) = (grid.topmost_line().0, grid.bottommost_line().0);
+
+        let mut before = Vec::new();
+        let mut edge = first;
+        while before.len() < 2 && edge > top {
+            let above = Line(edge - 1);
+            let Some((text, points)) = self.logical_line(above) else {
+                break;
+            };
+            edge = self.wrap_region(above).0 .0;
+            before.push(self.text_line(&text, &points));
+        }
+        before.reverse();
+        let line = before.len();
+        let mut lines = before;
+        lines.push(self.text_line(&text, &points));
+        let mut edge = last;
+        while lines.len() < line + 3 && edge < bottom {
+            let below = Line(edge + 1);
+            let Some((text, points)) = self.logical_line(below) else {
+                break;
+            };
+            edge = self.wrap_region(below).0 .1;
+            lines.push(self.text_line(&text, &points));
+        }
+
+        let hyperlink = self
+            .term
+            .cell_hyperlink(point.row, point.col)
+            .map(|anchor| LinkSpan {
+                uri: anchor.uri().to_string(),
+                cells: self.osc8_span_cells(point, &anchor),
+            });
+        Some(LinkWindow {
+            lines,
+            line,
+            at,
+            hyperlink,
+            // Only a placeholder asks, and the walk is too dear for each hover.
+            composing: text.contains("[Image ") && self.in_draft(first, last),
+        })
+    }
+
+    /// Whether lines `first..=last` share the cursor's draft: no edge lies
+    /// between them. A draft may hold blank lines, so a blank is no edge,
+    /// except under OpenCode's bar, which every row of its draft carries.
+    fn in_draft(&self, first: i32, last: i32) -> bool {
+        let cursor = self.term.cursor().pos.row.0;
+        let (from, to) = if cursor < first {
+            (cursor + 1, first)
+        } else if cursor > last {
+            (last + 1, cursor)
+        } else {
+            return true;
+        };
+        if to - from >= i32::from(self.rows) {
+            return false;
+        }
+        let line = |row: i32| self.logical_line(Line(row)).map(|(text, _)| text);
+        let bar = |text: &str| text.trim_start().starts_with('┃');
+        let Some(pointed) = line(first) else {
+            return false;
+        };
+        let barred = bar(&pointed);
+        // An edge starts at column 0. A draft indents what is typed or pasted.
+        !(from..=to).any(|row| {
+            line(row).is_none_or(|text| {
+                DRAFT_EDGES.iter().any(|edge| text.starts_with(edge)) || (barred && !bar(&text))
+            })
+        })
+    }
+
+    fn text_line(&self, text: &str, points: &[Pos]) -> TextLine {
+        let (offset, rows) = (self.display_offset() as i32, i32::from(self.rows));
+        let ink = text
+            .chars()
+            .zip(points)
+            .filter(|(c, _)| !c.is_whitespace() && *c != '│' && *c != '\0')
+            .last();
+        let last_row = points.last().map(|p| p.row);
+        let edge = usize::from(self.cols).saturating_sub(CONTENT_EDGE_SLOP);
+        TextLine {
+            chars: text.chars().collect(),
+            cells: points
+                .iter()
+                .map(|point| {
+                    Self::point_to_viewport(offset, *point)
+                        .filter(|p| p.row.0 < rows)
+                        .map(|p| (p.row.0 as u16, p.col.0 as u16))
+                })
+                .collect(),
+            reaches_edge: ink.is_some_and(|(_, p)| Some(p.row) == last_row && p.col.0 >= edge),
+        }
     }
 
     /// Map grid points to pane-local viewport cells, dropping everything the
@@ -2561,24 +2682,23 @@ mod tests {
 
     #[test]
     fn link_refusal_rows() {
-        // A pane's output chooses this URI. `open(1)` would act on file:// and
-        // on registered app schemes, so the grid walk must drop it.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"\x1b]8;;file:///etc/passwd\x07innocent\x1b]8;;\x07");
-        assert_eq!(pane.link_at(0, 2, "/nonexistent"), None);
-
         // The click column is clamped into the grid; a click on padding finds
         // no link rather than panicking or reaching the previous row's URL.
         let mut pane = Pane::new(4, 20);
         pane.feed(b"https://example.com");
-        assert_eq!(pane.link_at(3, 19, "/nonexistent"), None);
         assert_eq!(
-            pane.link_at(200, 200, "/nonexistent"),
+            pane.link_span(3, 19, "/nonexistent").map(|span| span.uri),
+            None
+        );
+        assert_eq!(
+            pane.link_span(200, 200, "/nonexistent")
+                .map(|span| span.uri),
             None,
             "out-of-range click clamps"
         );
 
-        // The allowlist applies to the span exactly as it does to the click.
+        // A pane's output chooses this URI. `open(1)` would act on file:// and
+        // on registered app schemes, so the grid walk must drop it.
         // Positive control beside it: a safe anchor in the same pane resolves.
         // Visible text: "bad good".
         let mut pane = Pane::new(4, 60);
@@ -2685,12 +2805,6 @@ mod tests {
         assert_eq!(
             span.uri, url,
             "a wrapped URL must resolve whole; a prefix is a different address"
-        );
-
-        // Click and hover cannot disagree: the projection answers the same URI.
-        assert_eq!(
-            pane.link_at(0, 0, "/nonexistent").as_deref(),
-            Some(url.as_str())
         );
 
         // OSC 8: the span is the run of cells carrying the SAME anchor. A

@@ -388,6 +388,68 @@ fn hover_link_refuses_a_pane_whose_app_owns_the_mouse() {
     assert!(after.is_empty(), "an app-owned grid answers no hover cells");
 }
 
+// -- A plain click on an image reference is the mux's, even in a mouse app ----
+
+#[test]
+fn a_plain_click_on_an_image_opens_it_in_a_pane_whose_app_owns_the_mouse() {
+    let scratch = Scratch::new("image-click");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    let shot = cwd.join("shot.png");
+    // Magic is all the server reads; decoding is the viewer's.
+    std::fs::write(&shot, b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR").unwrap();
+    let shot = std::fs::canonicalize(&shot).unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 160, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+    let line = format!("image {}", shot.display());
+    let row = echo_line(&mut a, pane, &line);
+    // The app takes drags too, then shows each byte it receives.
+    a.input(b"printf '\\033[?1002h\\033[?1006h'; echo mouse-on#; stty -icanon -echo; cat -v\r");
+    a.wait_pane_text(15, pane, |t| t.lines().any(|l| l.starts_with("mouse-on#")));
+
+    a.link_hover(pane, row, 8, 1);
+    let (_, _, cells) = a.wait(10, "image hover", |c| c.link_hovers.first().cloned());
+    assert_eq!(
+        cells.first(),
+        Some(&(row, 6)),
+        "the span starts at the path"
+    );
+
+    click(&mut a, pane, row, 8);
+    let opened = a.wait(10, "opened image", |c| c.opened_links.first().cloned());
+    assert_eq!(opened, format!("fno-file:{}", shot.display()));
+
+    // A press on other text is the app's, and a drag off the image replays
+    // the claimed press at its own cell. Neither click above reached it.
+    click(&mut a, pane, row, 1);
+    for (col, kind) in [
+        (8, MouseKind::Press(MouseButton::Left)),
+        (9, MouseKind::Drag(MouseButton::Left)),
+    ] {
+        a.mouse(
+            pane,
+            MouseEvent {
+                row,
+                col,
+                kind,
+                alt: false,
+            },
+        );
+    }
+    let at = |code: u8, col: u16, end: char| format!("^[[<{code};{col};{}{end}", row + 1);
+    let want = [at(0, 2, 'M'), at(0, 2, 'm'), at(0, 9, 'M'), at(32, 10, 'M')].concat();
+    let text = a.wait_pane_text(15, pane, |t| t.contains(&want));
+    assert_eq!(
+        text.matches(&at(0, 9, 'M')).count(),
+        1,
+        "only the replay shows the app a press on the image: {text}"
+    );
+}
+
 // -- AC2-HP: drag + release auto-copies to the initiating client only ---------
 
 #[test]

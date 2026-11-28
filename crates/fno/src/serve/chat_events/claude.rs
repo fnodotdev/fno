@@ -64,6 +64,99 @@ struct Message {
     content: Content,
 }
 
+/// The fields of a row that pasted images: a sent message, or a message
+/// queued while the agent worked, which is an attachment row and nothing else.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PasteRow {
+    timestamp: Option<String>,
+    #[serde(default)]
+    image_paste_ids: Vec<u64>,
+    #[serde(default)]
+    message: Option<Message>,
+    #[serde(default)]
+    attachment: Option<QueuedPaste>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuedPaste {
+    #[serde(default)]
+    image_paste_ids: Vec<u64>,
+    #[serde(default)]
+    prompt: Content,
+}
+
+/// The session's turns that pasted images. Images follow `imagePasteIds`,
+/// which is not always the order of the markers in the text.
+pub(super) fn pasted_turns(transcript: &Path) -> std::io::Result<Vec<super::PastedTurn>> {
+    use std::io::BufRead;
+    let file = std::io::BufReader::new(std::fs::File::open(transcript)?);
+    let mut turns: Vec<super::PastedTurn> = Vec::new();
+    for line in file.split(b'\n') {
+        let line = line?;
+        let line = String::from_utf8_lossy(&line);
+        // Most rows paste nothing, and some are megabytes long.
+        if !line.contains("\"imagePasteIds\"") {
+            continue;
+        }
+        let Ok(row) = serde_json::from_str::<PasteRow>(&line) else {
+            continue;
+        };
+        let (ids, content) = match (row.message, row.attachment) {
+            (Some(message), _) => (row.image_paste_ids, message.content),
+            (None, Some(queued)) => (queued.image_paste_ids, queued.prompt),
+            (None, None) => continue,
+        };
+        let Some(turn) = pasted_turn(iso_ms(row.timestamp.as_deref()), &ids, content) else {
+            continue;
+        };
+        // A queued message can be written again when it is sent.
+        let repeated = turns
+            .iter()
+            .any(|seen| seen.text == turn.text && seen.images == turn.images);
+        if !repeated {
+            turns.push(turn);
+        }
+    }
+    Ok(turns)
+}
+
+fn pasted_turn(at_ms: Option<i64>, ids: &[u64], content: Content) -> Option<super::PastedTurn> {
+    let Content::Blocks(blocks) = content else {
+        return None;
+    };
+    let mut text = String::new();
+    let mut data = Vec::new();
+    for block in blocks {
+        match Block::deserialize(&block) {
+            Ok(Block::Text { text: part }) => {
+                text.push_str(&part);
+                text.push('\n');
+            }
+            Ok(Block::Image { source }) => data.push(match source {
+                ImageSource::Base64 { data, .. } => Some(data),
+                ImageSource::Url { .. } => None,
+            }),
+            _ => {}
+        }
+    }
+    // With unequal counts no image's number is known.
+    if ids.is_empty() || ids.len() != data.len() {
+        return None;
+    }
+    let images = ids
+        .iter()
+        .zip(data)
+        .map(|(&number, base64)| super::PastedImage { number, base64 })
+        .collect();
+    Some(super::PastedTurn {
+        at_ms,
+        text,
+        images,
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Content {
