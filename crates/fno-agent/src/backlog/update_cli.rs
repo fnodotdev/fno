@@ -2800,7 +2800,7 @@ mod tests {
             Refusal { message, exit } => {
                 assert_eq!(exit, 3);
                 assert!(message.contains("t-fcb4"), "{message}");
-                assert!(message.contains("hold release"), "{message}");
+                assert!(message.contains("authorized-merge"), "{message}");
             }
         }
 
