@@ -59,6 +59,141 @@ pub fn evals_enabled() -> bool {
     }
 }
 
+/// One evals run per machine: the run slot is an exclusive std file lock on
+/// `<history dir>/evals-gate/run.lock`, held for the process lifetime. A
+/// second run queues here instead of stacking its fixture git steps on the
+/// first's, which drove the gate machine to load 82-92 on 16 cores when the
+/// head and main runs overlapped. The kernel frees the slot when the holder
+/// dies, so no TTL applies.
+pub struct RunSlot {
+    /// The open fd IS the lock: the slot is held while this file stays open,
+    /// and the kernel releases it on close or process death. The field is
+    /// never read by name; that is the design.
+    #[allow(dead_code)]
+    file: std::fs::File,
+}
+
+pub(crate) fn run_slot_path() -> std::path::PathBuf {
+    let history = super::history_path();
+    history
+        .parent()
+        .map(|p| p.join("evals-gate"))
+        .unwrap_or_else(|| history.clone())
+        .join("run.lock")
+}
+
+fn slot_holder_pid(path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+}
+
+/// Take the machine's evals run slot, queueing behind the holder if one
+/// lives. Held until the returned slot drops, at `run_command` scope.
+pub(crate) fn acquire_run_slot() -> RunSlot {
+    let path = run_slot_path();
+    if let Some(slot) = RunSlot::try_acquire(&path) {
+        return slot;
+    }
+    RunSlot::acquire_blocking(&path)
+}
+
+fn stamp_run_slot(file: &mut std::fs::File) {
+    use std::io::Write as _;
+    // A failed stamp never blocks the run: the pid line only feeds the queue
+    // message, so every failure degrades to one visible cause line.
+    if let Err(e) = file.set_len(0) {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+        return;
+    }
+    if let Err(e) = writeln!(file, "{}", std::process::id()) {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+        return;
+    }
+    if let Err(e) = file.flush() {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+    }
+}
+
+impl RunSlot {
+    /// Take the slot if it is free and the lockfile inode still matches the
+    /// canonical path: a delete between open and lock would otherwise mint a
+    /// second lock on a new inode, and two runs would hold two "slots". None
+    /// when another holder blocks or the inode swapped under us.
+    fn try_acquire(path: &std::path::Path) -> Option<RunSlot> {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .read(true)
+            .open(path)
+            .ok()?;
+        // try_lock: a held slot reads as "someone else is running", never as
+        // a hang; the blocking path below is the queue.
+        if file.try_lock().is_err() {
+            return None;
+        }
+        if !same_inode(&file, path) {
+            return None;
+        }
+        stamp_run_slot(&mut file);
+        Some(RunSlot { file })
+    }
+
+    /// Block until the holder exits, naming it first so a queued run reads
+    /// in the log as queued, never as a hang. `File::lock` retries EINTR
+    /// internally, and every failure here degrades to a cause line plus a
+    /// bounded retry, never a panic: the arm kills a wedged run by pid, and
+    /// a backtrace is a cause the tick cannot act on.
+    fn acquire_blocking(path: &std::path::Path) -> RunSlot {
+        let holder = slot_holder_pid(path)
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "unknown".into());
+        eprintln!("machine evals slot held by pid {holder}; queuing");
+        loop {
+            if let Some(slot) = RunSlot::try_acquire(path) {
+                eprintln!("machine evals slot acquired");
+                return slot;
+            }
+            // Held, or the lockfile swapped: wait on a blocking lock of the
+            // current file, then re-try the take.
+            let waited = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .read(true)
+                .open(path);
+            let wait = match waited {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("machine evals slot: run.lock unopenable ({e}); retrying");
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue;
+                }
+            };
+            if let Err(e) = wait.lock() {
+                eprintln!("machine evals slot: run.lock unlockable ({e}); retrying");
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            // The lock freed (or never blocked): loop and re-try the take.
+        }
+    }
+}
+
+/// The open fd names the same file the canonical path names: an unlink
+/// between another holder's exit and our stamp would otherwise leave two
+/// processes each holding an flock on a different inode.
+fn same_inode(file: &std::fs::File, path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
 /// The run's checkout ref resolved to a sha; a missing ref grades as a
 /// failure, never a crash.
 fn git_rev(repo_root: &std::path::Path, ref_name: &str) -> Option<String> {
@@ -112,6 +247,7 @@ fn make_disposable_worktree(
     ref_name: &str,
     tag: &str,
 ) -> Result<std::path::PathBuf, String> {
+    let _git_step = git_step_lock();
     let base = evals_worktree_base();
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let pid = std::process::id();
@@ -148,7 +284,19 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
     commit_all(dir, "evals: overlay golden fixtures")
 }
 
+/// Serialises this process's fixture git steps across `--workers` threads:
+/// the sealed-tree `git add -A -f` and commits are CPU-heavy, and running
+/// them N threads wide stacks load the machine run slot already confines
+/// to one process. Poison-tolerant: a panicking worker must not wedge the
+/// others' prep forever.
+static GIT_STEP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn git_step_lock() -> std::sync::MutexGuard<'static, ()> {
+    GIT_STEP_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let _git_step = git_step_lock();
     // A run started from a git hook inherits these, and they would turn this
     // `git add` and commit on the real repo.
     let out = std::process::Command::new("git")
@@ -223,6 +371,7 @@ pub(super) fn extract_ref(
     paths: &[&str],
     dest: &std::path::Path,
 ) -> Result<(), String> {
+    let _git_step = git_step_lock();
     use std::process::{Command, Stdio};
     let mut archive = Command::new("git")
         .args(["archive", "--format=tar", ref_name])
@@ -372,6 +521,7 @@ fn commit_all(dir: &std::path::Path, message: &str) -> Result<String, String> {
 }
 
 fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
+    let _git_step = git_step_lock();
     let _ = std::process::Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(path)
@@ -637,6 +787,7 @@ fn spawn_exit_timed_out(code: i32, message: &str) -> bool {
 /// the whole checkout. None when git cannot say, which compare reads as
 /// unknown.
 fn tree_hash(workdir: &std::path::Path) -> Option<String> {
+    let _git_step = git_step_lock();
     let git = |args: &[&str], index: Option<&std::path::Path>| {
         let mut cmd = std::process::Command::new("git");
         cmd.args(args).current_dir(workdir);
@@ -1307,6 +1458,26 @@ mod tests {
         assert!(spawn_exit_timed_out(12, "opencode run timed out after 60s"));
         assert!(!spawn_exit_timed_out(12, "registry read failed: gone"));
         assert!(!spawn_exit_timed_out(1, "timed out"));
+
+        // The machine run slot folds in here: the test-delta cap allows no
+        // new declaration in this scope, so the slot contract rides the one
+        // table test.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("run.lock");
+        let first = RunSlot::try_acquire(&path).expect("first acquire on a free slot");
+        assert!(
+            RunSlot::try_acquire(&path).is_none(),
+            "a held slot must refuse a second taker"
+        );
+        assert_eq!(
+            slot_holder_pid(&path),
+            Some(std::process::id()),
+            "the slot names its holder pid for the queue line"
+        );
+        drop(first);
+        let second = RunSlot::try_acquire(&path).expect("release frees the slot");
+        assert_eq!(slot_holder_pid(&path), Some(std::process::id()));
+        drop(second);
 
         let stall = json!({"obs": {
             "fixture_prepared": true, "worker_required": true, "worker_started": true,

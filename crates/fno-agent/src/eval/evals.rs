@@ -357,6 +357,10 @@ fn run_command(rest: &[String]) -> i32 {
         },
         None => None,
     };
+    // One evals run per machine: the slot covers selection, the orphan sweep
+    // and every worker thread, so a second run queues instead of stacking its
+    // fixture git steps on the first's.
+    let _machine_run_slot = crate::evals::runner::acquire_run_slot();
     let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
     let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks,
