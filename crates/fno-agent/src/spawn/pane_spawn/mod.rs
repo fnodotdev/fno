@@ -1256,12 +1256,18 @@ pub fn write_pane_row(
     let stamp: std::collections::BTreeMap<String, String> =
         crate::accounts::launch::pane_stamp().into_iter().collect();
     let launch_account = stamp.get(crate::state::LAUNCH_ACCOUNT_ENV_KEY).cloned();
+    // The route's model rides the row so consult lane resolution can match it
+    // against the declared rows; a row without a model never resolves a lane.
+    let requested = ctx
+        .route
+        .as_deref()
+        .and_then(|route| requested_model(route, &ctx.cwd));
     let entry = RegistryEntry {
         name: name.to_string(),
         harness: Some(ctx.provider.clone()),
         provider: None,
-        model: None,
-        model_basis: None,
+        model: requested.clone(),
+        model_basis: requested.map(|_| "requested".to_string()),
         effort: None,
         requested_model: None,
         requested_provider: None,
@@ -1298,6 +1304,30 @@ pub fn write_pane_row(
         )
     };
     write_pane_row_txn(home, name, entry, replacing)
+}
+
+/// The declared-lane row's one field [`requested_model`] reads, parsed once
+/// at the boundary: the fold guarantees the key, empty when unnamed.
+#[derive(serde::Deserialize)]
+struct DeclaredLaneModel {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// The model a `--route` names, without credential reads (the model half of
+/// `route_vendor`): the pair form's model, else a declared lane's model.
+/// `None` for an absent route, a `--role` resolution, or an unknown name:
+/// the row stays model-less and consult lane resolution answers from what
+/// the config declares.
+fn requested_model(route: &str, cwd: &Path) -> Option<String> {
+    if let Some((_provider, model)) = crate::spawn_route::parse_target(route) {
+        return Some(model);
+    }
+    let row = crate::spawn_route::lane_row(route, cwd)?;
+    serde_json::from_value::<DeclaredLaneModel>(row)
+        .ok()
+        .and_then(|declared| declared.model)
+        .filter(|model| !model.is_empty())
 }
 
 /// Python's pid-start units note and the three-leg fallback, split out of
@@ -1582,5 +1612,45 @@ impl PaneReceipt {
             .map(|(k, v)| format!("{}: {}", Value::String(k.clone()), v))
             .collect();
         format!("{{{}}}", body.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod requested_model_tests {
+    use super::*;
+
+    #[test]
+    fn the_pair_form_names_its_model_whole() {
+        assert_eq!(
+            requested_model("zai/glm-5.3-flash[1m]", Path::new("/tmp")),
+            Some("glm-5.3-flash[1m]".to_string()),
+            "the pair form keeps a namespaced model id whole"
+        );
+    }
+
+    #[test]
+    fn a_declared_lane_names_its_declared_model() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        std::fs::write(
+            dir.path().join(".fno/config.toml"),
+            "[[routing.models]]\nname = \"lane-opus\"\nharness = \"claude\"\nmodel = \"opus\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            requested_model("lane-opus", dir.path()),
+            Some("opus".to_string()),
+            "a declared lane name resolves through the config's own row"
+        );
+    }
+
+    #[test]
+    fn an_unknown_name_resolves_no_model() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            requested_model("no-such-lane", dir.path()),
+            None,
+            "an unknown lane name stays model-less"
+        );
     }
 }
