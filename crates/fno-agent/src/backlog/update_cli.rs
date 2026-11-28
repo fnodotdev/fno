@@ -1429,12 +1429,12 @@ fn hold_names_blockers(
     if named.is_empty() {
         return Ok(());
     }
+    let hint = crate::gate::merge_hold::release_hint(&receipt.owner);
     Err(refused(
         format!(
             "Error: cannot remove blocker(s) {named} from {node_id}: an active \
              dispatch hold at {owner} names it: reason={reason} \
-             release_when={release_when}; release the hold first with \
-             `printf '{{\"op\":\"hold-release\",\"node\":\"{owner}\",\"evidence\":\"<proof>\"}}' | fno-agent authorized-merge`, \
+             release_when={release_when}; release the hold first with {hint}, \
              then rerun the removal.",
             named = named.join(", "),
             node_id = node_id,
