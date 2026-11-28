@@ -29,6 +29,8 @@ Each brand mux theme has a Claude Code theme with the same name. The plugin ship
 | `footnote-superscript` | `custom:fno:footnote-superscript` | Dark ground, light text | White band, near-black text |
 | `footnote-paper` | `custom:fno:footnote-paper` | Light ground, dark text | `#373737` band, near-white text |
 
+Two more brand themes, `footnote-inverse` and `footnote-inverse-paper`, paint the mux the same as Superscript and Paper. The desktop app draws your chat turns in them as the ink with the ground as text. A Claude Code pane gets the Superscript or Paper theme to match.
+
 A Claude Code pane that the mux starts picks the matching theme for you. It passes the theme with `--settings` for that session only, and it never edits your `settings.json`. Resumed and restored panes get it too. A pane that already names a settings file keeps that file. A mux theme with no brand match (`terminal`, `catppuccin`, and so on) leaves Claude Code on its own theme. A claude you type by hand into a pane gets the pinned theme the same way. Outside the mux, use a built-in theme.
 
 A thread (`claude --bg`) takes its theme from the launch, not from the pane that attaches to it, because `claude attach` ignores `--settings`. The mux sets `FNO_CLAUDE_THEME` in each worker pane. A `fno agent spawn` run from that pane writes the theme into the thread's settings file.

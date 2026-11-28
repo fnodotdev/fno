@@ -353,12 +353,14 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
 }
 
 fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, bool)]) -> Div {
+    let fill = p.you_fill();
+    let p = p.on_you();
     let body = div()
         .max_w(px(560.0))
         .px_3()
         .py_2()
         .rounded_lg()
-        .bg(rgb(p.raised))
+        .bg(rgb(fill))
         .text_color(rgb(p.fg))
         .flex()
         .flex_col()

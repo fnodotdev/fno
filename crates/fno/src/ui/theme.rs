@@ -68,7 +68,12 @@ pub struct Theme {
     /// The built-in a user theme inherited from, naming its 16-slot OSC
     /// palette table ([`terminal16_slot`]). Empty for the built-ins. A user
     /// theme keeps its parent's palette slots unless the parent has none.
+    /// Empty for the built-ins but the inverse twins, which ride the twin
+    /// they repaint so the slot table and the Claude Code theme match.
     pub inherit_from: &'static str,
+    /// App-only: the You chat bubble takes the ink as its fill and the
+    /// ground as its text. The mux chrome ignores it.
+    pub you_inverse: bool,
 }
 
 /// How a framed cell is colored, resolved against a [`Theme`] by [`cell_style`].
@@ -167,6 +172,8 @@ impl Theme {
         let t = match name.trim() {
             "" | "footnote-superscript" => Some(theme_footnote_superscript()),
             "footnote-paper" => Some(theme_footnote_paper()),
+            "footnote-inverse" => Some(theme_footnote_inverse()),
+            "footnote-inverse-paper" => Some(theme_footnote_inverse_paper()),
             "terminal" => Some(theme_terminal()),
             "catppuccin" => Some(theme_catppuccin()),
             "tokyo-night" => Some(theme_tokyo_night()),
@@ -349,6 +356,7 @@ fn theme_terminal() -> Theme {
     Theme {
         name: "terminal",
         inherit_from: "",
+        you_inverse: false,
         inherit: true,
         // Indexed(3), the brand: the pane-frame outline reads this field
         // directly (cell_style never does under `inherit` - byte-identity),
@@ -378,6 +386,7 @@ pub(crate) fn theme_footnote_superscript() -> Theme {
     Theme {
         name: "footnote-superscript",
         inherit_from: "",
+        you_inverse: false,
         inherit: false,
         border: rgb(0xe8, 0xe8, 0xe8), // text (the monochrome ruling)
         title: rgb(0xe8, 0xe8, 0xe8),  // text
@@ -401,6 +410,52 @@ pub(crate) fn theme_footnote_paper() -> Theme {
     Theme {
         name: "footnote-paper",
         inherit_from: "",
+        you_inverse: false,
+        inherit: false,
+        border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
+        title: rgb(0x14, 0x14, 0x14),  // text
+        brand: rgb(0x14, 0x14, 0x14),  // ink
+        needs_you: rgb(0x65, 0x55, 0x1b), // needs-you olive, readable on surface0
+        ok: rgb(0x46, 0x77, 0x48),     // palette green
+        warn: rgb(0x79, 0x68, 0x23),   // palette yellow
+        error: rgb(0x8f, 0x4d, 0x4b),  // the palette red darkened one step: the
+        // palette red itself lands 4.15:1 on paper
+        sel: rgb(0xd7, 0xd7, 0xd7),   // surface0
+        dim: rgb(0x40, 0x40, 0x40),   // subtext0 (505050 read too light)
+        chip: rgb(0x96, 0x53, 0x51),  // red accent
+        stamp: rgb(0x14, 0x14, 0x14), // ink stamp label
+        base: rgb(0xf7, 0xf7, 0xf7),  // base: the theme ground
+    }
+}
+
+/// The dark twin with an inverted You bubble: the ink as the fill, the ground as the text.
+fn theme_footnote_inverse() -> Theme {
+    Theme {
+        name: "footnote-inverse",
+        inherit_from: "footnote-superscript",
+        you_inverse: true,
+        inherit: false,
+        border: rgb(0xe8, 0xe8, 0xe8), // text (the monochrome ruling)
+        title: rgb(0xe8, 0xe8, 0xe8),  // text
+        brand: rgb(0xe8, 0xe8, 0xe8),  // text
+        needs_you: rgb(0xc5, 0xb7, 0x84), // needs-you yellow
+        ok: rgb(0x9c, 0xc4, 0x9c),     // palette green
+        warn: rgb(0xc5, 0xb7, 0x84),   // palette yellow
+        error: rgb(0xe1, 0xa6, 0xa3),  // palette red
+        sel: rgb(0x2b, 0x2b, 0x2b),    // surface0
+        dim: rgb(0xb4, 0xb4, 0xb4),    // subtext0
+        chip: rgb(0xe1, 0xa6, 0xa3),   // red accent
+        stamp: rgb(0xe8, 0xe8, 0xe8),  // off-white stamp label
+        base: rgb(0x14, 0x14, 0x14),   // base: the theme ground
+    }
+}
+
+/// The paper twin with an inverted You bubble: the ink as the fill, the paper as the text.
+fn theme_footnote_inverse_paper() -> Theme {
+    Theme {
+        name: "footnote-inverse-paper",
+        inherit_from: "footnote-paper",
+        you_inverse: true,
         inherit: false,
         border: rgb(0x14, 0x14, 0x14), // the dark twin's ground (the mirror pair)
         title: rgb(0x14, 0x14, 0x14),  // text
@@ -422,6 +477,7 @@ fn theme_catppuccin() -> Theme {
     Theme {
         name: "catppuccin",
         inherit_from: "",
+        you_inverse: false,
         inherit: false,
         border: rgb(0x89, 0xb4, 0xfa),    // blue (the theme's primary)
         title: rgb(0x89, 0xb4, 0xfa),     // blue
@@ -442,6 +498,7 @@ fn theme_tokyo_night() -> Theme {
     Theme {
         name: "tokyo-night",
         inherit_from: "",
+        you_inverse: false,
         inherit: false,
         border: rgb(0x7a, 0xa2, 0xf7),    // blue (the theme's primary)
         title: rgb(0x7a, 0xa2, 0xf7),     // blue
@@ -462,6 +519,7 @@ fn theme_gruvbox() -> Theme {
     Theme {
         name: "gruvbox",
         inherit_from: "",
+        you_inverse: false,
         inherit: false,
         border: rgb(0x8e, 0xc0, 0x7c), // aqua (the theme's signature accent)
         title: rgb(0x83, 0xa5, 0x98),  // blue
@@ -669,9 +727,11 @@ pub fn terminal_theme_file(t: &Theme, terminal: &str) -> Option<String> {
 
 /// The shipped theme names, in display order. Adding a palette later is a
 /// new `theme_*` fn, a match arm in [`Theme::from_name`], and a name here.
-pub const THEME_NAMES: [&str; 6] = [
+pub const THEME_NAMES: [&str; 8] = [
     "footnote-superscript",
     "footnote-paper",
+    "footnote-inverse",
+    "footnote-inverse-paper",
     "terminal",
     "catppuccin",
     "tokyo-night",
@@ -681,6 +741,25 @@ pub const THEME_NAMES: [&str; 6] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_inverse_twins_ride_their_base_twin_for_palette_and_claude_theme() {
+        for (inv, base) in [
+            ("footnote-inverse", "footnote-superscript"),
+            ("footnote-inverse-paper", "footnote-paper"),
+        ] {
+            let (i, b) = (Theme::from_name(inv).0, Theme::from_name(base).0);
+            assert!(i.you_inverse && !b.you_inverse, "{inv}");
+            assert_eq!(claude_theme(&i), claude_theme(&b), "{inv}");
+            for slot in 0..16 {
+                assert_eq!(
+                    terminal16_slot(slot, &i),
+                    terminal16_slot(slot, &b),
+                    "{inv} {slot}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn from_name_ladder_warns_unknown_and_defaults_silently() {

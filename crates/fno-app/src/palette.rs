@@ -51,6 +51,8 @@ pub struct Palette {
     /// The fill under a press: a step above `row_fill`. Every label color is
     /// held at 4.5:1 on this, the strongest fill, so it holds on the rest.
     pub pressed: u32,
+    /// The theme paints the You bubble as the ink, with the ground as text.
+    you_inverse: bool,
     ansi: [u32; 16],
 }
 
@@ -199,6 +201,7 @@ impl Palette {
             hover,
             row_fill,
             pressed,
+            you_inverse: t.you_inverse,
             ansi,
         }
     }
@@ -228,6 +231,34 @@ impl Palette {
         Palette {
             muted: mix_to_contrast(self.muted, self.fg, fill, 12.0),
             faint: mix_to_contrast(self.faint, self.fg, fill, 12.0),
+            ..*self
+        }
+    }
+
+    /// The fill of the You bubble: `raised`, or the ink under an inverse
+    /// theme. Text on it takes [`Palette::on_you`].
+    pub fn you_fill(&self) -> u32 {
+        if self.you_inverse {
+            self.fg
+        } else {
+            self.raised
+        }
+    }
+
+    /// The palette for the text, links and facts inside the You bubble. An
+    /// inverse theme swaps the ground in for the ink and walks the quiet
+    /// levels off the fill until they read 4.5:1 and 3:1.
+    pub fn on_you(&self) -> Palette {
+        if !self.you_inverse {
+            return *self;
+        }
+        let fill = self.fg;
+        Palette {
+            fg: self.bg,
+            accent: self.bg,
+            muted: mix_to_contrast(fill, self.bg, fill, 4.5),
+            faint: mix_to_contrast(fill, self.bg, fill, 3.0),
+            border: mix(fill, self.bg, 0.2),
             ..*self
         }
     }
@@ -347,6 +378,23 @@ mod tests {
             assert!(contrast(p.accent, p.bg) >= 3.0, "{name}");
             assert_eq!(p.accent, p.fg, "{name}");
         }
+    }
+
+    /// The inverse twins fill the You bubble with the ink and read 7:1 on it;
+    /// every other theme keeps `raised`.
+    #[test]
+    fn the_you_bubble_inverts_only_under_the_inverse_twins() {
+        for name in ["footnote-inverse", "footnote-inverse-paper"] {
+            let p = Palette::from_theme(&Theme::from_name(name).0);
+            let (on, fill) = (p.on_you(), p.you_fill());
+            assert_eq!(fill, p.fg, "{name}");
+            assert!(contrast(on.fg, fill) >= 7.0, "{name}: fg");
+            assert!(contrast(on.muted, fill) >= 4.5, "{name}: muted");
+            assert!(contrast(on.faint, fill) >= 3.0, "{name}: faint");
+        }
+        let p = Palette::from_theme(&Theme::from_name("footnote-superscript").0);
+        assert_eq!(p.you_fill(), p.raised);
+        assert_eq!(p.on_you().fg, p.fg);
     }
 
     /// `terminal` has no hued title, border or brand, and the footnote twins'

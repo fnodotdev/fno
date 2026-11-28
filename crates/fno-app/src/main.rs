@@ -38,8 +38,8 @@ struct Args {
     /// png path for --shot.
     #[arg(long = "shot-out")]
     shot_out: Option<String>,
-    /// Palette --shot paints: dark (default) or light.
-    #[arg(long = "shot-theme", value_parser = ["dark", "light"], default_value = "dark")]
+    /// Palette --shot paints: dark (default), light, or an inverse-You twin of either.
+    #[arg(long = "shot-theme", value_parser = ["dark", "light", "dark-inverse", "light-inverse"], default_value = "dark")]
     shot_theme: String,
     /// View --shot renders (default: the command center board).
     #[arg(long = "shot-mode", value_enum)]
