@@ -150,9 +150,11 @@ enum LaneResolution {
     Admitted(String),
     /// No registry row resolves for the session.
     NoRow,
-    /// The registry itself could not be read; whether the row exists is
-    /// unknown, and the refusal must not claim it absent.
-    Unreadable,
+    /// The registry itself could not be read (store error or a row that
+    /// failed validation); whether the row exists is unknown, and the
+    /// refusal must not claim it absent. The cause rides so the line
+    /// names what actually failed.
+    Unreadable(String),
     /// A row resolved, but no declared routing row matches it: the model
     /// missed every declared row of its harness, or the row carries no
     /// model and more than one declared row names its harness.
@@ -163,9 +165,9 @@ impl LaneResolution {
     fn lane(&self) -> Option<&str> {
         match self {
             LaneResolution::Admitted(lane) => Some(lane),
-            LaneResolution::NoRow | LaneResolution::Unreadable | LaneResolution::NoLane { .. } => {
-                None
-            }
+            LaneResolution::NoRow
+            | LaneResolution::Unreadable(_)
+            | LaneResolution::NoLane { .. } => None,
         }
     }
 }
@@ -176,7 +178,7 @@ fn session_lane(deps: &Deps, harness: &str, session: &str) -> LaneResolution {
     }
     let rows = match crate::client_commands::load_registry_entries(&deps.registry) {
         Ok(rows) => rows,
-        Err(_) => return LaneResolution::Unreadable,
+        Err(cause) => return LaneResolution::Unreadable(cause),
     };
     let Some(row) = crate::whoami::find_by_session(&rows, session, harness) else {
         return LaneResolution::NoRow;
@@ -236,8 +238,8 @@ fn lane_refusal_line(
         LaneResolution::NoRow => {
             format!("consult: session {session} has no {harness} registry row; no lane to check")
         }
-        LaneResolution::Unreadable => {
-            "consult: the agent registry could not be read; no lane to check".to_string()
+        LaneResolution::Unreadable(cause) => {
+            format!("consult: the agent registry could not be read ({cause}); no lane to check")
         }
         LaneResolution::NoLane { model } => {
             format!("consult: no declared lane resolves for harness {harness} model {model:?}")
@@ -1118,13 +1120,17 @@ mod tests {
     }
 
     /// The registry row a dispatch-spawned worker carries: harness and
-    /// session, `model` only when the spawn stamped one.
+    /// session, `model` only when the spawn stamped one. `cwd` and
+    /// `log_path` are the loader's required fields; a row without them
+    /// fails validation and the whole registry reads as unreadable.
     fn dispatch_row(session: &str, model: Option<&str>) -> Value {
         let mut row = json!({
             "name": "t-worker",
             "harness": "claude",
             "harness_session_id": session,
             "status": "live",
+            "cwd": "/tmp",
+            "log_path": "",
         });
         if let Some(model) = model {
             if let Some(fields) = row.as_object_mut() {
@@ -1213,9 +1219,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         lane_config(dir.path(), ONE_CLAUDE_ROW);
         let d = deps(dir.path(), &silent_ok);
-        assert_eq!(
-            session_lane(&d, "claude", "sess-ghost"),
-            LaneResolution::Unreadable,
+        assert!(
+            matches!(
+                session_lane(&d, "claude", "sess-ghost"),
+                LaneResolution::Unreadable(_)
+            ),
             "an unreadable registry never claims the row is absent"
         );
     }
@@ -1263,10 +1271,17 @@ mod tests {
             no_row.contains("s1") && no_row.contains("claude") && !no_row.contains("empty"),
             "the missing-row line names the session and never claims empty lanes: {no_row}"
         );
-        let unreadable = lane_refusal_line(false, &LaneResolution::Unreadable, "claude", "s1");
+        let unreadable = lane_refusal_line(
+            false,
+            &LaneResolution::Unreadable("boom".to_string()),
+            "claude",
+            "s1",
+        );
         assert!(
-            unreadable.contains("could not be read") && !unreadable.contains("empty"),
-            "the unreadable line names the registry, never a definite row claim: {unreadable}"
+            unreadable.contains("could not be read")
+                && unreadable.contains("boom")
+                && !unreadable.contains("empty"),
+            "the unreadable line names the registry and its cause: {unreadable}"
         );
         let no_lane = lane_refusal_line(
             false,
