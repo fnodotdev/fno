@@ -197,7 +197,8 @@ fn version_json_raw(binary: &str) -> Option<std::process::Output> {
 }
 
 /// The human `--version` line. A failure-path probe: it runs only when the
-/// json read gave no rev.
+/// json read gave no rev. Whitespace collapses, because the answer feeds a
+/// one-line beat line whatever the binary printed.
 fn human_version_line(binary: &str) -> Option<String> {
     let mut cmd = Command::new(binary);
     cmd.arg("--version");
@@ -205,12 +206,18 @@ fn human_version_line(binary: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let line = flatten_line(&String::from_utf8_lossy(&out.stdout));
     if line.is_empty() {
         None
     } else {
         Some(line)
     }
+}
+
+/// One line out of possibly many: whitespace runs collapse to single
+/// spaces, so a banner-printing binary cannot split the beat line.
+fn flatten_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The detail a rev-less answer reports: which binary, what its json read
@@ -230,7 +237,7 @@ fn revless_detail(binary: &str) -> String {
                 .chars()
                 .take(160)
                 .collect();
-            let head = head.trim();
+            let head = flatten_line(&head);
             if !head.is_empty() {
                 parts.push(format!("stdout: {head}"));
             }
@@ -656,8 +663,9 @@ mod tests {
         let (_guard, root, _rev) = source_repo("revless-detail-repo");
         let bin_dir = tempfile::tempdir().unwrap();
         // Answer version --json with a rev-less object; --version with the
-        // human line a real build prints.
-        let body = "#!/bin/bash\nif [ \"$1\" = \"version\" ]; then echo '{}'; else echo 'fno-agent 0.0.17 (deadbeef1234, release)'; fi\n";
+        // human line a real build prints. Both answers carry a second line,
+        // so the detail must collapse them: the beat line is one line.
+        let body = "#!/bin/bash\nif [ \"$1\" = \"version\" ]; then echo '{}'; echo 'banner line'; else echo 'fno-agent 0.0.17 (deadbeef1234, release)'; echo 'second line'; fi\n";
         let binary = crate::write_exec_stub(bin_dir, "fake-fno-agent", body)
             .to_string_lossy()
             .into_owned();
@@ -677,6 +685,10 @@ mod tests {
         assert!(
             detail.contains("fno-agent 0.0.17 (deadbeef1234, release)"),
             "{detail}"
+        );
+        assert!(
+            detail.contains("banner line") && !detail.contains('\n'),
+            "the detail stays one line: {detail}"
         );
     }
 
