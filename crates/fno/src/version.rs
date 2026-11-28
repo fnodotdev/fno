@@ -33,6 +33,18 @@ pub fn version_json() -> serde_json::Value {
 /// form reads the `full`-only bootstrap resolver.
 #[cfg(feature = "app")]
 pub fn print_version(json_out: bool) {
+    if json_out {
+        println!("{}", version_json());
+    } else {
+        println!("{}", human_line());
+    }
+}
+
+/// The human one-liner, composed separately from the print so tests can pin
+/// the format `fno version` and (through the RootVersion delegation) the
+/// bare `fno --version` flag share.
+#[cfg(feature = "app")]
+fn human_line() -> String {
     let pkg = env!("CARGO_PKG_VERSION");
     let rev = env!("FNO_MUX_GIT_REV"); // full sha, or the literal "unknown"
     let dirty = env!("FNO_MUX_GIT_DIRTY") == "1";
@@ -41,13 +53,9 @@ pub fn print_version(json_out: bool) {
     } else {
         "release"
     };
-    if json_out {
-        println!("{}", version_json());
-    } else {
-        let short = if rev.len() >= 12 { &rev[..12] } else { rev };
-        let suffix = if dirty { "-dirty" } else { "" };
-        println!("fno {pkg} ({short}{suffix}, {profile})");
-    }
+    let short = if rev.len() >= 12 { &rev[..12] } else { rev };
+    let suffix = if dirty { "-dirty" } else { "" };
+    format!("fno {pkg} ({short}{suffix}, {profile})")
 }
 
 #[cfg(test)]
@@ -61,5 +69,22 @@ mod tests {
         let v = version_json();
         assert!(v.get("crates_rev").and_then(|x| x.as_str()).is_some());
         assert!(v.get("git_rev").and_then(|x| x.as_str()).is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "app")]
+    fn human_line_carries_rev_and_profile() {
+        // `fno version` and the bare `fno --version` flag share this line:
+        // package, parenthesised short rev, profile.
+        let line = human_line();
+        assert!(line.starts_with("fno "), "{line}");
+        let inner = line
+            .rsplit_once('(')
+            .map(|(_, r)| r)
+            .expect("parenthesised rev");
+        assert!(
+            inner.ends_with(", release)") || inner.ends_with(", debug)"),
+            "{line}"
+        );
     }
 }
