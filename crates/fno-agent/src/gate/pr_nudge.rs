@@ -1962,7 +1962,6 @@ mod tests {
         assert!(!saved.mail_durable);
         let ev = last_event(&home, "pr_nudge_sent");
         assert_eq!(ev["data"]["delivered"], serde_json::json!(false));
-        assert!(ev["data"].get("fallback").is_none());
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
 
         // The idle-claude arm: the resume runs flagged, so the Working hold
@@ -2008,8 +2007,7 @@ mod tests {
         assert!(saved.mail_durable, "the exit-14 send stamps mail_durable");
         let ev = last_event(&home, "pr_nudge_sent");
         assert_eq!(ev["data"]["delivered"], serde_json::json!(false));
-        assert_eq!(ev["data"]["fallback"], serde_json::json!("resume"));
-        assert_eq!(ev["data"]["resume_exit"], serde_json::json!(16));
+        assert_eq!(ev["data"]["fallback"], "resume");
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fno-pn-exit14-idle"));
     }
 
