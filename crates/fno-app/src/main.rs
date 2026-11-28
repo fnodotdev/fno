@@ -58,7 +58,9 @@ struct Args {
     shot_ui: Option<ShotUi>,
     /// Settings-panel state --shot paints: `panel` opens the panel,
     /// `filter` types `alert` through the real field, `page` opens the
-    /// Theme choice page through real Enter.
+    /// Theme choice page through real Enter, `machines` rests on the
+    /// Machines section, `add` opens its empty Add field, and
+    /// `add-refused` submits a host the section already lists.
     #[arg(long = "shot-settings", value_enum)]
     shot_settings: Option<ShotSettings>,
     /// Update card state --shot paints: `ready` is the Restart card,
@@ -180,6 +182,12 @@ enum ShotSettings {
     Filter,
     /// The Theme choice page open.
     Page,
+    /// The Machines section, each configured host answered.
+    Machines,
+    /// The Machines Add field open and empty: its placeholder and keys.
+    Add,
+    /// The Add field refusing a host already listed.
+    AddRefused,
 }
 
 fn main() {
@@ -215,6 +223,9 @@ fn main() {
                 ShotSettings::Panel => fno_app::SettingsShot::Panel,
                 ShotSettings::Filter => fno_app::SettingsShot::Filter,
                 ShotSettings::Page => fno_app::SettingsShot::Page,
+                ShotSettings::Machines => fno_app::SettingsShot::Machines,
+                ShotSettings::Add => fno_app::SettingsShot::Add,
+                ShotSettings::AddRefused => fno_app::SettingsShot::AddRefused,
             }),
             update: args.shot_update.map(|u| match u {
                 ShotUpdate::Ready => fno_app::UpdateShot::Ready,

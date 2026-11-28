@@ -30,6 +30,11 @@ pub mod client {
     pub mod org_seats {
         pub use crate::client::org_seats::{read_fleet, Fleet, Lead, Machine};
     }
+    pub mod remote_hosts {
+        pub use crate::client::remote_hosts::door::{
+            fold_host, host_identity, parse_host, probe, state_word, HostState,
+        };
+    }
     pub mod node_detail {
         pub mod backlog_md {
             pub use crate::client::node_detail::backlog_md::md_lines;

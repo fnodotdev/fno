@@ -4742,7 +4742,7 @@ use nav_rows::*;
 mod needs_queue;
 use needs_queue::*;
 #[path = "client/remote_hosts.rs"]
-mod remote_hosts;
+pub(crate) mod remote_hosts;
 #[path = "client/reserve_apps.rs"]
 mod reserve_apps;
 

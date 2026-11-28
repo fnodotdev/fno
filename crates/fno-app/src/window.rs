@@ -90,6 +90,9 @@ pub enum Action {
     OpenAddMenu(u64),
     /// Cycle the Workspaces section's grouping: workspaces, state, machine.
     CycleGrouping,
+    /// A Machines row's click: group sessions by machine so that host's
+    /// sessions are the ones in view.
+    FocusMachine(String),
     /// Close the open context menu without acting.
     CloseWorkspaceMenu,
     /// Select a workspace, then open a shell tab in it.
@@ -141,6 +144,16 @@ pub enum Action {
     DismissUpdate,
 }
 
+/// The key layer (config.mux.prefix, [mux.keys]), installed before the
+/// scanner reads its first keystroke - the same loader the terminal client
+/// uses. A refused rebind comes back as the startup notice rather than
+/// silently running the shipped default.
+fn install_keymap(cwd: &std::path::Path) -> Option<String> {
+    let (keymap, warnings) = fno::ui::digest_overlay::keymap(cwd);
+    fno::ui::keys::install(keymap);
+    warnings.first().map(|w| w.0.clone())
+}
+
 /// The stable control id a click's [`Action`] ships to the usage events arm
 /// (`fno::ui_usage`). One constant per control, never a label.
 fn click_id(action: &Action) -> &'static str {
@@ -156,6 +169,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::NewWorkspace => "new_workspace",
         Action::ToggleWorkspace(_) => "toggle_workspace",
         Action::ToggleElsewhere => "toggle_elsewhere",
+        Action::FocusMachine(_) => "focus_machine",
         Action::OpenWorkspaceMenu(_) => "open_workspace_menu",
         Action::OpenAddMenu(_) => "open_add_menu",
         Action::CycleGrouping => "cycle_grouping",
@@ -361,6 +375,9 @@ pub struct Root {
     pub(super) launch: launch::Panel,
     /// The Settings panel (cmd-,): rows, query, page; None while closed.
     pub(super) settings: Option<settings::SettingsState>,
+    /// The remote-hosts probe states the door filled: the configured name
+    /// to its newest HostState. Lives on the Root so it survives the panel.
+    host_states: HashMap<String, fno::app_api::client::remote_hosts::HostState>,
     /// The font face and size the terminal metrics should carry: the
     /// launch values, then a Settings write. Render moves the real
     /// `metrics` onto it, where the text system can measure.
@@ -465,13 +482,7 @@ impl Root {
         );
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
         let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
-        // The key layer (config.mux.prefix, [mux.keys]), installed before the
-        // scanner reads its first keystroke - the same loader the terminal
-        // client uses. A refused rebind surfaces as the startup notice rather
-        // than silently running the shipped default.
-        let (keymap, key_warnings) = fno::ui::digest_overlay::keymap(&theme_cwd);
-        fno::ui::keys::install(keymap);
-        let key_warning = key_warnings.first().map(|w| w.0.clone());
+        let key_warning = install_keymap(&theme_cwd);
         let mut root = Root {
             main,
             link: None,
@@ -534,6 +545,7 @@ impl Root {
             peek: None,
             launch: launch::Panel::default(),
             settings: None,
+            host_states: HashMap::new(),
             font_want,
             preedit: None,
             _reader: None,
@@ -1147,6 +1159,7 @@ impl Root {
             Action::NewWorkspace
             | Action::ToggleWorkspace(_)
             | Action::ToggleElsewhere
+            | Action::FocusMachine(_)
             | Action::OpenWorkspaceMenu(_)
             | Action::OpenAddMenu(_)
             | Action::CycleGrouping
@@ -1237,6 +1250,10 @@ impl Root {
                 if !self.folds.remove(&key) {
                     self.folds.insert(key);
                 }
+                record_ui_state(self, cx);
+            }
+            Action::FocusMachine(_) => {
+                self.group_by = GroupBy::Machine;
                 record_ui_state(self, cx);
             }
             Action::OpenWorkspaceMenu(id) => {
@@ -1809,6 +1826,7 @@ impl Root {
                     }
                 }
                 self.board = *board;
+                self.follow_fleet();
                 // A question the read no longer lists needs no answer state;
                 // a refusal stays so the row keeps its reason.
                 let open: Vec<&str> = self
@@ -3041,9 +3059,21 @@ impl Root {
             .fleet()
             .map(|f| f.machines.clone())
             .unwrap_or_default();
-        let rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &fonts);
+        let mut rows = settings::build_rows(
+            config.as_ref(),
+            &self.theme_cwd,
+            &machines,
+            &fonts,
+            &self.host_states,
+        );
+        if !self.board.read_yet() {
+            settings::lead_with_reading(&mut rows);
+        }
+        self.kick_host_probes(cx);
         self.settings = Some(settings::SettingsState {
             query: ui::LineField::new(64),
+            add_host: None,
+            add_refusal: None,
             selected: 0,
             page: None,
             note: None,
@@ -3058,6 +3088,117 @@ impl Root {
     pub(super) fn close_settings(&mut self, cx: &mut Context<Self>) {
         self.settings = None;
         cx.notify();
+    }
+
+    /// Fire one bounded ssh probe per configured host that has no state
+    /// yet (fire-once per panel open, like the TUI's `started` flag), on
+    /// detached background tasks; each result repaints the Machines rows.
+    fn kick_host_probes(&mut self, cx: &mut Context<Self>) {
+        let config = crate::global_config_raw();
+        let mut names: Vec<String> = settings::configured_hosts(config.as_ref())
+            .into_iter()
+            .filter(|n| !self.host_states.contains_key(n))
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            self.host_states.insert(
+                name.clone(),
+                fno::app_api::client::remote_hosts::HostState::Checking,
+            );
+            self.spawn_probe(name, cx);
+        }
+    }
+
+    /// The Machines Add field's submit: the door's verdict (parse + dedup)
+    /// decides. A refusal keeps the field open with the typed text and
+    /// paints inline. A valid host lands the row as checking at once, then
+    /// the write and the probe resolve it.
+    fn submit_add_host(&mut self, text: String, cx: &mut Context<Self>) {
+        let fleet_hosts: Vec<String> = self
+            .board
+            .fleet()
+            .map(|f| f.machines.iter().map(|m| m.host.clone()).collect())
+            .unwrap_or_default();
+        let configured = settings::configured_hosts(crate::global_config_raw().as_ref());
+        let fleet_refs: Vec<&str> = fleet_hosts.iter().map(String::as_str).collect();
+        match settings::add_host_verdict(&text, &configured, &fleet_refs) {
+            Err(refusal) => {
+                if let Some(st) = self.settings.as_mut() {
+                    st.add_host = Some(ui::LineField::seeded(&text, 256));
+                    st.add_refusal = Some(refusal.0);
+                }
+                cx.notify();
+            }
+            Ok(name) => {
+                // Optimistic row: checking now; the write and the probe
+                // resolve it.
+                self.host_states.insert(
+                    name.clone(),
+                    fno::app_api::client::remote_hosts::HostState::Checking,
+                );
+                let mut list = configured.clone();
+                list.push(name.clone());
+                let json = serde_json::to_string(&list).unwrap_or_else(|_| format!("[\"{name}\"]"));
+                let name2 = name.clone();
+                cx.spawn(async move |this, cx| {
+                    let out = cx
+                        .background_executor()
+                        .spawn(async move {
+                            settings::bounded_write(true, "mux.remote_hosts", Some(&json))
+                        })
+                        .await;
+                    this.update(cx, |root, cx| {
+                        if let Err(settings::Refusal(msg)) = out {
+                            root.say(
+                                format!("{name2}: added this session; save failed: {msg}"),
+                                cx,
+                            );
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+                self.spawn_probe(name, cx);
+                self.rebuild_settings_rows(None);
+                cx.notify();
+            }
+        }
+    }
+
+    /// One bounded ssh probe on a detached background task; its result
+    /// repaints the Machines rows. The --probe precedent: a short-lived
+    /// current-thread runtime per bounded run, so GPUI never rides a tokio
+    /// reactor.
+    fn spawn_probe(&mut self, name: String, cx: &mut Context<Self>) {
+        let host = name.clone();
+        cx.spawn(async move |this, cx| {
+            let probe_host = host.clone();
+            let state = cx
+                .background_executor()
+                .spawn(async move {
+                    // A runtime that cannot start is the probe's failure,
+                    // not a panic: the row reads it, like a dead ssh hop.
+                    match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => {
+                            rt.block_on(fno::app_api::client::remote_hosts::probe(&probe_host))
+                        }
+                        Err(e) => fno::app_api::client::remote_hosts::HostState::Unreachable(
+                            format!("ssh did not start: {e}"),
+                        ),
+                    }
+                })
+                .await;
+            this.update(cx, |root, _cx| {
+                root.host_states.insert(host, state);
+                root.rebuild_settings_rows(None);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// One resolved settings write: spawn the bounded CLI door on a
@@ -3093,10 +3234,36 @@ impl Root {
             .fleet()
             .map(|f| f.machines.clone())
             .unwrap_or_default();
+        let read = self.board.read_yet();
         if let Some(st) = self.settings.as_mut() {
             let config = crate::global_config_raw();
             st.note = note;
-            st.rows = settings::build_rows(config.as_ref(), &self.theme_cwd, &machines, &st.fonts);
+            st.rows = settings::build_rows(
+                config.as_ref(),
+                &self.theme_cwd,
+                &machines,
+                &st.fonts,
+                &self.host_states,
+            );
+            if !read {
+                settings::lead_with_reading(&mut st.rows);
+            }
+        }
+    }
+
+    /// A board read landed: an open panel repaints its Machines section
+    /// from the new fleet, so a host going stale shows while the panel
+    /// stays open.
+    fn follow_fleet(&mut self) {
+        let machines = self
+            .board
+            .fleet()
+            .map(|f| f.machines.clone())
+            .unwrap_or_default();
+        let read = self.board.read_yet();
+        if let Some(st) = self.settings.as_mut() {
+            let config = crate::global_config_raw();
+            settings::refresh_machines(st, &machines, config.as_ref(), &self.host_states, read);
         }
     }
 
@@ -3355,6 +3522,7 @@ impl Root {
             Some(settings::Event::Unset { id }) => {
                 self.spawn_settings_write(false, id, String::new(), cx)
             }
+            Some(settings::Event::AddHost(text)) => self.submit_add_host(text, cx),
             None => {}
         }
         true
@@ -4639,6 +4807,43 @@ pub fn run(
     });
 }
 
+/// The --shot-settings script on a built root: the panel opens through
+/// its real path, then the script drives it; the refusal shot submits
+/// through the same door a typed Enter reaches.
+fn apply_settings_shot(
+    root: &gpui::Entity<Root>,
+    shot: crate::SettingsShot,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let fonts = settings::mono_fonts(window);
+    // The demo world pins its theme in a project file; the panel's
+    // rows read the global file alone, so the Theme row stays editable.
+    root.update(cx, |root, cx| {
+        root.theme_cwd = PathBuf::from("/");
+        // A shot never reaches ssh: each configured host answers no
+        // route, so the failed row reads the same on every run.
+        for name in settings::configured_hosts(crate::global_config_raw().as_ref()) {
+            let why = format!("could not reach {name}: no route");
+            root.host_states.insert(
+                name,
+                fno::app_api::client::remote_hosts::HostState::Unreachable(why),
+            );
+        }
+        root.open_settings_with(fonts, cx)
+    });
+    root.update(cx, |root, _| {
+        if let Some(st) = root.settings.as_mut() {
+            settings::apply_shot(st, shot);
+        }
+    });
+    if shot == crate::SettingsShot::AddRefused {
+        root.update(cx, |root, cx| {
+            root.submit_add_host(settings::SHOT_ADD_DUPLICATE.to_string(), cx)
+        });
+    }
+}
+
 /// The shot path's root builder: the same metrics run() derives, with
 /// the caller's warmed link adopted so the one frame the window paints
 /// synchronously at open carries the world's data. The link was already
@@ -4738,18 +4943,7 @@ pub(super) fn root_for_shot(
         });
     }
     if let Some(shot) = settings {
-        let fonts = settings::mono_fonts(window);
-        // The demo world pins its theme in a project file; the panel's
-        // rows read the global file alone, so the Theme row stays editable.
-        root.update(cx, |root, cx| {
-            root.theme_cwd = PathBuf::from("/");
-            root.open_settings_with(fonts, cx)
-        });
-        root.update(cx, |root, _| {
-            if let Some(st) = root.settings.as_mut() {
-                settings::apply_shot(st, shot);
-            }
-        });
+        apply_settings_shot(&root, shot, window, cx);
     }
     // The shot window never activates, and the board poll pauses while
     // the window is inactive; the shot needs every feed settled before
