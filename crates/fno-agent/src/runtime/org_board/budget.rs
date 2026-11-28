@@ -37,12 +37,19 @@ impl Budget {
         (dl > Instant::now()).then_some(dl)
     }
     /// The deadline the SEQUENTIAL phase bounds against: the source deadline
-    /// minus the concurrent floor. The concurrent sources read the full
-    /// source deadline; this only caps what the inline sequential reads may
-    /// spend before those spawn.
+    /// minus the concurrent floor, with the floor capped at half the
+    /// remaining source wall so a small budget splits its time instead of
+    /// spending the sequential phase outright (a board under the 22s the
+    /// full floor needs would otherwise never run its claims or registry
+    /// reads at all, and the drain gate reads them as unreadable sources).
+    /// The concurrent sources read the full source deadline; this only caps
+    /// what the inline sequential reads may spend before those spawn.
     pub(crate) fn sequential_deadline(&self) -> Option<Instant> {
         let dl = self.source_deadline()?;
-        let capped = dl.checked_sub(Duration::from_millis(CONCURRENT_FLOOR_MS))?;
+        let remaining = dl.duration_since(Instant::now());
+        let half = (remaining.as_millis() as u64) / 2;
+        let floor = CONCURRENT_FLOOR_MS.min(half);
+        let capped = dl.checked_sub(Duration::from_millis(floor))?;
         (capped > Instant::now()).then_some(capped)
     }
     /// Claim the budget for `name`; returns its deadline or None once spent.
@@ -343,9 +350,9 @@ mod tests {
     use crate::org_board::SRC_READY;
 
     /// The sequential phase derives its bound from the ONE board deadline
-    /// minus the concurrent floor, and a budget too small to fund both phases
-    /// spends the sequential phase outright while the concurrent section
-    /// keeps what is left.
+    /// minus the concurrent floor; a budget too small to fund the full floor
+    /// halves its remaining wall between the phases instead of spending the
+    /// sequential phase outright, and a spent budget spends it.
     #[test]
     fn sequential_deadline_funds_the_concurrent_floor_or_spends_the_phase() {
         let b = Budget::new(45_000);
@@ -358,8 +365,26 @@ mod tests {
             Duration::from_millis(CONCURRENT_FLOOR_MS)
         );
         let b = Budget::new(10_000);
-        assert!(b.sequential_deadline().is_none());
-        assert!(b.source_deadline().is_some());
+        let seq = b
+            .sequential_deadline()
+            .expect("a small budget splits its wall instead of spending the phase");
+        let now = Instant::now();
+        let left = seq.duration_since(now);
+        // The half-split reads against one clock sample with a 5ms window:
+        // two now() calls never agree to the millisecond under load.
+        let half = b
+            .source_deadline()
+            .expect("the 10s budget funds sources")
+            .duration_since(now)
+            / 2;
+        assert!(
+            left <= half + Duration::from_millis(5),
+            "{left:?} vs {half:?}"
+        );
+        assert!(
+            left >= half - Duration::from_millis(5),
+            "{left:?} vs {half:?}"
+        );
         let b = Budget::new(0);
         assert!(b.sequential_deadline().is_none());
     }

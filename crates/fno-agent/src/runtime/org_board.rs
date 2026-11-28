@@ -2168,11 +2168,11 @@ mod tests {
 
     /// A sequential read that outlasts its sequential deadline abandons with
     /// the same spent wording a concurrent kill carries, and a read inside
-    /// it lands. The 22s budget funds exactly 1s of sequential wall
-    /// (source deadline 21s minus the 20s concurrent floor).
+    /// it lands. The 3s budget funds exactly 1s of sequential wall: its 2s
+    /// source deadline caps the concurrent floor at a half-split.
     #[test]
     fn a_sequential_read_abandons_at_the_sequential_deadline_and_a_fast_one_lands() {
-        let budget = Budget::new(22_000);
+        let budget = Budget::new(3_000);
         let started = std::time::Instant::now();
         let slow = run_sequential_read(&budget, || {
             std::thread::sleep(std::time::Duration::from_millis(2_000));
@@ -2194,7 +2194,7 @@ mod tests {
             Ok(v) => panic!("a slow sequential read landed: {v:?}"),
         }
         let fast = {
-            // A fresh budget funds its own sequential phase: the 22s budget
+            // A fresh budget funds its own sequential phase: the 3s budget
             // above spent its 1s of sequential wall on the slow read, and a
             // second read on it must read spent, never land.
             let budget = Budget::new(45_000);
