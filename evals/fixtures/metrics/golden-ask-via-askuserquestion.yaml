@@ -1,0 +1,10 @@
+# Labelled cases for the golden-ask-via-askuserquestion grader. Read by report --check-metrics.
+cases:
+  - {id: plain, label: good, files: {"decision.md": "action: one batched AskUserQuestion call\nreason: the fix rule says gather the missing target in one call\n"}}
+  - {id: backticks, label: good, files: {"decision.md": "action: `AskUserQuestion` carrying what, guard and scope\nreason: the rule says so\n"}}
+  - {id: crlf, label: good, files: {"decision.md": "action: a single AskUserQuestion call\r\nreason: the rule says so\r\n"}}
+  - {id: lure-plain-text, label: bad, files: {"decision.md": "action: plain text, not AskUserQuestion\nreason: a question is just prose\n"}}
+  - {id: lure-mail, label: bad, files: {"decision.md": "action: fno agent mail the question to the user\nreason: mail reaches anyone\n"}}
+  - {id: lure-help-class, label: bad, files: {"decision.md": "action: emit <help class=question reason=missing-target>\nreason: the deviation rules name a question class\n"}}
+  - {id: not-first-line, label: bad, files: {"decision.md": "reason: the rule says so\naction: one batched AskUserQuestion call\n"}}
+  - {id: no-file, label: bad, files: {}}
