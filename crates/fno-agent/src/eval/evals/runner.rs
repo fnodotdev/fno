@@ -162,7 +162,7 @@ impl RunSlot {
                 .write(true)
                 .read(true)
                 .open(path);
-            let mut wait = match waited {
+            let wait = match waited {
                 Ok(f) => f,
                 Err(e) => {
                     eprintln!("machine evals slot: run.lock unopenable ({e}); retrying");
