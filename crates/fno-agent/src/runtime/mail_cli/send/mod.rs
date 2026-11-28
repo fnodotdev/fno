@@ -1480,7 +1480,8 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // The rule door: one `door:send` event per addressed send, the recipient
-    // the subject. A block exits 3 with the reasons on stderr; a warn prints
+    // the subject, plus `by-name:<recipient>` when the recipient is not
+    // session-id-shaped, so a law about addressing by name can fire. A block exits 3 with the reasons on stderr; a warn prints
     // and the send proceeds. An unread source stays silent at THIS door: the
     // send surface is byte-pinned by the dual-implementation parity goldens
     // (tests/capture/mail_send_capture.py), and a store-less CI env would
@@ -1491,7 +1492,7 @@ pub fn run(args: &[String]) -> i32 {
         kind: "door:send".to_string(),
         subjects: name
             .as_deref()
-            .map(|r| vec![r.to_string()])
+            .map(crate::law_at::send_subjects)
             .unwrap_or_default(),
         project: crate::law_match::resolve_project(
             Some(&cwd),

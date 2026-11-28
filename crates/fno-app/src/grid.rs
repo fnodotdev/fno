@@ -203,7 +203,8 @@ fn paint_text(
         window
             .text_system()
             .shape_line(SharedString::from(text), m.font_size, &[run], force);
-    let _ = line.paint(at, m.cell.height, window, cx);
+    line.paint(at, m.cell.height, gpui::TextAlign::Left, None, window, cx)
+        .unwrap_or_default();
 }
 
 /// Paint box chars as quads; a char with no quads (a diagonal) falls back

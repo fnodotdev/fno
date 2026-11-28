@@ -1210,6 +1210,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "fno-homes",
  "fno-mail",
  "fno-proto",
  "futures-util",
@@ -1239,8 +1240,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "fno-mail"
+name = "fno-homes"
 version = "0.1.0"
+
+[[package]]
+name = "fno-mail"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "serde",

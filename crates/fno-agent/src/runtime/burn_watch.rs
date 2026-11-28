@@ -1139,6 +1139,15 @@ fn wake(sid: &str, node: &str, busy: bool, reason: &str, runner: Runner) -> (boo
     wake_with_text(sid, busy, &wake_text(node, reason), SENDER, runner)
 }
 
+/// Did the wake reach the worker by a lane that guarantees the read? A
+/// durable-queued mail lands at the worker's next turn, so it counts:
+/// recording only live-lane deliveries left a busy lead's warning set
+/// unrecorded, and every later pass re-mailed it (the 2026-11-27 resend
+/// storm). watch_expiry's `via != "durable"` read shares this rule.
+pub(crate) fn wake_reached(sent: bool, lane: &str) -> bool {
+    sent || lane == "durable"
+}
+
 pub(crate) fn wake_with_text(
     sid: &str,
     busy: bool,
@@ -1165,7 +1174,8 @@ pub(crate) fn wake_with_text(
     if crate::mail_inject::mail_send_accepted(code, &stdout) {
         return (true, "mail");
     }
-    let durable = crate::mail_inject::mail_send_receipt(&stdout).contains("durable");
+    let durable = crate::mail_inject::mail_send_receipt(&stdout).contains("durable")
+        || mail_send_queued_for_drain(&stdout);
     if durable && busy {
         return (false, "durable");
     }
@@ -1183,7 +1193,27 @@ pub(crate) fn wake_with_text(
         resume_argv.insert(4, "--message-already-queued".to_string());
     }
     let (code, _, _) = runner(&resume_argv, "");
+    if durable && code != 0 {
+        // The mail leg already queued the bytes durably, so a
+        // not-delivered resume leaves the copy with the recipient's
+        // drain: the wake reached by the durable lane and the caller
+        // records. The busy-session hold (the "already queued and will
+        // not be resent" arm) read as unreached here, and every later
+        // pass re-mailed the same unchanged set.
+        return (false, "durable");
+    }
     (code == 0, "resume")
+}
+
+/// The send door's two queued-for-drain verdicts, matched over the whole
+/// send stdout. The demotion JSON carries "queued (durable)" in its status
+/// field, and the live-drain hold prints "queued, not landed yet", whose
+/// last stdout line is only the verify-later hint, so a last-line receipt
+/// parse reads neither. Tests build their fixtures through the renderers
+/// in mail_receipt.rs, so rewording either verdict fails beside its own
+/// test.
+fn mail_send_queued_for_drain(stdout: &str) -> bool {
+    stdout.contains("queued (durable)") || stdout.contains("queued, not landed yet")
 }
 
 fn sample_session(
@@ -1866,6 +1896,63 @@ mod tests {
         assert!(escalated.escalated);
         let (d, _) = decide(Some(&escalated), &flat, 9000, 7200, 0.01);
         assert_eq!(d, Decision::Hold);
+    }
+
+    #[test]
+    fn a_held_send_reads_durable_and_the_queued_copy_never_requeues() {
+        // The notice-router's live lane: the send door prints the demotion
+        // JSON whose status names "queued (durable)", then report_landing
+        // appends the held text, whose last line is only the verify hint -
+        // so a last-line receipt parse reads neither verdict. With
+        // busy=false (the notice leg's only posture) the wake must still
+        // end on the durable lane: the resume carries
+        // --message-already-queued, and its not-delivered exit records, so
+        // the next beat stays silent. Fixtures ride the real renderers, so
+        // rewording either verdict fails this test beside its own.
+        let stdout = format!(
+            "{}\n{}",
+            crate::mail_receipt::demotion(
+                "fmail-1",
+                Some("not-confirmed"),
+                6.0,
+                Some("s-1"),
+                None,
+                None,
+                None,
+                None,
+            ),
+            crate::mail_receipt::held_for_turn("fmail-1", "s-1"),
+        );
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            calls.push(argv.to_vec());
+            if argv.get(2).is_some_and(|step| step == "mail") {
+                (0, stdout.clone(), String::new())
+            } else {
+                (
+                    16,
+                    String::new(),
+                    "already queued and will not be resent".into(),
+                )
+            }
+        };
+        let (landed, via) = wake_with_text("s-1", false, "body", "fno/notice-router", &mut runner);
+        assert_eq!((landed, via), (false, "durable"));
+        assert_eq!(calls.len(), 2, "held send: one mail leg, one wake resume");
+        assert!(calls
+            .last()
+            .is_some_and(|argv| argv.iter().any(|a| a == "--message-already-queued")));
+
+        // The idle arm: the same held stdout, the resume wakes the session.
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            if argv.get(2).is_some_and(|step| step == "mail") {
+                (0, stdout.clone(), String::new())
+            } else {
+                (0, String::new(), String::new())
+            }
+        };
+        let (landed, via) = wake_with_text("s-1", false, "body", "fno/notice-router", &mut runner);
+        assert_eq!((landed, via), (true, "resume"));
     }
 
     #[test]

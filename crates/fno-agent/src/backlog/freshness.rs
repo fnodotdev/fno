@@ -354,15 +354,20 @@ fn resolve_main(repo: &Path) -> Option<String> {
     git_out(repo, &["rev-parse", "--verify", "origin/main^{commit}"])
 }
 
+/// `code_index.main_sha` from frontmatter, else from the `## Gate records`
+/// fence (the body form).
 fn frontmatter_main_sha(text: &str) -> Option<String> {
     let mut lines = text.lines();
     if lines.next()? != "---" {
         return None;
     }
+    let fm: Vec<&str> = lines.take_while(|l| *l != "---").collect();
+    let fence = crate::plan_doc::records::fence_text(text).unwrap_or_default();
+    main_sha_in(fm.into_iter()).or_else(|| main_sha_in(fence.lines()))
+}
+
+fn main_sha_in<'a>(lines: impl Iterator<Item = &'a str>) -> Option<String> {
     for line in lines {
-        if line == "---" {
-            break;
-        }
         // The key nests under `code_index:` in every real plan, so match the
         // trimmed line, not the raw indentation.
         if let Some(v) = line.trim().strip_prefix("main_sha:") {
@@ -848,5 +853,8 @@ mod tests {
             ),
             0
         );
+        // The body form records main_sha in the `## Gate records` fence.
+        let fence = "---\nstatus: ready\n---\n\n## Gate records\n\n```yaml\ncode_index:\n  main_sha: abc1234\n  providers: []\n```\n";
+        assert_eq!(frontmatter_main_sha(fence).as_deref(), Some("abc1234"));
     }
 }

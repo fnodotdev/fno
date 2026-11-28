@@ -524,6 +524,10 @@ event_types:
           type: string
           enum: [fresh, shared, unknown]
           description: "Positive evidence about the reviewer's execution context: fresh means a harness-recorded forked review context, shared means a same-context review tool result, and unknown means no positive context marker. Measures context independence, never who invoked the verb, and is not gating."
+        stamp_provenance:
+          type: string
+          enum: [typed, derived]
+          description: "How the reviewer_context stamp was made (D2344 ruling 3). typed: the calling lane passed the positional - a claim by the dispatching session, never producer evidence. The emitter defaults to it, so every run without --stamp-provenance derived is typed. derived: the producer read harness records itself (the native code-review hook's fork/in-session derivation) and stamped from them, the stronger evidence. OPTIONAL: rows before this field predate it."
         execution_context:
           type: string
           enum: [inline, fork]
@@ -6856,6 +6860,19 @@ event_types:
           description: "True when the pane write landed; a false value retries after the interval floor."
         reason:
           type: string
+
+  - name: mux_dir_unset
+    description: "The in-process mux pane client found FNO_MUX_DIR unset, so a pane send or read answered nothing. The fno front door exports the variable where it launches the daemon; this row marks a daemon started some other way. Emitted once per process."
+    sources: [daemon]
+    data:
+      required: [env]
+      properties:
+        env:
+          type: string
+          description: "The variable the client needed."
+        effect:
+          type: string
+          description: "What stays dark until the launcher exports it."
 
   - name: shell_writers_sweep
     description: "The daemon's hourly legacy shell-writer rendezvous sweep: entries older than a day under any events.jsonl.shell-writers.d are unlinked and an emptied directory is dropped. The rendezvous is residue of the retired shell append path; no current writer creates entries. Emitted for every run including a zero-count one, so a quiet run is never mistaken for a sweep that did not run."

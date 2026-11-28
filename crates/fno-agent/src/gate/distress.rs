@@ -505,25 +505,55 @@ fn session_runs<'a>(run: &'a str, harness_session: Option<&'a str>) -> Vec<&'a s
     runs
 }
 
+/// A class whose every rung routes off-session, so a restated reason is a
+/// repeat mail and never a climb toward a new step.
+fn always_off_session(class: HelpClass) -> bool {
+    matches!(
+        class,
+        HelpClass::Held
+            | HelpClass::EnvDenied
+            | HelpClass::GateUnsatisfiable
+            | HelpClass::GateDeadlock
+            | HelpClass::Question
+            | HelpClass::Unclassified
+    )
+}
+
 /// True when the project log already carries a `blocked` row for this run
-/// with this class on this turn. The stop hook re-fires on every turn end,
-/// so without this a session whose stopping turn still carries the same
-/// distress would re-write a row on each fire; a NEW turn with the same
-/// class appends and climbs (the rung count), because the run moved and the
-/// class recurred.
+/// with this class and either this turn or this reason. The stop hook
+/// re-fires on every turn end, so without the turn arm a session whose
+/// stopping turn still carries the same distress would re-write a row on
+/// each fire. The reason arm covers a worker that restates one block on every
+/// turn: the same class and reason is one event, so it files one mail and one
+/// route, until a different reason of that class lands. Only classes that
+/// always route off-session take the reason arm:
+/// Wait, Budget and the in-session classes climb on recurrence by design. A
+/// NEW turn with a NEW reason still appends and climbs (the rung count),
+/// because the run moved. `reason` is the capped text the row stores.
 fn blocked_distress_already_emitted(
     project_events: &Path,
     runs: &[&str],
     class: HelpClass,
     turn_key: &str,
+    reason: &str,
 ) -> bool {
-    blocked_rows_for(project_events, runs, |v| {
+    let rows = blocked_rows_for(project_events, runs, |v| {
         v.pointer("/data/class").and_then(|x| x.as_str()) == Some(class.as_str())
-            && v.pointer("/data/turn").and_then(|x| x.as_str()) == Some(turn_key)
-    })
-    .into_iter()
-    .next()
-    .is_some()
+    });
+    let str_at = |v: &Value, p: &str| v.pointer(p).and_then(|x| x.as_str()).map(str::to_owned);
+    if rows
+        .iter()
+        .any(|v| str_at(v, "/data/turn").as_deref() == Some(turn_key))
+    {
+        return true;
+    }
+    // Only the newest row of the class counts for the reason arm, so a block
+    // that recurs after a different one was filed is a new event.
+    always_off_session(class)
+        && rows
+            .iter()
+            .max_by_key(|v| str_at(v, "/ts").unwrap_or_default())
+            .is_some_and(|v| str_at(v, "/data/reason").as_deref() == Some(reason))
 }
 
 /// Every committed `blocked` row for one session, narrowed by a predicate on
@@ -714,12 +744,13 @@ fn append_blocked_event(
 ) -> Option<u64> {
     let cap = |s: &str| -> String { s.chars().take(BLOCKED_DATA_STR_CAP).collect() };
     let reason = cap(&distress.reason);
-    // Dedup key is session + class + turn (F4): a re-fire on the same turn
-    // writes nothing; a new turn with the same class writes a row and the
-    // rung count climbs. The stored row carries the CAPPED reason and the
-    // capped turn key, so the comparison joins on stored values.
+    // Dedup key is session + class + (turn or reason): a re-fire on the same
+    // turn, or a later turn restating the same reason on an off-session
+    // class, writes nothing; a new turn with a new reason writes a row and
+    // the rung count climbs. The stored row carries the CAPPED reason and
+    // the capped turn key, so the comparison joins on stored values.
     let runs = session_runs(run, harness_session);
-    if blocked_distress_already_emitted(project_events, &runs, distress.class, turn_key) {
+    if blocked_distress_already_emitted(project_events, &runs, distress.class, turn_key, &reason) {
         return None;
     }
     let rung = blocked_rows_for(project_events, &runs, |v| {
@@ -1365,8 +1396,9 @@ mod tests {
 
     #[test]
     fn a_second_turn_with_the_same_class_climbs_the_rung() {
-        // AC5/AC6: two stop fires on the same turn with reworded reasons
-        // write one row; a new turn with the same class writes rung 1.
+        // Two stop fires on the same turn with reworded reasons write one
+        // row; a later turn with the same reason writes none; a later turn
+        // with a new reason writes rung 1.
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join("events.jsonl");
         let global = tmp.path().join("global.jsonl");
@@ -1374,7 +1406,7 @@ mod tests {
             reason: reason.to_string(),
             evidence: None,
             kind: DistressKind::Help,
-            class: HelpClass::StalePlan,
+            class: HelpClass::EnvDenied,
         };
         assert!(append_blocked_event(
             &project,
@@ -1398,6 +1430,20 @@ mod tests {
             None,
         )
         .is_none());
+        assert!(
+            append_blocked_event(
+                &project,
+                &global,
+                "run-a",
+                None,
+                None,
+                &mk("wall a"),
+                "turn-2",
+                None,
+            )
+            .is_none(),
+            "a later turn restating the same reason is one event"
+        );
         assert!(append_blocked_event(
             &project,
             &global,
@@ -1405,7 +1451,7 @@ mod tests {
             None,
             None,
             &mk("wall b"),
-            "turn-2",
+            "turn-3",
             None,
         )
         .is_some());
@@ -1415,6 +1461,20 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[1]["data"]["rung"], 1);
+        assert!(
+            append_blocked_event(
+                &project,
+                &global,
+                "run-a",
+                None,
+                None,
+                &mk("wall a"),
+                "turn-4",
+                None,
+            )
+            .is_some(),
+            "a block that recurs after a different one is a new event"
+        );
     }
 
     /// One session files a help under two ids: the stop hook's scan uses the

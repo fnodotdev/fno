@@ -174,7 +174,7 @@ fn redraw(
 }
 
 /// The team record's rename once the registry label moved. A failure rolls
-/// the label back to `old_label` and answers the refusal.
+/// every row the rename touched back, in one write, and answers the refusal.
 fn apply_team_rename(
     ask: (
         &crate::paths::AgentsHome,
@@ -183,7 +183,7 @@ fn apply_team_rename(
     ),
     session: &str,
     new_name: &str,
-    old_label: &str,
+    priors: &[crate::state::RegistryEntry],
     fresh_draw: bool,
 ) -> Result<(String, String), crate::protocol::Response> {
     use crate::protocol::{ErrorCode, Response};
@@ -198,8 +198,8 @@ fn apply_team_rename(
     )
     .and_then(|team| team.ok_or_else(|| "the named live team changed before rename".to_string()));
     result.map_err(|team_error| {
-        let rollback = match crate::state::rename_agent(registry_path, session, old_label, None) {
-            Ok(_) => "registry label rolled back".to_string(),
+        let rollback = match crate::state::restore_registry_rows(registry_path, priors) {
+            Ok(()) => "registry label rolled back".to_string(),
             Err(error) => format!("registry rollback failed: {error}"),
         };
         Response::err(
@@ -250,7 +250,6 @@ pub(crate) fn respond(
         Ok(source) => source,
         Err(error) => return Response::err(req.id, ErrorCode::Internal, error),
     };
-    let old_label = source.name.clone();
     let session = source.harness_session_id.clone();
     let drawn = match redraw(home, &registry_path, session.as_deref(), new_name) {
         Ok(drawn) => drawn,
@@ -285,14 +284,20 @@ pub(crate) fn respond(
     } else {
         new_name.to_string()
     };
-    let (old, new) = match crate::state::rename_agent(&registry_path, token, &label, None) {
+    let (old, new, priors) = match crate::state::rename_agent_displacing(
+        &registry_path,
+        token,
+        &label,
+        None,
+        |row, _| crate::state::row_is_terminal(row),
+    ) {
         Ok(result) => result,
         Err(error) => return Response::err(req.id, ErrorCode::Internal, release(error)),
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
             let ask = (home, req, registry_path.as_path());
-            match apply_team_rename(ask, session, new_name, &old_label, fresh_draw) {
+            match apply_team_rename(ask, session, new_name, &priors, fresh_draw) {
                 Ok(team) => Some(team),
                 Err(response) => return response,
             }

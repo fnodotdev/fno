@@ -2241,16 +2241,6 @@ fn project_rows(args: &FeedArgs, home: &AgentsHome) -> Vec<FeedRow> {
     rows
 }
 
-/// The whole history, as the held reader holds it: every leg, no page and
-/// no prefilter.
-pub(crate) fn serve_rows(home: &AgentsHome) -> Vec<FeedRow> {
-    let Ok(args) = parse_args(&[]) else {
-        return Vec::new();
-    };
-    let rows = project_rows(&args, home);
-    filter_rows(rows, &Page::default(), &args.pre, None, None)
-}
-
 pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     let args = match parse_args(rest) {
         Ok(a) => a,

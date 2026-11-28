@@ -427,6 +427,11 @@ impl AgentsHome {
         self.root.join("manifests")
     }
 
+    /// The daemon hold marker: while it exists no daemon starts.
+    pub fn daemon_hold(&self) -> PathBuf {
+        self.root.join("daemon.hold")
+    }
+
     pub fn supervisor_sock(&self) -> PathBuf {
         self.root.join("supervisor.sock")
     }

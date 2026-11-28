@@ -17,7 +17,6 @@
 use crate::attention::{quiet_from, Quiet};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::PathBuf;
 
 /// A cache older than this names its age instead of the items.
@@ -27,10 +26,7 @@ const MAX_ITEMS: usize = 5;
 /// `fno-agent hook prompt`: payload on stdin, the envelope (or nothing) on
 /// stdout, exit 0 always.
 pub fn run(_args: &[String]) -> i32 {
-    let mut input = String::new();
-    if std::io::stdin().read_to_string(&mut input).is_err() {
-        return 0;
-    }
+    let input = super::read_stdin();
     let payload: Value = serde_json::from_str(&input).unwrap_or(Value::Null);
     let prompt = payload.get("prompt").and_then(Value::as_str).unwrap_or("");
     if crate::mail_inject::contains_fno_mail_tag_anywhere(prompt)
@@ -97,14 +93,14 @@ pub fn run(_args: &[String]) -> i32 {
             }
         }
     };
-    println!(
-        "{}",
-        json!({
+    super::emit_line(
+        &json!({
             "hookSpecificOutput": {
                 "hookEventName": event_name,
                 "additionalContext": text,
             }
         })
+        .to_string(),
     );
     0
 }

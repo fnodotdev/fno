@@ -121,10 +121,8 @@ need_grep() { # <label> <regex> <human>
 need_grep "tarball-url"   'url "https://github\.com/[^"]*fno-agent-macos-x64\.tar\.gz"' "pins the release tarball as the top-level url"
 need_grep "arm-url"       'fno-agent-macos-arm64\.tar\.gz' "pins the arm tarball in the on_macos arm block"
 need_grep "no-python-dep" 'depends_on :macos' "declares macOS only (no Python dependency)"
-need_grep "libexec-install" 'libexec\.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker", "fno-app"' \
-  "installs the tarball's binaries into libexec, fno-app included"
-need_grep "app-symlink"   'bin\.install_symlink +libexec/"fno-app"' \
-  "symlinks fno-app onto the keg bin"
+need_grep "libexec-install" 'libexec\.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"' \
+  "installs the tarball's binaries into libexec"
 need_grep "symlink"       'bin\.install_symlink +libexec/"fno-agent"' \
   "symlinks the agent binaries onto the keg bin (Locked Decision 4)"
 need_grep "frontdoor"     'bin\.install_symlink +libexec/"fno"' \
@@ -207,17 +205,16 @@ class Fno < Formula
   depends_on :macos
 
   def install
-    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker", "fno-app"
+    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"
     bin.install_symlink libexec/"fno"
     bin.install_symlink libexec/"fno-agent"
     bin.install_symlink libexec/"fno-agent-daemon"
     bin.install_symlink libexec/"fno-agent-worker"
-    bin.install_symlink libexec/"fno-app"
   end
 
   test do
     assert_match "[]", shell_output("#{bin}/fno mux ls --json")
-    %w[fno fno-agent fno-agent-daemon fno-agent-worker fno-app].each do |b|
+    %w[fno fno-agent fno-agent-daemon fno-agent-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end
@@ -234,23 +231,11 @@ RUBY
 
   KEGBIN="$(brew --prefix 2>/dev/null)/bin"
 
-  # --- check 5: all four core executables plus fno-app resolve under the keg bin ---
-  for b in fno fno-agent fno-agent-daemon fno-agent-worker fno-app; do
+  # --- check 5: all four core executables resolve under the keg bin ---
+  for b in fno fno-agent fno-agent-daemon fno-agent-worker; do
     if [ -x "$KEGBIN/$b" ]; then pass "binary:$b" "present + executable on the keg bin"
     else miss "binary:$b" "absent (the explicit symlink must surface the tarball's binaries)"; fi
   done
-
-  # fno-app answers from the keg bin: the resolver promise this node keeps.
-  if [ -x "$KEGBIN/fno-app" ]; then
-    run_capture "$KEGBIN/fno-app" --version
-    if [ "$RC" -eq 0 ]; then
-      pass "app-version" "fno-app --version answers from the keg bin"
-    else
-      miss "app-version" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
-    fi
-  else
-    miss "app-version" "fno-app not on the keg bin at $KEGBIN/fno-app"
-  fi
 
   # --- check 6: the advertised command runs (no 127) + brew test passes ---
   # `fno mux ls` proves the Rust front door natively; the tarball carries no

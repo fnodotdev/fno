@@ -10,7 +10,25 @@
 //! I/O (plan-file reads, gh PR fetches, transcript reads) stays at the
 //! [`super`] command layer or behind the injected readers, so the functions
 //! here are testable without touching disk or the network.
+//!
+//! The fold also reads what a session invoked: one row per skill, typed
+//! command, subagent and goal, with its node, its start and end timestamps
+//! and its outcome ([`invocations_from_transcript`]). The rows are a
+//! read-time view of the transcript and are written nowhere. They stand in
+//! for one half of the loop's provenance, the half that says which session
+//! ran what, for which node and for how long. They do not stand in for the
+//! `stop_decision`, `loop_check` and `termination` rows: those hold a
+//! decision, a PR and CI state and a fingerprint, and a transcript holds
+//! none of them.
+//!
+//! The fold is the one reader behind the skill read, not the only reader of
+//! these shapes in the crate. Three others read the same shapes by string key
+//! for other outputs, and none is fed from here: `session_backfill.rs` stamps
+//! a session row's start and end, `correction_fold.rs` collects the session
+//! facts of a correction ruling, and `skill_drift.rs` lists the skills a lead
+//! session called since its last compaction.
 
+use crate::runtime::attended::xml_block;
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -311,48 +329,582 @@ fn is_uuid(session_id: &str) -> bool {
     true
 }
 
-/// `_skills_from_transcript` (scoreboard/fold.py:596): scan transcript JSONL
-/// lines for Skill tool_use blocks; return the `input.skill` id of each.
-/// A transcript line that names no Skill tool_use cannot yield a skill run:
-/// the match below needs a tool_use block whose `name` is this literal, and
-/// the literal itself is the line-level pre-filter. Transcript lines are the
-/// sweep's dominant input, so the parse only runs on candidate lines.
-pub(crate) const SKILL_USE_MARKER: &str = "Skill";
+/// What a session invoked. The `kind` of an [`Invocation`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InvocationKind {
+    Skill,
+    Command,
+    Agent,
+    Goal,
+}
 
-fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
-    let mut found = Vec::new();
+/// How an invocation ended.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Outcome {
+    Ok,
+    Error,
+    /// A background launch was acknowledged. The transcript holds no completion.
+    Launched,
+    Met,
+    Failed,
+    Cleared,
+    /// A goal is set and no record has ended it.
+    Open,
+}
+
+/// A goal's own accounting, from the `goal_status` record that ended it.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct GoalTotals {
+    pub iterations: Option<u64>,
+    #[serde(rename = "durationMs")]
+    pub duration_ms: Option<u64>,
+    pub tokens: Option<u64>,
+}
+
+/// One thing a session invoked, folded from its transcript. `start` and `end`
+/// are the transcript's own timestamps. A row with no `end` is still open on
+/// the transcript: a launched agent, or a call with no result yet.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct Invocation {
+    pub kind: InvocationKind,
+    pub name: String,
+    pub session: String,
+    pub node: Option<String>,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    /// `None` when the transcript holds no outcome: a typed command has none.
+    pub outcome: Option<Outcome>,
+    /// On a goal row that ended, and on no other row.
+    pub goal: Option<GoalTotals>,
+}
+
+/// Folds one session's transcript lines into the rows of what it invoked, in
+/// transcript order. Four sources feed it: a Skill `tool_use` block, a user
+/// line that opens with a typed command's envelope, an Agent or Task
+/// `tool_use` block and its result, and a `goal_status` attachment. A line
+/// that does not parse is skipped, as it always was. It reads a whole
+/// transcript: a command row ends at the last activity before the operator's
+/// next turn.
+pub(crate) fn invocations_from_transcript(lines: &[&str]) -> Vec<Invocation> {
+    let mut fold = InvocationFold::default();
     for line in lines {
-        let line = line.trim();
-        if line.is_empty() || !line.contains(SKILL_USE_MARKER) {
-            continue;
+        if let Ok(parsed) = serde_json::from_str::<TranscriptLine>(line) {
+            fold.absorb(parsed);
         }
-        let Ok(obj) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(content) = obj
-            .get("message")
-            .and_then(|m| m.get("content"))
-            .and_then(Value::as_array)
-        else {
-            continue;
-        };
-        for block in content {
-            let is_skill = block.get("type").and_then(Value::as_str) == Some("tool_use")
-                && block.get("name").and_then(Value::as_str) == Some(SKILL_USE_MARKER);
-            if !is_skill {
-                continue;
+    }
+    fold.finish()
+}
+
+/// One transcript line, typed where the fold reads it. A transcript holds a
+/// dozen line types and every line must parse, so each field is optional and a
+/// field whose shape differs between tools has an arm for the other shapes.
+#[derive(serde::Deserialize)]
+struct TranscriptLine {
+    #[serde(rename = "type")]
+    kind: Option<LineKind>,
+    #[serde(rename = "sessionId")]
+    session: Option<String>,
+    timestamp: Option<String>,
+    #[serde(rename = "isMeta")]
+    is_meta: Option<bool>,
+    #[serde(rename = "isSidechain")]
+    is_sidechain: Option<bool>,
+    message: Option<TranscriptMessage>,
+    attachment: Option<AnyAttachment>,
+    #[serde(rename = "toolUseResult")]
+    tool_result: Option<AnyToolResult>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LineKind {
+    Assistant,
+    User,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(serde::Deserialize)]
+struct TranscriptMessage {
+    content: Option<MessageContent>,
+}
+
+/// `message.content` is a string on a typed-command line and a list of blocks
+/// everywhere else. Any other shape is not the fold's to read.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum MessageContent {
+    Text(String),
+    Blocks(Vec<MessageBlock>),
+    Other(serde::de::IgnoredAny),
+}
+
+/// One block of `message.content`. A `tool_use` block carries `id`, `name` and
+/// `input`; a `tool_result` block carries `tool_use_id` and `is_error`.
+#[derive(serde::Deserialize)]
+struct MessageBlock {
+    #[serde(rename = "type")]
+    kind: Option<BlockKind>,
+    id: Option<String>,
+    name: Option<String>,
+    input: Option<ToolInput>,
+    #[serde(rename = "tool_use_id")]
+    tool_use_id: Option<String>,
+    #[serde(rename = "is_error")]
+    is_error: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BlockKind {
+    ToolUse,
+    ToolResult,
+    #[serde(other)]
+    Other,
+}
+
+/// A `tool_use` input. Each tool has its own keys, so an input that is not
+/// this object reads as `Other`, and its block is not a Skill or Agent call.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ToolInput {
+    Args(ToolArgs),
+    Other(serde::de::IgnoredAny),
+}
+
+#[derive(serde::Deserialize)]
+struct ToolArgs {
+    skill: Option<String>,
+    args: Option<String>,
+    description: Option<String>,
+    prompt: Option<String>,
+    subagent_type: Option<String>,
+}
+
+/// `toolUseResult` on a `user` line. Each tool writes its own shape there and
+/// many write a bare string or a list, so any shape that is not the launch
+/// record reads as `Other`.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AnyToolResult {
+    Launch(LaunchRecord),
+    Other(serde::de::IgnoredAny),
+}
+
+#[derive(serde::Deserialize)]
+struct LaunchRecord {
+    status: Option<Launch>,
+}
+
+/// The `status` words that say a tool result is a launch and not a completion.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Launch {
+    AsyncLaunched,
+    TeammateSpawned,
+    Forked,
+}
+
+/// An attachment line's payload. Only the goal record is the fold's to read.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AnyAttachment {
+    Goal(GoalRecord),
+    Other(serde::de::IgnoredAny),
+}
+
+/// The `goal_status` attachment. `kind` must read `goal_status`, so no other
+/// attachment kind parses as this record.
+#[derive(serde::Deserialize)]
+struct GoalRecord {
+    #[serde(rename = "type")]
+    kind: GoalKind,
+    condition: Option<String>,
+    met: Option<bool>,
+    sentinel: Option<bool>,
+    failed: Option<bool>,
+    iterations: Option<u64>,
+    #[serde(rename = "durationMs")]
+    duration_ms: Option<u64>,
+    tokens: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+enum GoalKind {
+    #[serde(rename = "goal_status")]
+    GoalStatus,
+}
+
+/// The goal record of an attachment line, when the line carries one.
+fn goal_status(attachment: Option<AnyAttachment>) -> Option<GoalRecord> {
+    match attachment? {
+        AnyAttachment::Goal(record) => Some(record),
+        AnyAttachment::Other(_) => None,
+    }
+}
+
+/// The state of one pass of [`invocations_from_transcript`]: the rows so far
+/// and the rows that a later line can still close.
+#[derive(Default)]
+struct InvocationFold {
+    rows: Vec<Invocation>,
+    /// A row's index, by the `tool_use` id whose result has not landed.
+    waiting: HashMap<String, usize>,
+    /// The row of the typed command whose turn is still open.
+    open_command: Option<usize>,
+    /// The row of the goal that is set and not ended.
+    open_goal: Option<usize>,
+    /// The newest assistant or user timestamp before the line being read.
+    last_activity: Option<String>,
+    session: Option<String>,
+    /// The node that the newest typed command named. A row with no node of
+    /// its own ran inside that command's turn.
+    command_node: Option<String>,
+}
+
+impl InvocationFold {
+    fn absorb(&mut self, line: TranscriptLine) {
+        let TranscriptLine {
+            kind,
+            session,
+            timestamp,
+            is_meta,
+            is_sidechain,
+            message,
+            attachment,
+            tool_result,
+        } = line;
+        // A subagent's own lines ride in its parent's file on some harness
+        // builds. They are not what the parent session invoked.
+        if is_sidechain == Some(true) {
+            return;
+        }
+        if self.session.is_none() {
+            self.session = session.filter(|s| !s.is_empty());
+        }
+        if let Some(record) = goal_status(attachment) {
+            self.absorb_goal(record, timestamp);
+            return;
+        }
+        match (kind, message) {
+            (Some(LineKind::Assistant), Some(message)) => {
+                self.absorb_tool_uses(&message, timestamp)
             }
-            if let Some(skill) = block
-                .get("input")
-                .and_then(|i| i.get("skill"))
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                found.push(skill.to_string());
+            (Some(LineKind::User), Some(message)) => {
+                self.absorb_user_line(&message, timestamp, is_meta == Some(true), tool_result)
+            }
+            _ => {}
+        }
+    }
+
+    fn session(&self) -> String {
+        self.session.clone().unwrap_or_default()
+    }
+
+    /// An `assistant` line: each Skill, Agent or Task `tool_use` block opens a
+    /// row that waits for its result.
+    fn absorb_tool_uses(&mut self, message: &TranscriptMessage, timestamp: Option<String>) {
+        if let Some(MessageContent::Blocks(blocks)) = &message.content {
+            for block in blocks {
+                self.open_tool_row(block, &timestamp);
+            }
+        }
+        self.last_activity = timestamp;
+    }
+
+    fn open_tool_row(&mut self, block: &MessageBlock, timestamp: &Option<String>) {
+        let kind = match block.name.as_deref() {
+            Some("Skill") => InvocationKind::Skill,
+            Some("Agent" | "Task") => InvocationKind::Agent,
+            _ => return,
+        };
+        let Some(ToolInput::Args(args)) = &block.input else {
+            return;
+        };
+        let Some(id) = block.id.as_deref().filter(|id| !id.is_empty()) else {
+            return;
+        };
+        let skill = kind == InvocationKind::Skill;
+        let name = if skill {
+            args.skill.as_deref()
+        } else {
+            args.subagent_type.as_deref().or(block.name.as_deref())
+        };
+        let node = if skill {
+            crate::rules_source::node_in_text(args.args.as_deref().unwrap_or(""))
+        } else {
+            crate::rules_source::node_in_text(args.description.as_deref().unwrap_or(""))
+                .or_else(|| crate::rules_source::node_in_text(args.prompt.as_deref().unwrap_or("")))
+        };
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            return;
+        };
+        self.rows.push(Invocation {
+            kind,
+            name: name.to_string(),
+            session: self.session(),
+            node: node.or_else(|| self.command_node.clone()),
+            start: timestamp.clone(),
+            end: None,
+            outcome: None,
+            goal: None,
+        });
+        self.waiting.insert(id.to_string(), self.rows.len() - 1);
+    }
+
+    /// A `user` line. Its `tool_result` blocks close waiting rows. A typed
+    /// command ends the open command row and opens a new one. A line that
+    /// opens a turn of the operator's own ends the open command row. Every
+    /// other line is activity inside the turn that is open.
+    fn absorb_user_line(
+        &mut self,
+        message: &TranscriptMessage,
+        timestamp: Option<String>,
+        is_meta: bool,
+        tool_result: Option<AnyToolResult>,
+    ) {
+        self.absorb_results(message, timestamp.as_deref(), tool_result);
+        if !is_meta {
+            if let Some((name, text)) = command_text(message) {
+                self.close_command();
+                self.open_command_row(name, text, timestamp);
+                return;
+            }
+            if opens_turn(message) {
+                self.close_command();
+            }
+        }
+        self.last_activity = timestamp;
+    }
+
+    /// The `tool_result` blocks of a `user` line close the rows that wait for
+    /// their ids. A launch word in the line's `toolUseResult` says a tool
+    /// returned a running task, so that row has no end yet. The word is the
+    /// line's and not one block's, so it names one call only when one result
+    /// on the line closes a waiting row.
+    fn absorb_results(
+        &mut self,
+        message: &TranscriptMessage,
+        timestamp: Option<&str>,
+        tool_result: Option<AnyToolResult>,
+    ) {
+        let Some(MessageContent::Blocks(blocks)) = &message.content else {
+            return;
+        };
+        let results: Vec<&MessageBlock> = blocks
+            .iter()
+            .filter(|block| block.kind == Some(BlockKind::ToolResult))
+            .collect();
+        let launched = matches!(
+            tool_result,
+            Some(AnyToolResult::Launch(LaunchRecord { status: Some(_) }))
+        ) && results
+            .iter()
+            .filter(|block| {
+                block
+                    .tool_use_id
+                    .as_deref()
+                    .is_some_and(|id| self.waiting.contains_key(id))
+            })
+            .count()
+            == 1;
+        for block in results {
+            let Some(index) = block
+                .tool_use_id
+                .as_deref()
+                .and_then(|id| self.waiting.remove(id))
+            else {
+                continue;
+            };
+            let Some(row) = self.rows.get_mut(index) else {
+                continue;
+            };
+            row.outcome = Some(match (block.is_error == Some(true), launched) {
+                (true, _) => Outcome::Error,
+                (false, true) => Outcome::Launched,
+                (false, false) => Outcome::Ok,
+            });
+            if row.outcome != Some(Outcome::Launched) {
+                row.end = timestamp.map(str::to_string);
             }
         }
     }
-    found
+
+    /// A `goal_status` record. The set record opens a goal row. The met,
+    /// failed and cleared records close the open goal row.
+    fn absorb_goal(&mut self, record: GoalRecord, timestamp: Option<String>) {
+        let GoalRecord {
+            kind: GoalKind::GoalStatus,
+            condition,
+            met,
+            sentinel,
+            failed,
+            iterations,
+            duration_ms,
+            tokens,
+        } = record;
+        let Some(condition) = condition.filter(|c| !c.is_empty()) else {
+            return;
+        };
+        let ended = match (met, sentinel, failed) {
+            (Some(true), Some(true), _) => Outcome::Cleared,
+            (Some(true), _, _) => Outcome::Met,
+            (_, _, Some(true)) => Outcome::Failed,
+            _ => return self.open_goal(condition, timestamp),
+        };
+        let totals = GoalTotals {
+            iterations,
+            duration_ms,
+            tokens,
+        };
+        match self.open_goal {
+            Some(index) if self.goal_is_open(&condition) => {
+                self.open_goal = None;
+                if let Some(row) = self.rows.get_mut(index) {
+                    row.end = timestamp;
+                    row.outcome = Some(ended);
+                    row.goal = Some(totals);
+                }
+            }
+            _ => self
+                .rows
+                .push(self.goal_row(condition, None, timestamp, ended, Some(totals))),
+        }
+    }
+
+    /// Whether the goal that is open is this one.
+    fn goal_is_open(&self, condition: &str) -> bool {
+        self.open_goal
+            .and_then(|index| self.rows.get(index))
+            .is_some_and(|row| row.name == condition)
+    }
+
+    /// A set record, or a not-met record with no open goal. A goal has one
+    /// row, so a record for a goal that is already open adds nothing. A set
+    /// record for another condition ends the open goal: the harness replaced it.
+    fn open_goal(&mut self, condition: String, timestamp: Option<String>) {
+        if self.goal_is_open(&condition) {
+            return;
+        }
+        if let Some(index) = self.open_goal.take() {
+            if let Some(row) = self.rows.get_mut(index) {
+                row.end = timestamp.clone();
+                row.outcome = Some(Outcome::Cleared);
+            }
+        }
+        self.open_goal = Some(self.rows.len());
+        self.rows
+            .push(self.goal_row(condition, timestamp, None, Outcome::Open, None));
+    }
+
+    fn goal_row(
+        &self,
+        condition: String,
+        start: Option<String>,
+        end: Option<String>,
+        outcome: Outcome,
+        goal: Option<GoalTotals>,
+    ) -> Invocation {
+        Invocation {
+            kind: InvocationKind::Goal,
+            name: condition,
+            session: self.session(),
+            node: None,
+            start,
+            end,
+            outcome: Some(outcome),
+            goal,
+        }
+    }
+
+    /// A typed command opens a row. Its args are read on their own, because
+    /// the tag order differs between harness builds.
+    fn open_command_row(&mut self, name: &str, text: &str, timestamp: Option<String>) {
+        let node = xml_block(text, "<command-args>", "</command-args>")
+            .and_then(crate::rules_source::node_in_text);
+        self.command_node = node.clone();
+        self.open_command = Some(self.rows.len());
+        self.rows.push(Invocation {
+            kind: InvocationKind::Command,
+            name: name.trim_start_matches('/').to_string(),
+            session: self.session(),
+            node: node.or_else(|| self.command_node.clone()),
+            start: timestamp,
+            end: None,
+            outcome: None,
+            goal: None,
+        });
+        self.last_activity = self.rows.last().and_then(|row| row.start.clone());
+    }
+
+    /// The open command row ends at the last activity before the line being
+    /// read. The caller runs this before it records that line.
+    fn close_command(&mut self) {
+        if let Some(row) = self
+            .open_command
+            .take()
+            .and_then(|index| self.rows.get_mut(index))
+        {
+            row.end = self.last_activity.take();
+        }
+    }
+
+    fn finish(mut self) -> Vec<Invocation> {
+        self.close_command();
+        // A goal's set record is written before the command line that names its
+        // node, so a goal row takes the newest command's node when the pass
+        // ends.
+        for row in self.rows.iter_mut() {
+            if row.kind == InvocationKind::Goal && row.node.is_none() {
+                row.node = self.command_node.clone();
+            }
+        }
+        self.rows
+    }
+}
+
+/// Whether a `user` line opens a turn of the operator's own. A result rides
+/// inside the turn that is open, and so does every harness-injected shape: a
+/// mail, a notification, a compaction summary. The provenance classifier owns
+/// that list.
+fn opens_turn(message: &TranscriptMessage) -> bool {
+    match &message.content {
+        Some(MessageContent::Text(text)) => matches!(
+            crate::provenance::classify_text(text, None),
+            crate::provenance::Verdict::Operator(_)
+        ),
+        Some(MessageContent::Blocks(blocks)) => !blocks
+            .iter()
+            .any(|block| block.kind == Some(BlockKind::ToolResult)),
+        _ => false,
+    }
+}
+
+/// A typed command on a `user` line: the name inside its `command-name` tag
+/// and the line's text. The command envelope opens the text. A compaction
+/// summary and a local command's output quote both tags inside their own
+/// text, so a tag anywhere else opens no command.
+fn command_text(message: &TranscriptMessage) -> Option<(&str, &str)> {
+    let text = match &message.content {
+        Some(MessageContent::Text(text)) => text.trim_start(),
+        _ => return None,
+    };
+    if !(text.starts_with("<command-message>") || text.starts_with("<command-name>")) {
+        return None;
+    }
+    Some((xml_block(text, "<command-name>", "</command-name>")?, text))
+}
+
+/// The kind=skill slice of [`invocations_from_transcript`]: the `input.skill`
+/// id of each Skill `tool_use` block, in transcript order.
+fn skills_from_transcript(lines: &[&str]) -> Vec<String> {
+    invocations_from_transcript(lines)
+        .into_iter()
+        .filter(|row| row.kind == InvocationKind::Skill)
+        .map(|row| row.name)
+        .collect()
 }
 
 /// `_extract_skill_runs` (scoreboard/fold.py:702): (distinct skill ids,
@@ -1300,10 +1852,18 @@ fn fenced_yaml_block(text: &str) -> Option<String> {
 
 /// Best-effort transcript candidate lines for one session id
 /// (`cost/_session_cost.find_transcript` + read): resolve `<sid>.jsonl`
-/// through [`build_transcript_index`]'s memo, read it, and keep only
-/// [`SKILL_USE_MARKER`] lines (the sole consumer is
-/// [`skills_from_transcript`]). None when the id is not a UUID, the index
-/// has no entry, or the read fails (GC'd / per-machine).
+/// through [`build_transcript_index`]'s memo, read it, and keep only the
+/// lines that name [`SKILL_USE_MARKER`] (the skill read is the sole consumer).
+/// None when the id is not a UUID, the index has no entry, or the read fails
+/// (GC'd / per-machine).
+///
+/// A transcript line that names no Skill tool_use cannot yield a skill row,
+/// and the word is the line-level pre-filter. Transcripts are the sweep's
+/// dominant input, so the parse only runs on candidate lines. The other
+/// three kinds of row need the whole transcript and do not read through
+/// here: their end is the last activity before the operator's next turn.
+const SKILL_USE_MARKER: &str = "Skill";
+
 pub(crate) fn default_read_transcript(session_id: &str) -> Option<Vec<String>> {
     if !is_uuid(session_id) {
         return None;
@@ -1494,17 +2054,324 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// The candidate-line guard changes the parse input, not the verdicts:
-    /// a real Skill tool_use is found, prose that merely names Skill is not
-    /// a run, and a malformed candidate line is skipped.
+    const SESSION: &str = "11111111-1111-4111-8111-111111111111";
+
+    /// An `assistant` line with one `tool_use` block. `input` is the block's
+    /// `input` as JSON.
+    fn call_line(ts: &str, id: &str, tool: &str, input: &str) -> String {
+        json!({
+            "type": "assistant",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "message": {"content": [
+                {"type": "tool_use", "id": id, "name": tool, "input": input.parse::<Value>().unwrap()}
+            ]},
+        })
+        .to_string()
+    }
+
+    /// A `user` line with one `tool_result` block. `tool_result` is the line's
+    /// `toolUseResult` as JSON.
+    fn result_line(ts: &str, id: &str, tool_result: &str, is_error: bool) -> String {
+        json!({
+            "type": "user",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "toolUseResult": tool_result.parse::<Value>().unwrap(),
+            "message": {"content": [
+                {"type": "tool_result", "tool_use_id": id, "content": "done", "is_error": is_error}
+            ]},
+        })
+        .to_string()
+    }
+
+    /// An `attachment` line whose payload is a `goal_status` record.
+    fn goal_line(ts: &str, record: Value) -> String {
+        json!({
+            "type": "attachment",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "attachment": record,
+        })
+        .to_string()
+    }
+
+    /// A `user` line whose content is the given string.
+    fn user_line(ts: &str, content: &str) -> String {
+        json!({
+            "type": "user",
+            "sessionId": SESSION,
+            "timestamp": ts,
+            "message": {"content": content},
+        })
+        .to_string()
+    }
+
+    fn fold(lines: &[String]) -> Vec<Invocation> {
+        invocations_from_transcript(&lines.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// A Skill call and its result are one row. A copy of the call adds no
+    /// row, on a request blob line or on a line with no type. A call on a
+    /// subagent's sidechain line adds no row, prose that names Skill adds no
+    /// row, and a malformed line is skipped. The skill read is the kind=skill
+    /// slice.
     #[test]
-    fn skill_use_extraction_unchanged_by_candidate_guard() {
-        let use_line = r#"{"message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#;
-        let prose_line =
-            r#"{"message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#;
-        let found = skills_from_transcript(&[use_line, prose_line]);
-        assert_eq!(found, vec!["fno:blueprint".to_string()]);
-        assert!(skills_from_transcript(&["not json at all but says Skill"]).is_empty());
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
+    fn skill_fixture_folds_one_row_per_call() {
+        let lines = [
+            call_line("2026-11-24T04:12:48.545Z", "call_a", "Skill", r#"{"skill":"fno:blueprint","args":"x-aaaa"}"#),
+            call_line("2026-11-24T04:13:00.000Z", "call_b", "Skill", r#"{"skill":"fno:review"}"#),
+            r#"{"message":{"content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
+            r#"{"type":"api-request-blob","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_a","name":"Skill","input":{"skill":"fno:blueprint"}}]}}"#.to_string(),
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the Skill tool gates delivery"}]}}"#.to_string(),
+            "not json at all but says Skill".to_string(),
+            r#"{"type":"assistant","isSidechain":true,"sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-24T04:12:49.000Z","message":{"content":[{"type":"tool_use","id":"call_side","name":"Skill","input":{"skill":"fno:think"}}]}}"#.to_string(),
+            result_line("2026-11-24T04:12:52.568Z", "call_a", r#"{"success":true,"commandName":"fno:blueprint"}"#, false),
+            result_line("2026-11-24T04:13:01.000Z", "call_b", r#"{"success":false,"commandName":"fno:review"}"#, true),
+        ];
+        let rows = fold(&lines);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0],
+            Invocation {
+                kind: InvocationKind::Skill,
+                name: "fno:blueprint".to_string(),
+                session: SESSION.to_string(),
+                node: Some("x-aaaa".to_string()),
+                start: Some("2026-11-24T04:12:48.545Z".to_string()),
+                end: Some("2026-11-24T04:12:52.568Z".to_string()),
+                outcome: Some(Outcome::Ok),
+                goal: None,
+            }
+        );
+        assert_eq!(rows[1].name, "fno:review");
+        assert_eq!(rows[1].node, None);
+        assert_eq!(rows[1].outcome, Some(Outcome::Error));
+        assert_eq!(
+            skills_from_transcript(&lines.iter().map(String::as_str).collect::<Vec<_>>()),
+            ["fno:blueprint", "fno:review"]
+        );
+    }
+
+    /// A typed command is one row, from its line to the last activity before
+    /// the operator's next turn. A result, a notification, a mail and a
+    /// compaction summary stay inside the turn, and a summary that quotes both
+    /// tags opens no command. A row with no node of its own takes the node of
+    /// the newest typed command.
+    #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
+    fn command_fixture_spans_the_turn() {
+        let rows = fold(&[
+            user_line(
+                "2026-11-24T04:51:25.957Z",
+                r#"<command-message>fno:target</command-message>\n<command-name>/fno:target</command-name>\n<command-args>x-aaaa</command-args>"#,
+            ),
+            call_line(
+                "2026-11-24T04:51:36.409Z",
+                "call_none",
+                "Bash",
+                r#"{"command":"ls"}"#,
+            ),
+            result_line(
+                "2026-11-24T04:51:49.919Z",
+                "call_none",
+                r#""a string""#,
+                false,
+            ),
+            user_line(
+                "2026-11-24T05:20:23.760Z",
+                r#"<task-notification>\n<tool-use-id>call_none</tool-use-id>\n<status>completed</status>\n</task-notification>"#,
+            ),
+            user_line(
+                "2026-11-24T05:30:00.000Z",
+                r#"<fno_mail from="lead" to="worker" id="m1">how is it going</fno_mail>"#,
+            ),
+            user_line(
+                "2026-11-24T05:40:00.000Z",
+                "This session is being continued from a previous conversation. The user ran <command-name>/fno:target</command-name><command-args>x-bbbb</command-args>.",
+            ),
+            user_line("2026-11-24T06:00:00.000Z", "how is it going"),
+            user_line(
+                "2026-11-24T06:10:00.000Z",
+                "<local-command-stdout>compacted</local-command-stdout>",
+            ),
+            user_line(
+                "2026-11-24T07:00:00.000Z",
+                r#"<command-message>fno:fix</command-message>\n<command-name>/fno:fix</command-name>\n<command-args>x-bbbb</command-args>"#,
+            ),
+            call_line("2026-11-24T07:00:05.000Z", "call_s", "Skill", r#"{"skill":"fno:tdd"}"#),
+        ]);
+        assert_eq!(rows.len(), 3);
+        let command = &rows[0];
+        assert_eq!(command.kind, InvocationKind::Command);
+        assert_eq!(command.name, "fno:target");
+        assert_eq!(command.node.as_deref(), Some("x-aaaa"));
+        assert_eq!(command.start.as_deref(), Some("2026-11-24T04:51:25.957Z"));
+        assert_eq!(command.end.as_deref(), Some("2026-11-24T05:40:00.000Z"));
+        assert_eq!(command.outcome, None);
+        // A row with no node of its own takes the node of the newest typed
+        // command, not of the first one.
+        assert_eq!(rows[1].name, "fno:fix");
+        assert_eq!(rows[2].kind, InvocationKind::Skill);
+        assert_eq!(rows[2].node.as_deref(), Some("x-bbbb"));
+    }
+
+    /// An Agent call whose result is a launch reads `launched` with no end. A
+    /// call with a plain result reads `ok` with the result's timestamp, also
+    /// when the line's `toolUseResult` is a bare string.
+    #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
+    fn agent_fixture_reads_the_launch() {
+        let rows = fold(&[
+            call_line(
+                "2026-11-23T15:57:09.570Z",
+                "call_bg",
+                "Agent",
+                r#"{"description":"Measure x-bbbb premises","prompt":"Read the worktree","subagent_type":"Explore"}"#,
+            ),
+            call_line(
+                "2026-11-23T15:57:20.000Z",
+                "call_sync",
+                "Task",
+                r#"{"description":"noop","prompt":"noop","subagent_type":"general-purpose"}"#,
+            ),
+            result_line(
+                "2026-11-23T15:57:11.612Z",
+                "call_bg",
+                r#"{"isAsync":true,"status":"async_launched"}"#,
+                false,
+            ),
+            call_line(
+                "2026-11-23T15:57:40.000Z",
+                "call_bg2",
+                "Agent",
+                r#"{"description":"Index the vault","prompt":"Read only","subagent_type":"Explore"}"#,
+            ),
+            call_line(
+                "2026-11-23T15:57:41.000Z",
+                "call_bash",
+                "Bash",
+                r#"{"command":"ls"}"#,
+            ),
+            r#"{"type":"user","sessionId":"11111111-1111-4111-8111-111111111111","timestamp":"2026-11-23T15:57:42.000Z","toolUseResult":{"isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"call_bash","content":"ok","is_error":false},{"type":"tool_result","tool_use_id":"call_bg2","content":"launched","is_error":false}]}}"#.to_string(),
+            result_line("2026-11-23T15:58:00.000Z", "call_sync", r#""plain""#, false),
+        ]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].kind, InvocationKind::Agent);
+        assert_eq!(rows[0].name, "Explore");
+        assert_eq!(rows[0].node.as_deref(), Some("x-bbbb"));
+        assert_eq!(rows[0].end, None);
+        assert_eq!(rows[0].outcome, Some(Outcome::Launched));
+        assert_eq!(rows[1].name, "general-purpose");
+        assert_eq!(rows[1].end.as_deref(), Some("2026-11-23T15:58:00.000Z"));
+        assert_eq!(rows[1].outcome, Some(Outcome::Ok));
+        // Two results share the last line. Its launch word names the one
+        // result that closes a waiting row.
+        assert_eq!(rows[2].name, "Explore");
+        assert_eq!(rows[2].outcome, Some(Outcome::Launched));
+        assert_eq!(rows[2].end, None);
+    }
+
+    /// A goal is one row across its records, in the order a transcript writes
+    /// them: the set record lands before the command line that names the node.
+    /// The not-met record adds nothing, and the met record closes the row with
+    /// its totals. The typed command is a command row of its own.
+    #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
+    fn goal_fixture_folds_one_goal_row() {
+        let rows = fold(&[
+            goal_line(
+                "2026-06-29T06:52:59.630Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "x-cccc"}),
+            ),
+            user_line(
+                "2026-06-29T06:52:59.630Z",
+                r#"<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>x-cccc</command-args>"#,
+            ),
+            goal_line(
+                "2026-06-29T07:08:34.378Z",
+                json!({"type": "goal_status", "met": false, "reason": "PR #85 is open", "condition": "x-cccc"}),
+            ),
+            goal_line(
+                "2026-06-29T07:56:13.785Z",
+                json!({
+                    "type": "goal_status",
+                    "met": true,
+                    "iterations": 69,
+                    "durationMs": 3794155,
+                    "tokens": 117513,
+                    "condition": "x-cccc",
+                }),
+            ),
+        ]);
+        assert_eq!(rows.len(), 2);
+        let goal = &rows[0];
+        assert_eq!(goal.kind, InvocationKind::Goal);
+        assert_eq!(goal.name, "x-cccc");
+        assert_eq!(goal.node.as_deref(), Some("x-cccc"));
+        assert_eq!(goal.start.as_deref(), Some("2026-06-29T06:52:59.630Z"));
+        assert_eq!(goal.end.as_deref(), Some("2026-06-29T07:56:13.785Z"));
+        assert_eq!(goal.outcome, Some(Outcome::Met));
+        assert_eq!(
+            goal.goal,
+            Some(GoalTotals {
+                iterations: Some(69),
+                duration_ms: Some(3794155),
+                tokens: Some(117513),
+            })
+        );
+        assert_eq!(
+            (rows[1].kind, rows[1].name.as_str()),
+            (InvocationKind::Command, "goal")
+        );
+    }
+
+    /// A failed record and a cleared record each close the open goal row. A
+    /// terminal record with no open goal is a row of its own, with no start.
+    #[test]
+    #[allow(clippy::indexing_slicing)] // order-pinning asserts on the folded rows
+    fn goal_fixture_reads_each_ending() {
+        let rows = fold(&[
+            goal_line(
+                "2026-11-23T10:00:00.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "all tests pass"}),
+            ),
+            goal_line(
+                "2026-11-23T10:05:00.000Z",
+                json!({"type": "goal_status", "met": false, "failed": true, "iterations": 3, "condition": "all tests pass"}),
+            ),
+            goal_line(
+                "2026-11-23T10:06:00.000Z",
+                json!({"type": "goal_status", "met": false, "sentinel": true, "condition": "the PR is merged"}),
+            ),
+            goal_line(
+                "2026-11-23T10:07:00.000Z",
+                json!({"type": "goal_status", "met": true, "sentinel": true, "condition": "the PR is merged"}),
+            ),
+            goal_line(
+                "2026-11-23T10:08:00.000Z",
+                json!({"type": "goal_status", "met": true, "condition": "a resumed goal"}),
+            ),
+        ]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].outcome, Some(Outcome::Failed));
+        assert_eq!(rows[0].end.as_deref(), Some("2026-11-23T10:05:00.000Z"));
+        assert_eq!(
+            rows[0].goal.as_ref().map(|totals| totals.iterations),
+            Some(Some(3))
+        );
+        assert_eq!(rows[1].outcome, Some(Outcome::Cleared));
+        assert_eq!(
+            rows[1].goal,
+            Some(GoalTotals {
+                iterations: None,
+                duration_ms: None,
+                tokens: None
+            })
+        );
+        assert_eq!(rows[2].start, None);
+        assert_eq!(rows[2].outcome, Some(Outcome::Met));
     }
 
     /// The pick reads the newest commit at or before `until`; an empty

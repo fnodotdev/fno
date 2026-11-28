@@ -320,8 +320,16 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
                 // observed nothing about the birth); a user-typed adopt
                 // upgrades it to `operator`, the origin the gc keeps
                 // (rev-2 scope, ruling d-79e0186b).
+                let named_spawner = prev
+                    .spawned_by_session
+                    .as_deref()
+                    .is_some_and(|s| !s.is_empty());
                 reg.entries[i].origin = if crate::claims::adopter_is_operator() {
-                    Some("operator".to_string())
+                    if named_spawner {
+                        prev.origin
+                    } else {
+                        Some("operator".to_string())
+                    }
                 } else {
                     prev.origin
                 };
@@ -343,23 +351,39 @@ pub fn upsert_adopted_row(registry_path: &Path, entry: RegistryEntry) -> Result<
         // A claude --bg worker has no spawn birth, so its launcher is the
         // launch record its SessionStart claimed. A born edge always wins.
         let root = registry_path.parent().unwrap_or(Path::new("."));
-        for row in reg.entries.iter_mut().filter(|r| {
-            r.spawned_by_session
-                .as_deref()
-                .unwrap_or_default()
-                .is_empty()
-                && r.claude_session_uuid.as_deref() == key.as_deref()
-        }) {
-            let Some(uuid) = row.claude_session_uuid.as_deref() else {
-                continue;
-            };
-            if let Some(launch) = crate::launch_record::claimed_edge(root, uuid) {
-                row.spawned_by_session = Some(launch.launcher_session);
-                row.spawned_by_harness = launch.launcher_harness;
-                row.spawned_by_cwd = launch.launcher_cwd;
+        for row in reg
+            .entries
+            .iter_mut()
+            .filter(|r| r.claude_session_uuid.as_deref() == key.as_deref())
+        {
+            if let Some(uuid) = row.claude_session_uuid.clone() {
+                apply_launch_edge(root, &uuid, row);
             }
         }
     })
+}
+
+/// Stamp the launcher a claimed launch record names onto `row`. A born edge
+/// always wins, so a row that already names its spawner is left alone. A row
+/// with a recorded launcher is fleet work, never `operator`: an adopt that
+/// guessed `operator` before the record was read is corrected here.
+pub(crate) fn apply_launch_edge(root: &Path, session: &str, row: &mut RegistryEntry) {
+    if row
+        .spawned_by_session
+        .as_deref()
+        .is_some_and(|s| !s.is_empty())
+    {
+        return;
+    }
+    let Some(launch) = crate::launch_record::claimed_edge(root, session) else {
+        return;
+    };
+    row.spawned_by_session = Some(launch.launcher_session);
+    row.spawned_by_harness = launch.launcher_harness;
+    row.spawned_by_cwd = launch.launcher_cwd;
+    if row.origin.as_deref() == Some("operator") {
+        row.origin = Some("spawn".to_string());
+    }
 }
 
 /// Outcome of acquiring the `pty:<short_id>` single-writer claim.
@@ -798,5 +822,28 @@ mod tests {
         );
         std::env::remove_var("FNO_CLAIMS_ROOT");
         std::fs::remove_dir_all(&td).ok();
+    }
+
+    #[test]
+    fn launch_edge_turns_an_operator_guess_into_the_launchers_child() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sid = "a1b2c3d4-1111-2222-3333-444455556666";
+        let claimed = dir.path().join("launches").join("claimed");
+        std::fs::create_dir_all(&claimed).unwrap();
+        std::fs::write(
+            claimed.join(format!("{sid}.json")),
+            r#"{"harness":"claude","cwd":"/w","launcher_session":"lead-1","launcher_harness":"claude","launcher_cwd":"/l","launched_at_ms":1}"#,
+        )
+        .unwrap();
+        let mut row = fixture_entry("now");
+        row.origin = Some("operator".into());
+        apply_launch_edge(dir.path(), sid, &mut row);
+        assert_eq!(row.origin.as_deref(), Some("spawn"));
+        assert_eq!(row.spawned_by_session.as_deref(), Some("lead-1"));
+
+        let mut bare = fixture_entry("now");
+        bare.origin = Some("operator".into());
+        apply_launch_edge(dir.path(), "no-such-session", &mut bare);
+        assert_eq!(bare.origin.as_deref(), Some("operator"));
     }
 }

@@ -141,23 +141,110 @@ fn config_lanes(cwd: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn session_lane(deps: &Deps, harness: &str, session: &str) -> Option<String> {
-    if let Some(lane) = deps.lane.clone() {
-        return Some(lane);
+/// What lane resolution concluded for a session. The refusal line names the
+/// cause; the gate admits only [`LaneResolution::Admitted`].
+#[derive(Debug, PartialEq, Eq)]
+enum LaneResolution {
+    /// The seam override, an exact harness+model declared match, or the
+    /// unambiguous single-harness fallback for a model-less row.
+    Admitted(String),
+    /// No registry row resolves for the session.
+    NoRow,
+    /// The registry itself could not be read (store error or a row that
+    /// failed validation); whether the row exists is unknown, and the
+    /// refusal must not claim it absent. The cause rides so the line
+    /// names what actually failed.
+    Unreadable(String),
+    /// A row resolved, but no declared routing row matches it: the model
+    /// missed every declared row of its harness, or the row carries no
+    /// model and more than one declared row names its harness.
+    NoLane { model: String },
+}
+
+impl LaneResolution {
+    fn lane(&self) -> Option<&str> {
+        match self {
+            LaneResolution::Admitted(lane) => Some(lane),
+            LaneResolution::NoRow
+            | LaneResolution::Unreadable(_)
+            | LaneResolution::NoLane { .. } => None,
+        }
     }
-    let rows = crate::client_commands::load_registry_entries(&deps.registry).ok()?;
-    let row = crate::whoami::find_by_session(&rows, session, harness)?;
+}
+
+fn session_lane(deps: &Deps, harness: &str, session: &str) -> LaneResolution {
+    if let Some(lane) = deps.lane.clone() {
+        return LaneResolution::Admitted(lane);
+    }
+    let rows = match crate::client_commands::load_registry_entries(&deps.registry) {
+        Ok(rows) => rows,
+        Err(cause) => return LaneResolution::Unreadable(cause),
+    };
+    let Some(row) = crate::whoami::find_by_session(&rows, session, harness) else {
+        return LaneResolution::NoRow;
+    };
     let model = row
         .get("model")
         .and_then(Value::as_str)
         .or_else(|| row.get("model_name").and_then(Value::as_str))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_string();
     let declared = crate::route_gather::declared_rows(&deps.cwd);
-    declared.as_object()?.iter().find_map(|(name, decl)| {
-        (decl.get("harness").and_then(Value::as_str) == Some(harness)
-            && decl.get("model").and_then(Value::as_str) == Some(model))
-        .then(|| name.clone())
-    })
+    let Some(declared) = declared.as_object() else {
+        return LaneResolution::NoLane { model };
+    };
+    let mut exact: Option<String> = None;
+    let mut harness_lanes: Vec<&str> = Vec::new();
+    for (name, decl) in declared {
+        if decl.get("harness").and_then(Value::as_str) != Some(harness) {
+            continue;
+        }
+        harness_lanes.push(name);
+        if decl.get("model").and_then(Value::as_str) == Some(model.as_str()) {
+            exact.get_or_insert(name.clone());
+        }
+    }
+    if let Some(lane) = exact {
+        return LaneResolution::Admitted(lane);
+    }
+    // A dispatch-spawned row stamps no model: admit it through a declared
+    // harness row only when one row names the harness, so the lane stays
+    // unambiguous.
+    if model.is_empty() {
+        if let [lane] = harness_lanes.as_slice() {
+            return LaneResolution::Admitted(lane.to_string());
+        }
+    }
+    LaneResolution::NoLane { model }
+}
+
+/// The one refusal line for a lane-gated consult: the empty-lanes text stays
+/// verbatim (the off-by-default posture reads on it), an admitted-but-unlisted
+/// lane names itself, and an unresolved session names its cause instead of
+/// claiming the lanes are empty.
+fn lane_refusal_line(
+    lanes_empty: bool,
+    resolved: &LaneResolution,
+    harness: &str,
+    session: &str,
+) -> String {
+    if lanes_empty {
+        return "consult: agents.consult.lanes is empty; the action is off".to_string();
+    }
+    match resolved {
+        LaneResolution::Admitted(lane) => {
+            format!("consult: lane {lane} is not in agents.consult.lanes")
+        }
+        LaneResolution::NoRow => {
+            format!("consult: session {session} has no {harness} registry row; no lane to check")
+        }
+        LaneResolution::Unreadable(cause) => {
+            format!("consult: the agent registry could not be read ({cause}); no lane to check")
+        }
+        LaneResolution::NoLane { model } => {
+            format!("consult: no declared lane resolves for harness {harness} model {model:?}")
+        }
+    }
 }
 
 // ── chunk: ask ──
@@ -197,20 +284,16 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         return EXIT_CAP;
     }
     let lanes = config_lanes(&deps.cwd);
-    let lane = session_lane(deps, harness, session);
+    let resolved = session_lane(deps, harness, session);
     let allowed = !lanes.is_empty()
-        && lane
-            .as_deref()
+        && resolved
+            .lane()
             .is_some_and(|l| lanes.iter().any(|a| a == l));
     if !allowed {
-        match lane {
-            Some(l) if !lanes.is_empty() => {
-                eprintln!("consult: lane {l} is not in agents.consult.lanes");
-            }
-            _ => {
-                eprintln!("consult: agents.consult.lanes is empty; the action is off");
-            }
-        }
+        eprintln!(
+            "{}",
+            lane_refusal_line(lanes.is_empty(), &resolved, harness, session)
+        );
         return EXIT_LANE_REFUSED;
     }
     // ── chunk: transcript ──
@@ -1015,5 +1098,266 @@ mod tests {
         let code = ask_run(&d, "sess-dry", "probe", true);
         assert_eq!(code, 0);
         assert_eq!(calls(&d.journal).is_empty(), true);
+    }
+
+    /// The consult config with `lane-claude` allowed; `model_rows` carries
+    /// the `[[routing.models]]` rows verbatim.
+    fn lane_config(dir: &Path, model_rows: &str) {
+        std::fs::create_dir_all(dir.join(".fno")).unwrap();
+        std::fs::write(
+            dir.join(".fno/config.toml"),
+            format!("[agents.consult]\nlanes = [\"lane-claude\"]\n\n{model_rows}"),
+        )
+        .unwrap();
+    }
+
+    fn seed_registry(path: &Path, entries: Vec<Value>) {
+        let registry = json!({
+            "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+            "entries": entries,
+        });
+        crate::registry_store::replace_document(path, registry);
+    }
+
+    /// The registry row a dispatch-spawned worker carries: harness and
+    /// session, `model` only when the spawn stamped one. `cwd` and
+    /// `log_path` are the loader's required fields; a row without them
+    /// fails validation and the whole registry reads as unreadable.
+    fn dispatch_row(session: &str, model: Option<&str>) -> Value {
+        let mut row = json!({
+            "name": "t-worker",
+            "harness": "claude",
+            "harness_session_id": session,
+            "status": "live",
+            "cwd": "/tmp",
+            "log_path": "",
+        });
+        if let Some(model) = model {
+            if let Some(fields) = row.as_object_mut() {
+                fields.insert("model".to_string(), json!(model));
+            }
+        }
+        row
+    }
+
+    const ONE_CLAUDE_ROW: &str =
+        "[[routing.models]]\nname = \"lane-claude\"\nharness = \"claude\"\nmodel = \"opus\"\n";
+
+    #[test]
+    fn a_model_less_row_admits_through_one_declared_harness_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-lane", None)],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-lane"),
+            LaneResolution::Admitted("lane-claude".to_string()),
+            "the single declared harness row admits the model-less dispatch row"
+        );
+    }
+
+    #[test]
+    fn two_declared_harness_lanes_leave_a_model_less_row_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(
+            dir.path(),
+            "[[routing.models]]\nname = \"lane-claude\"\nharness = \"claude\"\nmodel = \"opus\"\n\n[[routing.models]]\nname = \"lane-claude-2\"\nharness = \"claude\"\nmodel = \"sonnet\"\n",
+        );
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-lane", None)],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-lane"),
+            LaneResolution::NoLane {
+                model: String::new()
+            },
+            "two candidate harness rows are ambiguous without a model"
+        );
+    }
+
+    #[test]
+    fn an_exact_model_match_still_names_the_declared_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-lane", Some("opus"))],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-lane"),
+            LaneResolution::Admitted("lane-claude".to_string()),
+            "the harness+model match wins without the fallback"
+        );
+    }
+
+    #[test]
+    fn a_nonempty_model_missing_every_declared_row_stays_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-lane", Some("gpt-6"))],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-lane"),
+            LaneResolution::NoLane {
+                model: "gpt-6".to_string()
+            },
+            "the single-harness fallback never fires for a named model"
+        );
+    }
+
+    #[test]
+    fn an_absent_registry_reads_as_empty_and_answers_no_row() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-ghost"),
+            LaneResolution::NoRow,
+            "a fresh install has no rows, so the honest answer is the row-miss case"
+        );
+    }
+
+    #[test]
+    fn a_row_that_fails_validation_reads_as_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![json!({
+                "name": "t-broken",
+                "harness": "claude",
+                "harness_session_id": "sess-broken",
+                "status": "live",
+            })],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert!(
+            matches!(
+                session_lane(&d, "claude", "sess-broken"),
+                LaneResolution::Unreadable(_)
+            ),
+            "a row that fails the loader's validation reads as unreadable, never as a row claim"
+        );
+    }
+
+    #[test]
+    fn a_row_missing_from_the_registry_is_its_own_unresolved_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-other", None)],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            session_lane(&d, "claude", "sess-ghost"),
+            LaneResolution::NoRow,
+            "a readable registry without the session's row is distinct from no matching lane"
+        );
+    }
+
+    #[test]
+    fn the_lane_refusal_lines_name_their_causes_distinctly() {
+        let empty = lane_refusal_line(
+            true,
+            &LaneResolution::Admitted("lane-x".to_string()),
+            "claude",
+            "s1",
+        );
+        assert_eq!(
+            empty, "consult: agents.consult.lanes is empty; the action is off",
+            "the off-by-default text survives verbatim"
+        );
+        let unlisted = lane_refusal_line(
+            false,
+            &LaneResolution::Admitted("lane-x".to_string()),
+            "claude",
+            "s1",
+        );
+        assert_eq!(
+            unlisted,
+            "consult: lane lane-x is not in agents.consult.lanes"
+        );
+        let no_row = lane_refusal_line(false, &LaneResolution::NoRow, "claude", "s1");
+        assert!(
+            no_row.contains("s1") && no_row.contains("claude") && !no_row.contains("empty"),
+            "the missing-row line names the session and never claims empty lanes: {no_row}"
+        );
+        let unreadable = lane_refusal_line(
+            false,
+            &LaneResolution::Unreadable("boom".to_string()),
+            "claude",
+            "s1",
+        );
+        assert!(
+            unreadable.contains("could not be read")
+                && unreadable.contains("boom")
+                && !unreadable.contains("empty"),
+            "the unreadable line names the registry and its cause: {unreadable}"
+        );
+        let no_lane = lane_refusal_line(
+            false,
+            &LaneResolution::NoLane {
+                model: String::new(),
+            },
+            "claude",
+            "s1",
+        );
+        assert!(
+            no_lane.contains("claude") && no_lane.contains("\"\"") && !no_lane.contains("empty"),
+            "the unresolved line names the harness and model searched: {no_lane}"
+        );
+    }
+
+    #[test]
+    fn a_model_less_dispatch_row_consults_through_the_declared_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(dir.path(), ONE_CLAUDE_ROW);
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-dispatch", None)],
+        );
+        let transcript = dir.path().join("t.jsonl");
+        std::fs::write(
+            &transcript,
+            json!({"type": "user", "message": {"content": "q"}}).to_string(),
+        )
+        .unwrap();
+        let mut d = deps(dir.path(), &silent_ok);
+        d.transcript = Some(transcript);
+        assert_eq!(
+            ask_run(&d, "sess-dispatch", "why", false),
+            0,
+            "the gate admits the model-less dispatch row end to end"
+        );
+    }
+
+    #[test]
+    fn a_row_no_declared_lane_admits_refuses_with_exit_5() {
+        let dir = tempfile::tempdir().unwrap();
+        lane_config(
+            dir.path(),
+            "[[routing.models]]\nname = \"lane-claude\"\nharness = \"claude\"\nmodel = \"opus\"\n\n[[routing.models]]\nname = \"lane-claude-2\"\nharness = \"claude\"\nmodel = \"sonnet\"\n",
+        );
+        seed_registry(
+            &dir.path().join("registry.json"),
+            vec![dispatch_row("sess-ambig", None)],
+        );
+        let d = deps(dir.path(), &silent_ok);
+        assert_eq!(
+            ask_run(&d, "sess-ambig", "why", false),
+            EXIT_LANE_REFUSED,
+            "the ambiguous model-less row refuses at the gate"
+        );
+        assert!(calls(&d.journal).is_empty(), "nothing spawns");
     }
 }

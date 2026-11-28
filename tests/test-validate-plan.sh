@@ -339,9 +339,6 @@ status: ready
 created: 2026-07-25
 project: fno
 node: x-a11b003
-code_index:
-  main_sha: 9817805bf5e
-  providers: []
 ---
 
 # Semantic plan
@@ -375,6 +372,9 @@ tasks:
 ## Gate records
 
 ```yaml
+code_index:
+  main_sha: 9817805bf5e
+  providers: []
 consolidation:
   outcome: proceed_alone
   proceed_alone_against: []
@@ -1179,7 +1179,7 @@ fi
 sed -e '/^code_index:$/,/^      fresh: yes$/d' "$PLAN_CIA_A" > "$CIA_REPO/cia_c.md"
 OUTPUT=$(bash "$VALIDATE" "$CIA_REPO/cia_c.md" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 CIA_OUT=$(cia "$OUTPUT")
-if grep -q "frontmatter carries no code_index: block" <<< "$CIA_OUT" \
+if grep -q "the plan carries no code_index: block in ## Gate records" <<< "$CIA_OUT" \
     && grep -q "ERROR" <<< "$CIA_OUT"; then
     pass "AC13c: a missing block errors on a post-gate plan"
 else
@@ -1243,7 +1243,7 @@ fi
 sed -e '/^created: 2099-01-01$/d' -e '/^code_index:$/,/^      fresh: yes$/d' "$PLAN_CIA_A" > "$CIA_REPO/cia_g.md"
 OUTPUT=$(bash "$VALIDATE" "$CIA_REPO/cia_g.md" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 CIA_OUT=$(cia "$OUTPUT")
-if grep -q "frontmatter carries no code_index: block" <<< "$CIA_OUT" \
+if grep -q "the plan carries no code_index: block in ## Gate records" <<< "$CIA_OUT" \
     && ! grep -q "ERROR" <<< "$CIA_OUT"; then
     pass "AC13g: an undated fixture warns and adds no error"
 else

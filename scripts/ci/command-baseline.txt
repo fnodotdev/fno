@@ -234,6 +234,7 @@ fno-agent revival-check
 fno-agent rm
 fno-agent roster-reap
 fno-agent route-slot
+fno-agent runbook-cli
 fno-agent sandbox-probe
 fno-agent scoreboard
 fno-agent scratch

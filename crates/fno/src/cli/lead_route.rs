@@ -71,8 +71,11 @@ const ROUTES: &[Route] = &[
         name: "checkin",
         native: &["lead-checkin", "--user-command"],
         help: "Usage: fno agent hq checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
-               [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
+               [--keep-name-from OLD-SCOPE] [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
                Run the term check-in: gather, print, diff against the last beat, journal.\n\
+               --name binds the role name on the first beat. --theme sets the scope theme, \
+               which an L0 or L2 lead must pass once on its first check-in. \
+               --keep-name-from OLD-SCOPE keeps a re-scoped colleague's existing name.\n\
                After a compaction it refuses until --recall names the canon doc's last-line word.\n",
     },
     Route {

@@ -37,6 +37,12 @@ pub struct RestartArgs {
     /// Ensure-only: swap only when the daemon measures down; quiet exit 0 when one is already serving (fresh, drifted, or unknown). The install tail's idempotent start.
     #[arg(long)]
     pub if_down: bool,
+    /// Stop the daemon and keep it down: refuses every on-demand and launchd start until `--release`. The value is the reason, shown to whoever is refused.
+    #[arg(long, value_name = "REASON", conflicts_with_all = ["release", "force", "mux", "if_drifted", "if_down", "keepers_only"])]
+    pub hold: Option<String>,
+    /// Lift a `--hold` and start the daemon
+    #[arg(long, conflicts_with_all = ["force", "mux", "if_drifted", "if_down", "keepers_only"])]
+    pub release: bool,
     /// Internal: run ONLY the stale-store-keeper cycle and print the keepers summary; never restarts the daemon or mux servers. The post-mux pass `fno agent restart --mux` drives after each kill.
     #[arg(long)]
     pub keepers_only: bool,

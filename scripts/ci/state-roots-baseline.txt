@@ -99,3 +99,6 @@ C	crates/fno-agent/src/runtime/harness_reader.rs	probe-nonce	unowned	a subfolder
 C	crates/fno-agent/src/runtime/mcp/sidecar.rs	sidecar-state.json	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
 C	crates/fno-agent/src/runtime/mcp/sidecar.rs	sidecar.sock	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
 C	crates/fno-agent/src/runtime/observer/isolation.rs	memory	unowned	a subfolder's own state_dir, not the state root; rule C matches by name
+A	crates/fno-agent/src/runtime/hook/front/post_tool.rs	target-state.md	unowned	the claim-heartbeat leg keeps the legacy checkout fallback its script read beside state_path::resolve; target-state.md has no resolver, as for hook/stop.rs above.
+A	crates/fno-agent/src/runtime/hook/front/stop.rs	events.jsonl	unowned	the context-nudge leg appends to the repo-root journal its script wrote, so old and new sessions in one fleet write one journal; drains with the Rust journal sites.
+A	crates/fno-agent/src/runtime/hook/front/user_prompt.rs	events.jsonl	unowned	the born-with-why leg reads the repo-root journal and its .think-offer-cursor beside it, the layout its script read; drains with the Rust journal sites.

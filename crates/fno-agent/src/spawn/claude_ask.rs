@@ -839,6 +839,11 @@ pub struct HarnessFlags<'a> {
     /// An unrouted spawn's own `--settings` file (a sandbox write policy
     /// alone owes one). A route's file wins when both are set.
     pub settings: Option<&'a str>,
+    /// The spawn's `--role`, so the plain lane's command rules consult the
+    /// per-role `[allow_rules]` override. A routed or role-resolved spawn
+    /// resolves its rules at the seam with the role; this is the plain
+    /// unrouted path's carrier.
+    pub role: Option<&'a str>,
 }
 
 /// The value a fenced passthrough gives one flag (`--flag V`, `--flag=V`, or
@@ -1738,13 +1743,24 @@ pub fn bg_create(
             }
         }
     }
-    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+    let rules = crate::spawn::auto_approve::command_rules(flags.role);
+    if let Some(slot) = flags.route.map(|r| r.settings).or(flags.settings) {
         // The route owns the settings slot (the floor stood down above), at
         // the same argv position Python's bg_create puts it. A sandbox file
-        // already folds the scrub floor.
-        argv.splice(4..4, ["--settings".to_string(), settings.to_string()]);
-    } else if !floor.is_empty() {
-        match crate::model_env_scrub::write_scrub_settings(&floor) {
+        // already folds the scrub floor, and both file writers fold fno's
+        // command rules (D3653).
+        argv.splice(4..4, ["--settings".to_string(), slot.to_string()]);
+    } else if !overlay_routes && (!floor.is_empty() || !rules.is_empty()) {
+        // The plain unrouted lane owns no settings file yet, so this floor
+        // file is where fno's command rules ride (D3653) beside the model
+        // floor. A rules-only file (an empty floor) writes when the config
+        // override leaves the rules on. An overlay whose extra_env carries
+        // route provenance keeps today's argv (the routed-overlay pin): its
+        // settings slot stays empty, and its rules come from its own config
+        // dir - the fleet's bg lane passes only the TARGET_NO_MERGE
+        // bookkeeping carrier there, so no production worker takes this
+        // branch.
+        match crate::model_env_scrub::write_scrub_settings(&floor, &rules) {
             Ok(path) => {
                 let p = path.display().to_string();
                 argv.splice(4..4, ["--settings".to_string(), p]);
@@ -2428,9 +2444,11 @@ pub fn validate_spawn_inputs(name: &str, from_name: &str) -> Result<(), String> 
 use crate::agent_lock::{holder_note, AgentLock};
 use crate::spawn_gate_admission::AnswerCaller;
 
-/// Stable fno-side log path for `fno agent logs <name>` (`_derive_log_path`).
-fn derive_log_path(home: &AgentsHome, name: &str) -> PathBuf {
-    home.root().join("logs").join(format!("{}.log", name))
+/// Stable fno-side log path for `fno agent logs <name>`, keyed on the
+/// session id so a reused name never inherits an earlier agent's log. The
+/// row's `log_path` field is what readers follow.
+fn derive_log_path(home: &AgentsHome, session_id: &str) -> PathBuf {
+    home.root().join("logs").join(format!("{session_id}.log"))
 }
 
 /// The transport short id: the row's own key, else the one derived from the
@@ -3726,7 +3744,7 @@ fn create(
     // permission error) -- otherwise leave the leg unset so
     // validate_resolvable_handle can still refuse the row when no other leg
     // resolves, instead of writing a log_path that is a claim, not evidence.
-    let log_path = derive_log_path(home, name);
+    let log_path = derive_log_path(home, &short_id);
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -4388,6 +4406,7 @@ mod tests {
             passthrough: &[],
             route: None,
             settings: None,
+            role: None,
         };
         assert_eq!(
             build_argv("a", "hi", false, None, None, None, flags),

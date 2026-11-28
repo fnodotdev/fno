@@ -75,6 +75,7 @@ resume-receipt	door: resume receipt transport
 review-level	table door under review_doors::dispatch
 review-policy	table door under review_doors::dispatch
 revival-check	door: revival gate read; starts nothing
+runbook-cli	family door: the runbook receipt leaf behind fno do runbook, hidden like plan-cli
 sandbox-probe	door: calls the probe in process and owns the exit-85 refusal
 scoreboard	door: scoreboard read
 select-read	door: passthroughs invoke the binary directly

@@ -883,13 +883,13 @@ describe("opencode hooks.json host", () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  test("FOREIGN_SESSION_MARKERS covers claims.rs's marker tables", () => {
-    const rs = readFileSync(
-      join(import.meta.dir, "..", "..", "..", "crates", "fno-agent", "src", "runtime", "claims.rs"),
-      "utf8",
-    )
+  test("FOREIGN_SESSION_MARKERS covers the Rust marker tables", () => {
+    const runtime = join(import.meta.dir, "..", "..", "..", "crates", "fno-agent", "src", "runtime")
+    const rs =
+      readFileSync(join(runtime, "identity_markers.rs"), "utf8") +
+      readFileSync(join(runtime, "claims.rs"), "utf8")
     // The marker tables (HARNESS_SESSION_MARKERS, LEGACY_HARNESS_SESSION_MARKERS)
-    // plus the family table (AMBIENT_IDENTITY_FAMILIES) in claims.rs, and the
+    // in identity_markers.rs, the family table (AMBIENT_IDENTITY_FAMILIES) in claims.rs, and the
     // identity_markers table in ambient_vocab.toml; TARGET_SESSION_ID stays
     // out (fno's own plumbing, legitimately inherited by a launched worker).
     const vocab = readFileSync(

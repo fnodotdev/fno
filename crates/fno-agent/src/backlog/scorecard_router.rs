@@ -261,17 +261,22 @@ fn contradicted_laws(stage: &str, band: &str, row: &RowKey, today: NaiveDate) ->
 }
 
 fn spawn_line(row: &RowKey) -> String {
-    // The door's route_seam accepts --route on the claude harness only,
-    // and resolve_target then demands the named lane declare a route; so
-    // only a vendor-backed row prints --route, and every other row names
-    // its model id with the --model= form the door forwards.
+    // The door's route_seam accepts --route on claude, and on codex's
+    // headless lane only; resolve_target then demands the named lane
+    // declare a route. So only a vendor-backed row prints --route, and every
+    // other row names its model id with the --model= form the door forwards.
     let target_flag = if row.vendor.is_empty() {
         format!("--model={}", row.model_raw)
     } else {
         format!("--route {}", row.name)
     };
+    let substrate = if row.harness == "codex" && !row.vendor.is_empty() {
+        "headless"
+    } else {
+        "thread"
+    };
     format!(
-        "fno agent spawn --as thread -H {} {target_flag} --cwd <repo>",
+        "fno agent spawn --as {substrate} -H {} {target_flag} --cwd <repo>",
         row.harness
     )
 }

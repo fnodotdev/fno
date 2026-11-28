@@ -11,6 +11,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 on:
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       paint_binary:
@@ -552,19 +554,16 @@ jobs:
     steps:
       - name: Both shards passed
         run: |
-          # A lone `cancelled` on a shard now means the JOB cap fired outside
-          # the step: the pytest shard step carries its own timeout-minutes, so
-          # a step-level kill reports `failure`, not `cancelled`. The EXIT trap
-          # runs either way - the shard's own smoke-duration line carries the
-          # seconds and the verdict, so read that line to tell a slow run from
-          # a killed one. (It once taught that a cap kill leaves no duration
-          # line; measured on 3 of 3 kills, the trap ran and printed every
-          # time, and that absence was read as three failing assertions which
-          # filed a green suite as three broken registries.)
+          # A lone `cancelled` on a shard means the job was cancelled. This
+          # gate cannot see why. The pytest shard step carries its own
+          # timeout-minutes, so a step-level kill reports `failure`, not
+          # `cancelled`. The EXIT trap runs either way, and the shard's
+          # smoke-duration line carries the seconds and the verdict. Read that
+          # line in the shard's log to tell a slow run from a stopped one.
           capped() {
             [ "$2" = "cancelled" ] || return 0
-            echo "$1 outran the job-level timeout-minutes cap; the run was never cancelled."
-            echo "Read the shard's smoke-duration line: the EXIT trap prints it on every exit, with seconds and verdict."
+            echo "$1 read cancelled. This gate cannot tell what stopped the job."
+            echo "Its smoke-duration line in that job's log gives the seconds and verdict. verdict=ok means the run was under its time threshold; the pytest result in that log shows pass or fail."
           }
           echo "pr-affected=${{ needs.pr-affected.result }} tests-py=${{ needs.tests-py.result }} smoke-rest=${{ needs.smoke-rest.result }}"
           capped tests-py "${{ needs.tests-py.result }}"

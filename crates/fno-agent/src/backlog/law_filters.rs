@@ -295,4 +295,17 @@ mod tests {
         assert!(run(row, &[]));
         assert!(run(json!({}), &[("epic", "x-bbbb")]));
     }
+
+    // The doc hand-enumerates SOURCED_KEYS and drifted once (type shipped 2026-11-14,
+    // the list missed it until 2026-11-26). This is the parity guard.
+    #[test]
+    fn the_decision_doc_names_every_sourced_filter_key() {
+        let doc = include_str!("../../../../docs/architecture/decision-record.md");
+        for (key, _) in SOURCED_KEYS {
+            assert!(
+                doc.contains(&format!("`{key}`")),
+                "docs/architecture/decision-record.md is missing the `{key}` filter key"
+            );
+        }
+    }
 }

@@ -301,11 +301,6 @@ fn deploy_prebuilt(crates_rev: &str, bin_dir: &Path, dry_run: bool) -> Result<()
         let _ = std::fs::remove_dir_all(staging);
     }
     swapped?;
-    // The carried extras (fno-app) join the PATH dir too: a plain update on
-    // an older install must gain the link the adopt doors write.
-    if let Err(e) = crate::install::release_install::link_path_extras(bin_dir) {
-        eprintln!("fno doctor update: the PATH link for the carried extras failed: {e}");
-    }
     println!(
         "fno doctor update: installed the CI build for crates rev {} into {}",
         &crates_rev[..crates_rev.len().min(12)],
@@ -442,9 +437,6 @@ fn install_newest_published_arm(
         return wait(format!(
             "the newest published build failed to deploy ({why})"
         ));
-    }
-    if let Err(e) = crate::install::release_install::link_path_extras(&bin_dir) {
-        eprintln!("fno doctor update: the PATH link for the carried extras failed: {e}");
     }
     crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_rust_bins(&bin_dir, false) {

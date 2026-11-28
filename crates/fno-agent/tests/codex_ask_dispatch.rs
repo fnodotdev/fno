@@ -183,6 +183,7 @@ fn dispatch_once_with_fake_codex(
         None,
         None,
         &[],
+        None,
     );
 
     match old_path {

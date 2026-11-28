@@ -199,22 +199,72 @@ pub struct EventCtx {
     pub sessions: SessionDirectory,
 }
 
+fn push_field(f: &mut Fields, key: &str, val: Option<String>) {
+    if let Some(v) = val.filter(|v| !v.is_empty()) {
+        // Stamps stay as stored: the page's stamp parser reads the
+        // RFC3339 markers case-sensitively.
+        let v = if key == "ts" { v } else { v.to_lowercase() };
+        let slot = f.entry(key.to_string()).or_default();
+        if !slot.contains(&v) {
+            slot.push(v);
+        }
+    }
+}
+
+/// The node and its ancestors through the context, for the `in` key.
+fn node_chain(item: &FeedItem, ctx: &EventCtx) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let Some(n) = &item.node else {
+        return chain;
+    };
+    chain.push(n.to_string());
+    seen.insert(n.to_string());
+    let mut cur = ctx.nodes.get(n.as_str()).and_then(|(_, p, _)| p.clone());
+    while let Some(p) = cur {
+        if !seen.insert(p.clone()) {
+            break;
+        }
+        chain.push(p.clone());
+        cur = ctx.nodes.get(&p).and_then(|(_, parent, _)| parent.clone());
+    }
+    chain
+}
+
+/// The `is:` and `has:` answers of an event row.
+fn push_flags(f: &mut Fields, item: &FeedItem, ctx: &EventCtx, open: bool) {
+    let push = push_field;
+    if open {
+        push(f, "is", Some("open".to_string()));
+    }
+    if item
+        .session_id
+        .as_deref()
+        .and_then(|sid| ctx.sessions.get(sid))
+        .is_some_and(|entry| !entry.exited)
+    {
+        push(f, "is", Some("live".to_string()));
+    }
+    if item.node.is_some() {
+        push(f, "has", Some("node".to_string()));
+    }
+    if item.session_id.is_some() {
+        push(f, "has", Some("session".to_string()));
+    }
+    if item.url.as_deref().is_some_and(|u| u.contains("/pull/")) {
+        push(f, "has", Some("pr".to_string()));
+    }
+    if item.reason.is_some() {
+        push(f, "has", Some("reason".to_string()));
+    }
+}
+
 /// The event row's search field map, the `Surface::Event` leg. The same
 /// canonical keys the node leg answers; `s:` refuses here because kind is
 /// the event's work state.
 pub fn event_fields(item: &FeedItem, ctx: &EventCtx) -> Fields {
     let mut f = Fields::new();
-    let push = |f: &mut Fields, key: &str, val: Option<String>| {
-        if let Some(v) = val.filter(|v| !v.is_empty()) {
-            // Stamps stay as stored: the page's stamp parser reads the
-            // RFC3339 markers case-sensitively.
-            let v = if key == "ts" { v } else { v.to_lowercase() };
-            let slot = f.entry(key.to_string()).or_default();
-            if !slot.contains(&v) {
-                slot.push(v);
-            }
-        }
-    };
+    let push = push_field;
     push(&mut f, "id", owned(&item.node));
     push(&mut f, "kind", Some(item.kind.to_string()));
     if let Some(sid) = &item.session_id {
@@ -259,22 +309,7 @@ pub fn event_fields(item: &FeedItem, ctx: &EventCtx) -> Fields {
         .and_then(|rest| rest.split_whitespace().next().map(str::to_string));
     push(&mut f, "epic", epic);
     push(&mut f, "epic", node_ctx.and_then(|(_, p, _)| p.clone()));
-    // `in`: the node and its ancestors through the context.
-    let mut chain: Vec<String> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    if let Some(n) = &item.node {
-        chain.push(n.to_string());
-        seen.insert(n.to_string());
-        let mut cur = node_ctx.and_then(|(_, p, _)| p.clone());
-        while let Some(p) = cur {
-            if !seen.insert(p.clone()) {
-                break;
-            }
-            chain.push(p.clone());
-            cur = ctx.nodes.get(&p).and_then(|(_, parent, _)| parent.clone());
-        }
-    }
-    for id in chain {
+    for id in node_chain(item, ctx) {
         push(&mut f, "in", Some(id));
     }
     let holder = owned(&item.holder).or_else(|| {
@@ -295,29 +330,12 @@ pub fn event_fields(item: &FeedItem, ctx: &EventCtx) -> Fields {
         "area",
         (!item.area.is_empty()).then(|| item.area.to_string()),
     );
-    if node_ctx.is_some_and(|(_, _, open)| *open) {
-        push(&mut f, "is", Some("open".to_string()));
-    }
-    if item
-        .session_id
-        .as_deref()
-        .and_then(|sid| ctx.sessions.get(sid))
-        .is_some_and(|entry| !entry.exited)
-    {
-        push(&mut f, "is", Some("live".to_string()));
-    }
-    if item.node.is_some() {
-        push(&mut f, "has", Some("node".to_string()));
-    }
-    if item.session_id.is_some() {
-        push(&mut f, "has", Some("session".to_string()));
-    }
-    if item.url.as_deref().is_some_and(|u| u.contains("/pull/")) {
-        push(&mut f, "has", Some("pr".to_string()));
-    }
-    if item.reason.is_some() {
-        push(&mut f, "has", Some("reason".to_string()));
-    }
+    push_flags(
+        &mut f,
+        item,
+        ctx,
+        node_ctx.is_some_and(|(_, _, open)| *open),
+    );
     push(&mut f, "title", Some(item.title.clone()));
     push(&mut f, "details", item.reason.clone());
     push(&mut f, "details", item.detail.clone());

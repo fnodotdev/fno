@@ -1,14 +1,19 @@
-//! Plain Claude Code permission rules for a worker's routine file work.
+//! Plain Claude Code permission rules for a worker's routine file work and
+//! fno's own commands.
 //!
 //! When `user.auto_approve_routine` is on in the global config, a spawn gets
 //! `permissions.allow` rules for its own worktree and its project's plan
 //! folder, and `permissions.ask` rules for the names that hold secrets or
-//! settings. The rules ride the spawn's own settings file, never a file the
-//! worker can edit. Claude Code then applies its own order across every
-//! settings source it loads: deny beats ask, and ask beats allow.
-//! fno reads no settings file and guesses no precedence.
+//! settings. fno's must-enable command rules ride every spawn regardless
+//! (user ruling D3653), overridable per role under `[allow_rules]`. The
+//! rules ride the spawn's own settings file, never a file the worker can
+//! edit. Claude Code then applies its own order across every settings
+//! source it loads: deny beats ask, and ask beats allow. fno reads no
+//! settings file and guesses no precedence.
 
 use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
 
 /// The allow and ask rule lists a spawn adds to its settings file.
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -50,10 +55,19 @@ const SETTINGS_NAMES: [&str; 10] = [
     ".fno/**",
 ];
 
-/// The rules for the spawn at `cwd`: none while the switch is off, or when
-/// `cwd` is not a worker's own worktree. `node` is the child's node from the
-/// spawn payload.
-pub(crate) fn rules_for(cwd: &Path, node: Option<&str>) -> Rules {
+/// The rules for the spawn at `cwd`: the file rules while the switch is on
+/// and `cwd` is a worker's own worktree, plus fno's command rules unless the
+/// `[allow_rules]` override says off for this role. `node` is the child's
+/// node from the spawn payload.
+pub(crate) fn rules_for(cwd: &Path, node: Option<&str>, role: Option<&str>) -> Rules {
+    let mut rules = file_rules(cwd, node);
+    rules.allow.extend(command_rules(role));
+    rules
+}
+
+/// The file rules alone: none while the switch is off, or when `cwd` is not
+/// a worker's own worktree.
+fn file_rules(cwd: &Path, node: Option<&str>) -> Rules {
     if !switch_on(
         crate::agents_config::config_lookup_global(&["user", "auto_approve_routine"]).as_ref(),
     ) {
@@ -64,6 +78,107 @@ pub(crate) fn rules_for(cwd: &Path, node: Option<&str>) -> Rules {
         crate::hook::worktree_relocation_allow::verified_worktree(cwd, node),
         plan_root(cwd),
     )
+}
+
+/// fno's own command rules, from the vendored must-enable table. On for
+/// every role by default; the config `[allow_rules] default = false` turns
+/// them off for every spawn and `[allow_rules.roles] <role> = false` for
+/// one role. A value that is missing or mistyped reads as on: the ruling
+/// (D3653) is the default.
+pub(crate) fn command_rules(role: Option<&str>) -> Vec<String> {
+    let default = crate::agents_config::config_lookup_global(&["allow_rules", "default"])
+        .and_then(|v| v.as_bool());
+    let role_value = role
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .and_then(|role| {
+            crate::agents_config::config_lookup_global(&["allow_rules", "roles", role])
+                .and_then(|v| v.as_bool())
+        });
+    if !override_on(default, role_value) {
+        return Vec::new();
+    }
+    let mut rules = table_allow_rules();
+    rules.extend(EXTRA_ALLOW_RULES.iter().map(|r| (*r).to_string()));
+    rules
+}
+
+/// Rules the must-enable table cannot carry, because its loader refuses any
+/// row that names a shell (filter A). The review lane's attestation script
+/// runs as `bash <path>/emit-attestation.sh code-review ...`, and the
+/// auto-mode classifier denied it for a worker that had run the review
+/// itself, so the worker re-sent the same block each stop (ruling D3750).
+/// The path may be relative or absolute, so the pattern leads with a
+/// wildcard.
+const EXTRA_ALLOW_RULES: [&str; 1] = ["Bash(bash */emit-attestation.sh code-review*)"];
+
+/// The vendored byte-copy of crate fno's must-enable table
+/// (`crates/fno/src/setup/must_enable.toml`). This crate links `fno` as a
+/// dev-dependency only (the publish gate holds), so the table travels as a
+/// copy and `must_work_corpus` pins the two files byte-identical. Crate fno
+/// vets the rows through its filter loader before they ship; this side only
+/// renders the prefixes it already trusts. A copy that fails to parse rules
+/// nothing, which is the safe direction: it grants no command.
+const MUST_ENABLE_TABLE: &str = include_str!("must_enable.toml");
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RuleWord {
+    One(String),
+    Any(Vec<String>),
+}
+
+#[derive(Deserialize)]
+struct RuleRow {
+    prefix: Vec<RuleWord>,
+}
+
+#[derive(Deserialize)]
+struct RuleTable {
+    #[serde(default)]
+    rule: Vec<RuleRow>,
+}
+
+/// One `Bash(<prefix> *)` per expanded alternative, in Claude's
+/// `permissions.allow` form, matching crate fno's `List::claude` render.
+fn table_allow_rules() -> Vec<String> {
+    let Ok(table) = toml::from_str::<RuleTable>(MUST_ENABLE_TABLE) else {
+        return Vec::new();
+    };
+    table
+        .rule
+        .iter()
+        .flat_map(|row| {
+            let mut out: Vec<Vec<String>> = vec![Vec::new()];
+            for word in &row.prefix {
+                let alts: Vec<&String> = match word {
+                    RuleWord::One(w) => vec![w],
+                    RuleWord::Any(ws) => ws.iter().collect(),
+                };
+                out = out
+                    .iter()
+                    .flat_map(|head| {
+                        alts.iter().map(move |w| {
+                            let mut next = head.clone();
+                            next.push((*w).clone());
+                            next
+                        })
+                    })
+                    .collect();
+            }
+            out
+        })
+        .map(|words| format!("Bash({} *)", words.join(" ")))
+        .collect()
+}
+
+/// The override decision, pure for the tests: an explicit role value wins
+/// over the default, and a value missing on both reads as on.
+fn override_on(default: Option<bool>, role: Option<bool>) -> bool {
+    match role {
+        Some(v) => v,
+        None => default.unwrap_or(true),
+    }
 }
 
 /// The gate itself: no rules while the switch is off, and none without a
@@ -190,6 +305,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_command_rules_carry_the_attestation_script_beside_the_table() {
+        let rules = command_rules(None);
+        for rule in EXTRA_ALLOW_RULES {
+            assert!(rules.iter().any(|r| r == rule), "missing {rule}");
+        }
+        assert!(
+            rules.len() > EXTRA_ALLOW_RULES.len(),
+            "the table rows still ride"
+        );
+    }
+
+    #[test]
     fn the_rules_gate_on_the_switch_and_a_real_worktree_and_name_the_real_folder() {
         assert!(switch_on(Some(&toml::Value::Boolean(true))));
         for off in [
@@ -200,6 +327,18 @@ mod tests {
         ] {
             assert!(!switch_on(off.as_ref()), "{off:?}");
         }
+        // The command-rule override, both arms: only an explicit role
+        // `false` turns the rules off; a missing or mistyped value reads as
+        // on (D3653's law is the default).
+        assert!(override_on(None, None));
+        assert!(override_on(None, Some(true)));
+        assert!(override_on(Some(true), Some(true)));
+        assert!(!override_on(Some(false), None));
+        assert!(!override_on(Some(true), Some(false)));
+        assert!(
+            override_on(Some(false), Some(true)),
+            "an explicit role true overrides even a default off"
+        );
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().canonicalize().unwrap().join("wt");
         std::fs::create_dir_all(&real).unwrap();

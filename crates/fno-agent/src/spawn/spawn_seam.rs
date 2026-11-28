@@ -106,7 +106,7 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
             return Err(2);
         }
     };
-    let args = crate::spawn_admission::resolve_prompt_file(args).map_err(|(reason, code)| {
+    let args = crate::spawn::runbook::resolve_prompts(args).map_err(|(reason, code)| {
         eprintln!("{reason}");
         code
     })?;

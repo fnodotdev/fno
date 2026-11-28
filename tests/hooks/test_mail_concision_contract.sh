@@ -13,16 +13,17 @@ for file in "$USING_FNO" "$MAIL_SKILL"; do
   grep -Fq "Keep technical terms" "$file"
 done
 
-# The hook injects only when fno-agent answers `due` for a joined session.
-STUB_DIR="$(mktemp -d)"
-trap 'rm -rf "$STUB_DIR"' EXIT
-printf '#!/bin/sh\nexit 0\n' >"$STUB_DIR/silent"
-printf '#!/bin/sh\necho due\n' >"$STUB_DIR/due"
-chmod +x "$STUB_DIR/silent" "$STUB_DIR/due"
-unjoined="$(FNO_AGENT_BIN="$STUB_DIR/silent" CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null)"
+# The hook injects only for a joined session, or on a fresh install where no session has joined yet.
+HOME_DIR="$(mktemp -d)"
+trap 'rm -rf "$HOME_DIR"' EXIT
+export FNO_AGENT_HOME="$HOME_DIR/agents" FNO_HOME="$HOME_DIR/fno"
+unset FNO_AGENT_BIN FNO_HOOK_HARNESS CODEX_PLUGIN_ROOT FNO_PLATFORM || true
+mkdir -p "$FNO_AGENT_HOME/sessions/claude/other" && : >"$FNO_AGENT_HOME/sessions/claude/other/joined"
+unjoined="$(CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null)"
 [[ "$unjoined" == "{}" ]] || { echo "an unjoined session got a preamble: $unjoined"; exit 1; }
 
-FNO_AGENT_BIN="$STUB_DIR/due" CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null | python3 -c '
+mkdir -p "$FNO_AGENT_HOME/sessions/claude/s1" && : >"$FNO_AGENT_HOME/sessions/claude/s1/joined"
+CLAUDE_CODE_SESSION_ID=s1 CLAUDE_PLUGIN_ROOT="$ROOT" bash "$HOOK" </dev/null | python3 -c '
 import json
 import sys
 

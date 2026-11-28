@@ -42,6 +42,13 @@ PLUG="$WORK/plug"
 mkdir -p "$PLUG/hooks" "$PLUG/hooks/lib" "$PLUG/scripts/lib" "$PLUG/.claude-plugin"
 cp "$WRAPPER" "$PLUG/hooks/"
 cp "$SESSION_HOOK" "$PLUG/hooks/"
+# The wrapper is a shim into `fno-agent hook front`, which the minimal PATH
+# cannot reach: pin the binary.
+cp "$REPO_ROOT_REAL/hooks/hook-front.sh" "$PLUG/hooks/"
+source "$REPO_ROOT_REAL/hooks/lib/agents-bin.sh"
+FNO_AGENT_BIN="$(fno_agent_bin "$REPO_ROOT_REAL")"
+[[ -n "$FNO_AGENT_BIN" ]] || { printf '[frontdoor-ps] SKIP: no fno-agent binary\n' >&2; exit 77; }
+export FNO_AGENT_BIN
 cp "$REPO_ROOT_REAL/hooks/lib/fno-bin.sh" "$PLUG/hooks/lib/"
 cp "$REPO_ROOT_REAL/scripts/lib/with-timeout.sh" "$PLUG/scripts/lib/"
 printf '{\n  "name": "fno",\n  "version": "9.9.9"\n}\n' >"$PLUG/.claude-plugin/plugin.json"

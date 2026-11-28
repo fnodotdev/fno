@@ -1165,6 +1165,16 @@ fn run_front_door(
         );
         return 2;
     }
+    // A bad runbook refuses before a row exists; the row records its
+    // absolute path so the fire reads the same file from any cwd.
+    let args = match crate::spawn::runbook::absolutize(args) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("fno agent spawn: {e}");
+            return 2;
+        }
+    };
+    let args = args.as_slice();
     let fields = row_fields(args, name_index, &req, command);
     let mut row = ScheduledSpawn {
         id: String::new(),

@@ -80,14 +80,19 @@ pub mod text_or_file;
 pub mod trusted_config;
 pub mod version;
 
+pub mod connector_gate;
 pub mod eval;
 pub mod gate;
 pub mod runtime;
 
-// The copied pid module must resolve `crate::pid` in BOTH crates (the copy
-// contract forbids `crate::` paths in the body), so the runtime module is
-// re-exported at the lib root under the name the copy carries in fno.
+// A copied module must resolve its `crate::` paths in BOTH crates (pid,
+// proc_table and the identity modules name each other), so each is
+// re-exported at the lib root under the name its copy carries in fno.
+pub use eval::proc_table;
+pub use runtime::bus_read;
+pub use runtime::identity_markers;
 pub use runtime::pid;
+pub use spawn::self_identity;
 
 // The flat `crate::<module>` paths stay valid: each module moved into a
 // group directory is re-exported here under its old name.
@@ -96,7 +101,7 @@ pub(crate) use backlog::owner_ladder;
 pub use backlog::{
     active_backlog, additional_prs, announce, backlog_ready, backlog_share, check_supersession,
     day, decide_door, decision_index, decision_log, decision_trace, digest, epic_issue, feed,
-    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_archive,
+    fleet_law, graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_archive, law_at,
     law_filters, law_firings, law_match, law_pr_shape, law_reach, law_recheck, law_renew,
     law_rescope, law_restore, law_upkeep, law_when, lead_answers, lint_registry, list_render,
     list_row, live_store_fence, needs, node_bind, node_branch, node_liveness, node_origin,
@@ -160,36 +165,37 @@ pub use runtime::{
     fleet_state, fleet_task, fleet_workspace, footnote_harness, footnote_transcript,
     footprint_cause, frames, gc, gc_claude_stop, gc_inventory, gc_native, gc_open_pr_guard,
     gc_sweep, gc_verify, grok_store, harness_beat, harness_daemon, harness_reader, heal, heal_pid,
-    heal_sweep, hook, identity, inbox_peers, install_drift, interrupt_classify, keep_mark,
-    lead_checkin, lead_checkin_blueprint, lead_checkin_lineup, lead_checkin_machine,
+    heal_sweep, hold_marker, hook, identity, inbox_peers, install_drift, interrupt_classify,
+    keep_mark, lead_checkin, lead_checkin_blueprint, lead_checkin_lineup, lead_checkin_machine,
     lead_checkin_orders, lead_escalation, lead_goal, lead_history, lead_hygiene, lead_lifecycle,
     lead_mail, lead_ops, lead_pushback, lead_reads, lead_rebind, lead_settle, lead_soul,
     lead_state, lead_term, lead_termination, lead_verdict_inputs, lead_wake, lead_wake_triggers,
     lease_heartbeat, ledger_axes, link_dial, liveness_cmd, liveness_sweep, lock_queue, logs,
     logs_args, logs_client, loop_lead, loop_runtime, loop_target, loops_pause, machine_load,
     machine_mail, machine_sample, machine_watch, mail_arm, mail_backfill, mail_bus, mail_carrier,
-    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
-    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
-    manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
-    opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns,
-    operator_witness, org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc,
-    page_relief, pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch,
-    pane_stop, peek, pending_session_row, pi_transcript, process_owner, process_probe, project,
-    provenance, question_stamp, quiet_retire, readiness, reap_release, reap_render, receipt,
-    reclaim, recovery_sweep, reentry, register, registry_commands, registry_commit, registry_guard,
-    registry_json, registry_read, registry_store, removals, rename, reserve, restart_run,
-    resume_args, resume_gate, resume_pin, resume_receipt, resume_wake, rev_front, revival_check,
-    revive_proof, rm_receipt, rm_tombstone, roles, roster_reap, run_import, run_outcome, run_state,
-    scrape, scratch, screen, session_activity, session_backfill, session_join, session_names_fold,
-    session_start_bytes, session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces,
-    stalls, state, state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout,
-    status_render, status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor,
-    sync_canonical, synthetic_tail, system_sender, task_context, team_alarm, team_identity,
-    team_names, team_read, team_reap, team_rescope, team_settle, team_spend, team_split,
-    team_widen, terminal_stop, territory, tool_activity, tracker, transcript_activity,
-    transcript_resolve, transcript_turns, truth_cli, truth_probe, update_journal,
-    visual_log_reader, visual_screen, wait, wake_name, wake_read, watch, watch_expiry, watchdog,
-    whoami, worker_wake, worktree, worktree_reapable, write_queue,
+    mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_ids, mail_inject,
+    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_sent_core, mail_sent_env,
+    mail_teach, mail_threads, manifest, manifest_lookup, mcp, native_adopt, notice_route,
+    notify_dispatch, nudge, observer, opencode_serve, opencode_transcript, opencode_turn,
+    operator_notice, operator_turns, operator_witness, org_board, org_fold, org_remote, org_rivals,
+    orphan_reap, orphans, osc, page_relief, pane_claim, pane_identity, pane_keeper, pane_loop,
+    pane_rebind, pane_relaunch, pane_stop, peek, pending_session_row, pi_transcript, process_owner,
+    process_probe, project, provenance, question_stamp, quiet_retire, readiness, reap_release,
+    reap_render, receipt, reclaim, recovery_sweep, reentry, register, registry_commands,
+    registry_commit, registry_guard, registry_json, registry_read, registry_store, removals,
+    rename, reserve, restart_run, resume_args, resume_gate, resume_pin, resume_receipt,
+    resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone, roles,
+    roster_reap, run_import, run_outcome, run_state, scrape, scratch, screen, session_activity,
+    session_backfill, session_join, session_names_fold, session_start_bytes, session_truth,
+    silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state, state_layout,
+    state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render, status_sinks,
+    stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
+    synthetic_tail, system_sender, task_context, team_alarm, team_identity, team_names, team_read,
+    team_reap, team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop,
+    territory, tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns,
+    truth_cli, truth_probe, update_journal, visual_log_reader, visual_screen, wait, wake_name,
+    wake_read, watch, watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable,
+    write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
@@ -332,9 +338,9 @@ impl AgentStatus {
     /// fleet arm reads: census, footprint, peek, worktree ownership, spawn
     /// gate. The words are the variants' serde names (`Self::as_str`);
     /// `spawn_gate::status_is_liveish` reads this const, and the spawn-gate
-    /// test pins const, names and predicate together.
-    pub const LIVE_STATUSES: &'static [&'static str] =
-        &["spawning", "ready", "idle", "busy", "live", "restarting"];
+    /// test pins const, names and predicate together. The list itself lives
+    /// in `identity_markers`, which fno compiles a copy of.
+    pub const LIVE_STATUSES: &'static [&'static str] = identity_markers::LIVE_STATUSES;
 }
 
 /// Sealed event vocabulary every provider parses INTO (LD9). Variant additions
@@ -1149,6 +1155,8 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The daemon trust-answer sweep: one row per attempt to answer a parked
     // codex folder-trust modal itself (daemon/sweeps.rs).
     "trust_prompt_answered",
+    // The in-process mux pane client met an unset FNO_MUX_DIR (mux_client.rs).
+    "mux_dir_unset",
     // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
     // the per-pass summary row and its pause-skip row.
     "shell_writers_sweep",
@@ -1753,6 +1761,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // the store's identity columns, and the scoreboard lanes view plus the
     // lead check-in read it.
     "provider_rate_limited",
+    // The Stop front's context-nudge leg: the context and orphan blocks and
+    // the flush advice or refusal (runtime/hook/front/stop.rs).
+    "session_context_nudge",
+    "lead_context_nudge",
+    "lead_orphan_block",
+    "context_flush_nudge",
+    "context_flush_refused",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

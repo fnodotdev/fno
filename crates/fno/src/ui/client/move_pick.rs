@@ -173,3 +173,95 @@ impl View {
         lines
     }
 }
+
+/// Move-tab / move-pane picker keys (; cursored by).
+///
+/// Two axes reach the same destination. A digit `1..=9` commits the numbered
+/// squad in one keystroke, exactly as it always has - that is why digits still
+/// COMMIT here while in the attach picker they only select. The attach picker
+/// needs a second axis (the split direction) and so cannot commit on a digit;
+/// this picker has no second axis, so a one-key move is the whole gesture and
+/// there is nothing to gain by making it two.
+///
+/// The cursor is what reaches PAST nine, now that the list is uncapped: hjkl
+/// and the arrows move it, Enter/Space commits it. Which means the picker is no
+/// longer single-shot - it must survive a keypress that is neither. An unmapped
+/// key is now ignored rather than closing the overlay, because "j closed my
+/// picker" is exactly the surprise the cursor exists to remove.
+///
+/// The captured id is re-validated against the CURRENT catalog before sending
+/// (stale -> BEL + close; the server refuses a stale id regardless).
+pub(super) async fn move_pick_keys(
+    view: &mut View,
+    bytes: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    let keys = {
+        let Some(picker) = view.move_pick.as_mut() else {
+            return Ok(StdinFlow::Continue);
+        };
+        let mut esc = std::mem::take(&mut picker.esc);
+        let keys = fold_selector_keys(&mut esc, bytes);
+        picker.esc = esc;
+        keys
+    };
+
+    for key in keys {
+        // Cursor motion first: it is the only branch that leaves the picker open
+        // and unchanged otherwise.
+        let step = match key {
+            b'k' | b'h' => Some(-1isize),
+            b'j' | b'l' => Some(1isize),
+            _ => None,
+        };
+        if let Some(delta) = step {
+            if let Some(picker) = view.move_pick.as_mut() {
+                let len = picker.squads.len();
+                if len > 0 {
+                    let cur = picker.cursor.min(len - 1) as isize;
+                    picker.cursor = (cur + delta).clamp(0, len as isize - 1) as usize;
+                }
+            }
+            continue;
+        }
+        // A digit picks by ordinal, Enter/Space picks whatever the cursor is on.
+        // Everything else either cancels or is ignored.
+        let idx = match key {
+            // A digit past the END OF THE LIST names a row that was never
+            // there, so it is a BEL that leaves the picker open - the same
+            // answer the attach picker gives. Only an in-range digit is a
+            // commit attempt; closing on an out-of-range one would be the
+            // "j closed my picker" surprise the cursor exists to remove.
+            b'1'..=b'9' => {
+                let idx = (key - b'1') as usize;
+                let in_range = view
+                    .move_pick
+                    .as_ref()
+                    .is_some_and(|p| idx < p.squads.len());
+                if !in_range {
+                    let _ = raw_out(b"\x07");
+                    continue;
+                }
+                idx
+            }
+            b'\r' | b'\n' | b' ' => match view.move_pick.as_ref() {
+                Some(p) => p.cursor,
+                None => return Ok(StdinFlow::Continue),
+            },
+            0x1b | b'q' => {
+                view.move_pick = None;
+                return Ok(StdinFlow::Continue);
+            }
+            _ => continue,
+        };
+        // Committing consumes the picker, so a stale overlay can never
+        // resurrect a second move.
+        let Some(picker) = view.move_pick.take() else {
+            return Ok(StdinFlow::Continue);
+        };
+        let (src, squads) = (picker.src, picker.squads);
+        move_pick::commit(view, sock_w, src, &squads, idx).await?;
+        return Ok(StdinFlow::Continue);
+    }
+    Ok(StdinFlow::Continue)
+}

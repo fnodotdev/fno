@@ -22,7 +22,7 @@ pub mod tests_mint;
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {
         eprintln!(
-            "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
+            "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | connector-gate | events)"
         );
         return 2;
     };
@@ -43,6 +43,7 @@ pub fn run(args: &[String]) -> i32 {
         "candidates" => crate::evals_candidates::run(rest),
         "drafts" => crate::evals_drafts::run(rest),
         "gate-retry" => crate::evals_gate::retry(rest),
+        "connector-gate" => crate::connector_gate::run(rest),
         "events" => {
             if rest.first().is_some_and(|a| a == "--report") {
                 crate::usage_report::command(rest.get(1..).unwrap_or(&[]))
@@ -56,7 +57,7 @@ pub fn run(args: &[String]) -> i32 {
         // answers every spelling so the dispatch shape compiles first.
         _ => {
             eprintln!(
-                "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)"
+                "usage: fno-agent evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | connector-gate | events)"
             );
             return 2;
         }
@@ -356,6 +357,10 @@ fn run_command(rest: &[String]) -> i32 {
         },
         None => None,
     };
+    // One evals run per machine: the slot covers selection, the orphan sweep
+    // and every worker thread, so a second run queues instead of stacking its
+    // fixture git steps on the first's.
+    let _machine_run_slot = crate::evals::runner::acquire_run_slot();
     let bank_dir = resolve_bank_dir(flag_lookup(rest, "--bank"));
     let tasks = match crate::evals::bank::discover_bank(&bank_dir) {
         Ok(tasks) => tasks,

@@ -1,8 +1,8 @@
 name: release-binaries
 
 # Build standalone platform binaries (the `fno` front door and all three
-# `fno-agent` binaries; the macOS legs add `fno-app`) into one tarball per
-# platform. Build-only: this
+# `fno-agent` binaries) into one tarball per platform. fno-app ships only on
+# its own fno-app-v* line (release-app.yml). Build-only: this
 # workflow publishes nothing. It runs on manual dispatch (an inspection
 # build) or as a reusable workflow called from release.yml, which owns every
 # publish leg behind the `release` environment approval, and from
@@ -117,13 +117,6 @@ jobs:
         working-directory: crates/fno
         run: ${{ matrix.target.cargo }} --release --target ${{ matrix.target.rust-target }} --bin fno
 
-      - name: Build the fno-app binary (macOS)
-        if: startsWith(matrix.target.name, 'macos')
-        working-directory: crates/fno-app
-        # The matrix cargo is plain `cargo build` on the macOS legs (zigbuild
-        # is linux-only), so this is the same plain build release-app.yml runs.
-        run: ${{ matrix.target.cargo }} --release --target ${{ matrix.target.rust-target }} --bin fno-app
-
       - name: Check macOS signing secrets
         id: signing
         if: startsWith(matrix.target.name, 'macos')
@@ -176,7 +169,6 @@ jobs:
             "crates/fno-agent/target/$RUST_TARGET/release/fno-agent-daemon"
             "crates/fno-agent/target/$RUST_TARGET/release/fno-agent-worker"
             "crates/fno/target/$RUST_TARGET/release/fno"
-            "crates/fno-app/target/$RUST_TARGET/release/fno-app"
           )
           $sign sign "${bins[@]}"
           # A bare Mach-O cannot carry a stapled ticket, so Gatekeeper checks
@@ -192,18 +184,13 @@ jobs:
           # tar's -C is cumulative: a second relative -C resolves from inside
           # the first, so the fno leg chdir'd into
           # crates/fno-agent/target/.../crates/fno/target/... and failed to
-          # open. Anchor both dirs at the workspace. fno-app joins on the
-          # macOS legs only: the app is macOS-only, so the linux tarball
-          # stays the four-binary core the required check demands.
+          # open. Anchor both dirs at the workspace.
           args=(
             tar -czf "fno-agent-${{ matrix.target.name }}.tar.gz"
             -C "$PWD/crates/fno-agent/target/${{ matrix.target.rust-target }}/release"
               "fno-agent" "fno-agent-daemon" "fno-agent-worker"
             -C "$PWD/crates/fno/target/${{ matrix.target.rust-target }}/release" "fno"
           )
-          if [[ "${{ matrix.target.name }}" == macos* ]]; then
-            args+=(-C "$PWD/crates/fno-app/target/${{ matrix.target.rust-target }}/release" "fno-app")
-          fi
           "${args[@]}"
 
       # macos-x64 is cross-built on an Apple Silicon runner and cannot run its

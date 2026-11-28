@@ -547,14 +547,12 @@ fn acquire_move_lock() -> Option<PathBuf> {
 
 /// Link each binary into `dir` (the PATH dir of a fresh install that has no
 /// uv receipt to relink). Each link lands as a temp symlink, then renames
-/// over the old one, so a running command never sees a missing name. The
-/// carried extras join when the bin dir holds them.
+/// over the old one, so a running command never sees a missing name.
 fn link_binaries(bin: &Path, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for name in update_prebuilt::BINARIES {
         link_one(bin, dir, name).map_err(|e| format!("{}: {e}", dir.join(name).display()))?;
     }
-    link_extras(bin, dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     crate::install::legacy_links::retarget(dir);
     Ok(())
 }
@@ -566,39 +564,6 @@ fn link_one(bin: &Path, dir: &Path, name: &str) -> std::io::Result<()> {
     let tmp = link.with_file_name(format!(".{name}.fno-adopt-{}", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     std::os::unix::fs::symlink(bin.join(name), &tmp).and_then(|_| std::fs::rename(&tmp, &link))
-}
-
-/// Link the carried extras into `dir` when the bin dir holds them: fno-app
-/// rides the macOS tarballs only, so a linux install links nothing here and
-/// never creates `dir`.
-fn link_extras(bin: &Path, dir: &Path) -> std::io::Result<()> {
-    let carried: Vec<&str> = update_prebuilt::LINKED_EXTRAS
-        .iter()
-        .copied()
-        .filter(|name| bin.join(name).is_file())
-        .collect();
-    if carried.is_empty() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(dir)?;
-    for name in carried {
-        link_one(bin, dir, name)?;
-    }
-    Ok(())
-}
-
-/// Link the carried extras into the PATH dir (FNO_INSTALL_DIR, else
-/// ~/.local/bin): every upgrade path calls this after its swap so an older
-/// install gains fno-app beside its existing links. No HOME resolves: Ok,
-/// nothing linked.
-pub(crate) fn link_path_extras(bin: &Path) -> std::io::Result<()> {
-    let dir = std::env::var_os("FNO_INSTALL_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin")));
-    let Some(dir) = dir else {
-        return Ok(());
-    };
-    link_extras(bin, &dir)
 }
 
 /// The `fno update --adopt <dir>` door: prove the unpacked release ships the
@@ -652,9 +617,6 @@ pub(crate) fn adopt_release(unpacked: &Path) -> i32 {
                 bin.display()
             ),
         }
-    } else if let Err(e) = link_path_extras(&bin) {
-        let _ = std::fs::remove_file(marker_path());
-        return failed("link", &e.to_string());
     }
     println!(
         "fno update: done; {} runs {running}.",
@@ -1210,41 +1172,5 @@ mod tests {
         assert!(!renumber_newer("0.4.9", "0.0.13"));
         assert!(!renumber_newer("0.0.16", "0.4.9"));
         assert!(!renumber_newer("not-a-version", "0.0.16"));
-    }
-
-    #[test]
-    fn extras_link_when_carried_and_skip_when_absent() {
-        let bin = tempfile::tempdir().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        // Nothing carried: Ok, and the link dir is not even created.
-        let fresh = dir.path().join("links");
-        std::fs::write(bin.path().join("fno"), b"").unwrap();
-        link_extras(bin.path(), &fresh).unwrap();
-        assert!(!fresh.exists(), "a bin dir without extras creates nothing");
-        // Carried: the link lands and points at the bin copy.
-        std::fs::write(bin.path().join("fno-app"), b"").unwrap();
-        link_extras(bin.path(), &fresh).unwrap();
-        assert_eq!(
-            std::fs::read_link(&fresh.join("fno-app")).unwrap(),
-            bin.path().join("fno-app"),
-            "the carried extra gained a link pointing at the bin copy"
-        );
-    }
-
-    #[test]
-    fn extras_link_renames_over_an_existing_link() {
-        let bin = tempfile::tempdir().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(bin.path().join("fno-app"), b"").unwrap();
-        let link = dir.path().join("fno-app");
-        std::os::unix::fs::symlink(bin.path().join("fno-app"), &link).unwrap();
-        link_extras(bin.path(), dir.path()).unwrap();
-        assert_eq!(
-            std::fs::read_link(&link).unwrap(),
-            bin.path().join("fno-app"),
-            "one correct link, renamed over, not duplicated"
-        );
-        let count = std::fs::read_dir(dir.path()).unwrap().count();
-        assert_eq!(count, 1, "no stray temp link beside the renamed-over one");
     }
 }

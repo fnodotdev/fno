@@ -16,7 +16,7 @@
 #   idle      idle CPU % and RSS of both clients while the world holds 30 agent
 #             stand-in panes (idle shells; they cost the client panes and frame
 #             streams, not real agent processes). ps sampling at 1s cadence.
-#   switch    focused-agent flip to painted change. TUI: `mux view` to the busy
+#   switch    focused-agent flip to painted change. TUI: `mux pane focus` to the busy
 #             pane, detection on its streamed `date +%s` line. fno-app: the
 #             control channel drains on a 400ms poll with no ack row, and
 #             window-state.json is quit-only, so the paint is observable only
@@ -153,7 +153,6 @@ trap teardown EXIT INT TERM
 
 # ---- world ----
 PANE_COUNT_EXPECTED=$((AGENTS + 2))
-SLEEPER_A_ID=""
 BUSY_ID=""
 LONG_ID=""
 
@@ -172,11 +171,22 @@ world_up() {
   ROOT="$(mktemp -d /tmp/fno-bench.XXXXXX)"
   ROOT="$(cd "$ROOT" && pwd -P)"
   export FNO_MUX_DIR="$ROOT/mux"
-  export FNO_SERVER="$SESSION"
-  # Pin the config inside the temp root: the state root becomes this
-  # directory, so no fno write reaches the real ~/.fno.
-  : > "$ROOT/config.toml"
+  # No FNO_SERVER: with it set, `mux attach` refuses ("already inside mux
+  # server") and the refusal text reads as a fast first paint.
+  unset FNO_SERVER FNO_SESSION
+  # Pin the config, the state root and the agent registry inside the temp
+  # root. An empty config leaves state_dir at ~/.fno, so selectors would
+  # resolve against the real fleet registry.
+  mkdir -p "$ROOT/state" "$ROOT/agents"
+  printf 'state_dir = "%s"\n' "$ROOT/state" > "$ROOT/config.toml"
   export FNO_CONFIG="$ROOT/config.toml"
+  export FNO_AGENT_HOME="$ROOT/agents"
+  local reg
+  reg="$("$FNO_BIN" config doctor 2>&1 | awk '$1=="OPERATOR" && $2=="registry.json" {print $3; exit}' || true)"
+  case "$reg" in
+    "$ROOT"/*) ;;
+    *) die "registry resolves to '${reg:-none}', outside the bench root $ROOT: refusing to run";;
+  esac
   # The app surface's own HOME; window-state and control files land here.
   mkdir -p "$ROOT/home/Library/Application Support"
   REAL_SIG_BEFORE="$(state_sig "$REAL_STATE")"
@@ -192,7 +202,7 @@ world_up() {
   # from position: the server may keep panes of its own.
   LONG_ID="$(pane_run_id sh -c 'seq 1 10000; exec sleep 3600')"
   BUSY_ID="$(pane_run_id sh -c 'read _; while :; do date +%s; sleep 0.2; done')"
-  SLEEPER_A_ID="$(pane_run_id sleep 3600)"
+  pane_run_id sleep 3600 >/dev/null
   local _k
   for _k in $(seq 2 "$AGENTS"); do
     pane_run_id sleep 3600 >/dev/null
@@ -208,13 +218,14 @@ world_up() {
   done
   [ "$got" -ge "$PANE_COUNT_EXPECTED" ] || die "world never reached $PANE_COUNT_EXPECTED panes (got $got)"
 
-  # Baseline the operator view on sleeper A; clients open onto it.
-  "$FNO_BIN" mux view "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
+  # View moves go through `mux pane focus <pane id>` inside each attach:
+  # it moves only attached clients, and `mux view` resolves registry names,
+  # which are not this throwaway server's bare-number pane ids.
 }
 
 wake_busy() {
   # The newline ends the busy pane's `read _`; the stream starts.
-  "$FNO_BIN" mux pane send "$BUSY_ID" --raw $'\n' --server "$SESSION" >/dev/null \
+  "$FNO_BIN" mux pane send "$BUSY_ID" --text $'\n' --raw --server "$SESSION" >/dev/null \
     || die "could not wake the busy pane (pane send refused)"
 }
 
@@ -257,7 +268,39 @@ fmt_stats() { # fmt_stats "p50 p90 min max n" -> "123 / 456 (n=20)"
 # `RESULT FAIL <reason>` line; everything else is swallowed so the
 # sample stays clean.
 run_tui_expect() { # run_tui_expect <tcl-file>
-  expect -f "$1" 2>&1 | sed -n 's/^RESULT //p' | tail -1
+  # A tcl error exits expect 1 and a missing RESULT line is a FAIL sample.
+  # The tail of expect's own output rides in the sample, comma-free, so the
+  # cause shows in samples.csv.
+  local raw res
+  raw="$(expect -f "$1" 2>&1 || true)"
+  res="$(printf '%s\n' "$raw" | sed -n 's/^RESULT //p' | tail -1)"
+  if [ -n "$res" ]; then
+    printf '%s\n' "$res"
+  else
+    printf 'FAIL no_result: %s\n' \
+      "$(printf '%s' "$raw" | tr -c '[:alnum:] ._:/=-' ' ' | tr -s ' ' | tail -c 300)"
+  fi
+}
+
+# One metric gets STEP_CAP seconds. A hung step kills itself and records a
+# FAIL row, so the run reaches the report instead of waiting forever. Strays
+# the step left behind fall to the teardown sweep.
+STEP_CAP=600
+run_step() { # run_step <metric_fn>
+  local pid wd rc=0
+  "$1" &
+  pid=$!
+  # The watchdog ends when the step does, so no sleep outlives the run.
+  ( t=0; while [ "$t" -lt "$STEP_CAP" ] && kill -0 "$pid" 2>/dev/null; do sleep 1; t=$((t + 1)); done
+    kill "$pid" 2>/dev/null ) &
+  wd=$!
+  wait "$pid" || rc=$?
+  wait "$wd" 2>/dev/null || true
+  if [ "$rc" -ge 128 ]; then
+    record "${1#metric_}" step 0 "FAIL step_cap_${STEP_CAP}s"
+  elif [ "$rc" -ne 0 ]; then
+    record "${1#metric_}" step 0 "FAIL step_exit_$rc"
+  fi
 }
 
 # ---- metrics ----
@@ -269,6 +312,8 @@ metric_launch() {
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
+log_user 0
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -312,13 +357,21 @@ metric_scroll() {
   local tpl="$ROOT/tui_scroll.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-sleep 0.3
+set ok 0
+for {set k 0} {$k < 25} {incr k} {
+  if {![catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_LONG_ID) --server $env(BENCH_SESSION)} err]} { set ok 1; break }
+  after 200
+}
+if {!$ok} { puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0 }
+sleep 0.5
 set t0 [clock milliseconds]
 send "\x02"
 after 50
@@ -347,11 +400,8 @@ if {$ms < 0} { set ms 0 }
 puts "RESULT $ms"
 EOF
   local i out
-  "$FNO_BIN" mux view "$LONG_ID" --server "$SESSION" >/dev/null
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux view "$LONG_ID" --server "$SESSION" >/dev/null 2>&1 || true
-    sleep 0.2
-    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
+    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" BENCH_LONG_ID="$LONG_ID" \
       BENCH_PAGES="$SCROLL_PAGES" BENCH_SETTLE_TICKS="$SCROLL_SETTLE_TICKS" run_tui_expect "$tpl")"
     case "$out" in
       FAIL*|"") record scroll tui "$i" "${out:-FAIL no_result}";;
@@ -367,6 +417,8 @@ metric_idle() {
   local tpl="$ROOT/tui_idle.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -388,30 +440,38 @@ EOF
     sleep 0.2; n=$((n + 1))
   done
   if [ -z "$tui_pid" ]; then
-    mark_unmeasured "idle tui: FAIL attach never reported its pid"
+    mark_unmeasured "idle tui: FAIL attach never reported its pid: $(tr -c '[:alnum:] ._:/=-' ' ' < "$ROOT/tui_idle.log" | tr -s ' ' | tail -c 300)"
   fi
 
   local app_pid=""
   if $needs_app; then
-    app_pid="$(app_env "$FNO_BIN" mux app open --server "$SESSION" --mode terminal 2>/dev/null | sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' | head -1)"
+    # In the background and bounded: a blocking `app open` must not hold the step.
+    app_env "$FNO_BIN" mux app open --server "$SESSION" --mode terminal > "$ROOT/app_open.log" 2>&1 &
+    PIDS+=("$!")
+    n=0
+    while [ "$n" -lt 100 ] && [ -z "$app_pid" ]; do
+      app_pid="$(sed -n 's/^[^0-9]*\([0-9][0-9]*\).*$/\1/p' "$ROOT/app_open.log" 2>/dev/null | head -1)"
+      [ -n "$app_pid" ] && break
+      sleep 0.2; n=$((n + 1))
+    done
     if [ -n "$app_pid" ]; then
       PIDS+=("$app_pid")
     else
-      mark_unmeasured "idle app: FAIL mux app open printed no pid (headless display, or the print shape changed?)"
+      mark_unmeasured "idle app: FAIL mux app open printed no pid: $(tr -c '[:alnum:] ._:/=-' ' ' < "$ROOT/app_open.log" | tr -s ' ' | tail -c 300)"
     fi
   fi
 
   local t=0 cpu rss
   while [ "$t" -lt "$IDLE_SECS" ]; do
     if [ -n "$tui_pid" ]; then
-      cpu="$(ps -o %cpu= -p "$tui_pid" 2>/dev/null | tr -d ' ')"
-      rss="$(ps -o rss= -p "$tui_pid" 2>/dev/null | tr -d ' ')"
+      cpu="$(ps -o %cpu= -p "$tui_pid" 2>/dev/null | tr -d ' ' || true)"
+      rss="$(ps -o rss= -p "$tui_pid" 2>/dev/null | tr -d ' ' || true)"
       [ -n "$cpu" ] && echo "idle_cpu,tui,$t,$cpu" >> "$SAMPLES"
       [ -n "$rss" ] && echo "idle_rss_kb,tui,$t,$rss" >> "$SAMPLES"
     fi
     if [ -n "$app_pid" ]; then
-      cpu="$(ps -o %cpu= -p "$app_pid" 2>/dev/null | tr -d ' ')"
-      rss="$(ps -o rss= -p "$app_pid" 2>/dev/null | tr -d ' ')"
+      cpu="$(ps -o %cpu= -p "$app_pid" 2>/dev/null | tr -d ' ' || true)"
+      rss="$(ps -o rss= -p "$app_pid" 2>/dev/null | tr -d ' ' || true)"
       [ -n "$cpu" ] && echo "idle_cpu,app,$t,$cpu" >> "$SAMPLES"
       [ -n "$rss" ] && echo "idle_rss_kb,app,$t,$rss" >> "$SAMPLES"
     fi
@@ -438,6 +498,8 @@ metric_switch() {
   local tpl="$ROOT/tui_switch.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
@@ -457,7 +519,9 @@ expect {
 }
 set timeout $env(BENCH_TIMEOUT)
 set t0 [clock milliseconds]
-exec $env(BENCH_FNO) mux view $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)
+if {[catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} {
+  puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0
+}
 set got ""
 expect {
   -re {[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]} { set got $expect_out(0,string) }
@@ -475,11 +539,9 @@ set t1 [clock milliseconds]
 catch {exec kill -9 [exp_pid]}
 puts "RESULT [expr {$t1 - $t0}]"
 EOF
-  # Return the view to sleeper A between runs so every run starts cold.
+  # Each run is a fresh attach, so it starts on the server's default view.
   local i out
   for i in $(seq 1 "$RUNS"); do
-    "$FNO_BIN" mux view "$SLEEPER_A_ID" --server "$SESSION" >/dev/null 2>&1 || true
-    sleep 0.3
     out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" \
       BENCH_BUSY_ID="$BUSY_ID" run_tui_expect "$tpl")"
     case "$out" in
@@ -496,13 +558,21 @@ metric_keypaint() {
   local tpl="$ROOT/tui_keypaint.exp"
   cat > "$tpl" <<'EOF'
 set timeout $env(BENCH_TIMEOUT)
+log_user 0
+set stty_init "rows 40 cols 120"
 spawn -noecho $env(BENCH_FNO) mux attach $env(BENCH_SESSION)
 expect {
   -re "." {}
   timeout { puts "RESULT FAIL timeout_first_paint"; exit 0 }
   eof { puts "RESULT FAIL eof_first_paint"; exit 0 }
 }
-sleep 0.3
+set ok 0
+for {set k 0} {$k < 25} {incr k} {
+  if {![catch {exec $env(BENCH_FNO) mux pane focus $env(BENCH_BUSY_ID) --server $env(BENCH_SESSION)} err]} { set ok 1; break }
+  after 200
+}
+if {!$ok} { puts "RESULT FAIL focus: [string map [list "\n" " "] $err]"; exit 0 }
+sleep 0.5
 set marker "kpz[clock clicks]"
 set t0 [clock milliseconds]
 send -- "$marker\r"
@@ -516,9 +586,8 @@ catch {exec kill -9 [exp_pid]}
 puts "RESULT [expr {$t1 - $t0}]"
 EOF
   local i out
-  "$FNO_BIN" mux view "$BUSY_ID" --server "$SESSION" >/dev/null 2>&1 || true
   for i in $(seq 1 "$RUNS"); do
-    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" run_tui_expect "$tpl")"
+    out="$(BENCH_TIMEOUT="$TUI_TIMEOUT" BENCH_FNO="$FNO_BIN" BENCH_SESSION="$SESSION" BENCH_BUSY_ID="$BUSY_ID" run_tui_expect "$tpl")"
     case "$out" in
       FAIL*|"") record keypaint tui "$i" "${out:-FAIL no_result}";;
       *) record keypaint tui "$i" "$out";;
@@ -581,7 +650,7 @@ write_report() {
     echo "- fno-app: ${app_ver:-unavailable} ($APP_BIN)"
     echo "- world: $AGENTS idle panes + one 10000-line pane + one busy pane; panes $PANE_SIZE; server $SESSION"
     echo "- runs: $RUNS per timed cell; idle sampled 1s cadence for ${IDLE_SECS}s"
-    echo "- methods: launch/tui = first pty output byte; launch/app = cold --shot wall incl. one png encode; scroll = keystroke to a 2s quiet window minus fixed budgets; switch = mux view flip to the busy pane's first streamed epoch line; keypaint = marker keystroke to its painted echo; idle = ps argv-keyed sampling (TUI and server share the name fno)"
+    echo "- methods: launch/tui = first pty output byte; launch/app = cold --shot wall incl. one png encode; scroll = keystroke to a 2s quiet window minus fixed budgets; switch = mux pane focus flip to the busy pane's first streamed epoch line; keypaint = marker keystroke to its painted echo; idle = ps argv-keyed sampling (TUI and server share the name fno)"
     echo "- session was $SESSION; killed at teardown (sweep verdict above in the run log)"
   } > "$REPORT"
   echo "report: $REPORT"
@@ -594,9 +663,9 @@ command -v perl >/dev/null || die "perl not found"
 
 world_up
 echo "world up: $PANE_COUNT_EXPECTED panes, server $SESSION, root $ROOT"
-case ",$METRICS," in *,launch,*) metric_launch;; esac
-case ",$METRICS," in *,scroll,*) metric_scroll;; esac
-case ",$METRICS," in *,idle,*) metric_idle;; esac
-case ",$METRICS," in *,switch,*) metric_switch;; esac
-case ",$METRICS," in *,keypaint,*) metric_keypaint;; esac
+case ",$METRICS," in *,launch,*) run_step metric_launch;; esac
+case ",$METRICS," in *,scroll,*) run_step metric_scroll;; esac
+case ",$METRICS," in *,idle,*) run_step metric_idle;; esac
+case ",$METRICS," in *,switch,*) run_step metric_switch;; esac
+case ",$METRICS," in *,keypaint,*) run_step metric_keypaint;; esac
 write_report

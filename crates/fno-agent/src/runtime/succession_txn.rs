@@ -141,6 +141,31 @@ pub(crate) fn taken_over(scope: &str, pending: &PendingSuccession, take_over: &V
     }
 }
 
+/// Point the scope's lead manifest at the successor and restart its term.
+/// The manifest keeps naming the predecessor until this write: the split
+/// read compares it with the seated row, and the term reads count `created_at`
+/// onward over the manifest's session. `expect_session` refuses a manifest
+/// that no longer names the predecessor, so a manifest already moved by
+/// `org init --rebind-from` is left alone.
+pub(crate) fn restamp_manifest(root: &Path, scope: &str, cleared: &PendingSuccession, now: &str) {
+    let (Some(successor), Some(predecessor)) = (
+        cleared.successor_session.as_deref(),
+        cleared.predecessor_session.as_deref(),
+    ) else {
+        eprintln!("succession: manifest restamp for {scope} skipped: no session ids");
+        return;
+    };
+    let written = crate::lead_state::set_manifest_fields(
+        root,
+        scope,
+        &[("harness_session_id", successor), ("created_at", now)],
+        Some(predecessor),
+    );
+    if let Err(e) = written {
+        eprintln!("succession: manifest restamp for {scope} failed: {e}");
+    }
+}
+
 /// Verify, release, retro, from the successor's first beat: `cleared` is the
 /// pending record `bind_and_refresh` just took. The release readback reads
 /// the live registry rows: a predecessor still seated over the scope names
@@ -161,6 +186,8 @@ pub(crate) fn verified(scope: &str, cwd: &Path, cleared: &PendingSuccession) {
             }),
         );
     }
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    restamp_manifest(&crate::paths::space_dir(cwd), scope, cleared, &now);
     // Release readback: role.py vacates the predecessor at spawn; this is
     // the readback proving it happened. No live row over the scope, or a
     // seated session that is not the predecessor's, is the release proof.
@@ -525,5 +552,49 @@ mod tests {
         assert_eq!(rows.len(), 2, "{bus}");
         assert_eq!(rows[1]["from"], json!(crate::lead_mail::SETTLE_SENDER));
         assert!(rows[1]["body"].as_str().unwrap().contains("the user moved"));
+    }
+
+    fn manifest_at(root: &Path, session: &str) -> std::path::PathBuf {
+        let leads = root.join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        let path = leads.join("fno.md");
+        std::fs::write(
+            &path,
+            format!(
+                "---\nfno_id: fno-1\nscope: fno\nharness: claude\nharness_session_id: {session}\n\
+                 created_at: 2026-10-20T15:00:00Z\n---\nbody\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn restamp_moves_the_manifest_to_the_successor_and_restarts_the_term() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = manifest_at(dir.path(), "sess-old");
+
+        restamp_manifest(dir.path(), "fno", &pending(), "2026-11-26T09:00:00Z");
+
+        let parsed =
+            crate::loopcheck::parse_lead_manifest(&std::fs::read_to_string(&path).unwrap())
+                .unwrap();
+        assert_eq!(parsed.harness_session_id.as_deref(), Some("sess-new"));
+        assert_eq!(parsed.created_at.as_deref(), Some("2026-11-26T09:00:00Z"));
+        assert_eq!(
+            parsed.fno_id, "fno-1",
+            "the identity field survives the rewrite"
+        );
+    }
+
+    #[test]
+    fn restamp_leaves_a_manifest_that_no_longer_names_the_predecessor_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = manifest_at(dir.path(), "sess-other");
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        restamp_manifest(dir.path(), "fno", &pending(), "2026-11-26T09:00:00Z");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     }
 }

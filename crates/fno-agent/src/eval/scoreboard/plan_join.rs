@@ -314,7 +314,11 @@ pub(crate) fn declared_probes(plan_doc: Option<&str>) -> Vec<String> {
         return Vec::new();
     };
     let Some(probes) = fm.get("done_probes") else {
-        return Vec::new();
+        // The body form keeps the list in the `## Gate records` fence.
+        return crate::plan_doc::records::body_list(doc, "done_probes")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
     };
     let Some(list) = probes.as_sequence() else {
         return Vec::new();

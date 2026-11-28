@@ -941,7 +941,7 @@ fn render_block(m: &Value) -> String {
     let header = crate::mail_header::render_header(
         crate::mail_header::HeaderForm::Mention,
         sender,
-        id,
+        &crate::numbers::mail_token(id),
         third.as_deref(),
     );
     format!("{header}\n{body}")

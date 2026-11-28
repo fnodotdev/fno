@@ -305,7 +305,7 @@ async fn config_tab_lists_the_schema_and_filters() {
         .count();
     // One row per schema leaf, except the eighteen `paths.*` leaves fold
     // into one Paths group row.
-    assert_eq!(entries, 391);
+    assert_eq!(entries, 393);
     // The fold: one Paths row carries the count and the override state in
     // its dim column, and the path roots no longer crowd the top level.
     assert!(

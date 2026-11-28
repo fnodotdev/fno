@@ -323,6 +323,7 @@ pub(crate) fn build_wrapped(ctx: &PaneContext) -> ArmPlan {
     ArmPlan {
         wrapped: argv,
         held_seed: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
+        delivered_seed: None,
         preassigned_id: None,
     }
 }

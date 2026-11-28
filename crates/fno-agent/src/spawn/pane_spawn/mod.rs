@@ -272,6 +272,10 @@ pub struct ArmPlan {
     /// The seed held OUT of the argv for a post-bind turn/start (codex).
     /// `None` delivers the message inside the argv like every thread spawn.
     pub held_seed: Option<String>,
+    /// The exact first-turn text the arm delivers. The row records it as the
+    /// spawn payload so the attended guard's exact match holds; `None`
+    /// records the raw message.
+    pub delivered_seed: Option<String>,
     /// A `preassigned` binding harness starts with the id it minted, so the
     /// pane is addressable before its row exists: the id rides `--fno-id`.
     pub preassigned_id: Option<String>,
@@ -654,7 +658,16 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
         Err(refusal) => return refuse(&refusal),
     };
 
-    if let Err(exc) = write_pane_row(home, name, ctx, &pane, &bind, replacing, &spawn_trigger) {
+    if let Err(exc) = write_pane_row(
+        home,
+        name,
+        ctx,
+        &pane,
+        &bind,
+        replacing,
+        &spawn_trigger,
+        plan.delivered_seed.as_deref(),
+    ) {
         return refuse(&PaneRefusal {
             line: format!("registry row write failed: {exc}"),
             exit_code: 12,
@@ -1230,6 +1243,7 @@ pub fn write_pane_row(
     bind: &ArmBind,
     replacing: bool,
     spawn_trigger: &Option<String>,
+    delivered_seed: Option<&str>,
 ) -> Result<(), String> {
     let (status, session_id) = match bind {
         ArmBind::Bound { session_id } => (AgentStatus::Live, Some(session_id.clone())),
@@ -1242,12 +1256,18 @@ pub fn write_pane_row(
     let stamp: std::collections::BTreeMap<String, String> =
         crate::accounts::launch::pane_stamp().into_iter().collect();
     let launch_account = stamp.get(crate::state::LAUNCH_ACCOUNT_ENV_KEY).cloned();
+    // The route's model rides the row so consult lane resolution can match it
+    // against the declared rows; a row without a model never resolves a lane.
+    let requested = ctx
+        .route
+        .as_deref()
+        .and_then(|route| requested_model(route, &ctx.cwd));
     let entry = RegistryEntry {
         name: name.to_string(),
         harness: Some(ctx.provider.clone()),
         provider: None,
-        model: None,
-        model_basis: None,
+        model: requested.clone(),
+        model_basis: requested.map(|_| "requested".to_string()),
         effort: None,
         requested_model: None,
         requested_provider: None,
@@ -1256,7 +1276,10 @@ pub fn write_pane_row(
         requested_permission_mode: (ctx.provider.as_harness() == Harness::Claude)
             .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
             .flatten(),
-        spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),
+        spawn_payload: delivered_seed
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| (!ctx.message.is_empty()).then(|| ctx.message.clone())),
         cwd: ctx.cwd.to_string_lossy().into_owned(),
         log_path: entry_log_path,
         status,
@@ -1283,6 +1306,30 @@ pub fn write_pane_row(
     write_pane_row_txn(home, name, entry, replacing)
 }
 
+/// The declared-lane row's one field [`requested_model`] reads, parsed once
+/// at the boundary: the fold guarantees the key, empty when unnamed.
+#[derive(serde::Deserialize)]
+struct DeclaredLaneModel {
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// The model a `--route` names, without credential reads (the model half of
+/// `route_vendor`): the pair form's model, else a declared lane's model.
+/// `None` for an absent route, a `--role` resolution, or an unknown name:
+/// the row stays model-less and consult lane resolution answers from what
+/// the config declares.
+fn requested_model(route: &str, cwd: &Path) -> Option<String> {
+    if let Some((_provider, model)) = crate::spawn_route::parse_target(route) {
+        return Some(model);
+    }
+    let row = crate::spawn_route::lane_row(route, cwd)?;
+    serde_json::from_value::<DeclaredLaneModel>(row)
+        .ok()
+        .and_then(|declared| declared.model)
+        .filter(|model| !model.is_empty())
+}
+
 /// Python's pid-start units note and the three-leg fallback, split out of
 /// [`write_pane_row`]: the minted row's `log_path` is set only when the touch
 /// produced a real file.
@@ -1297,7 +1344,15 @@ fn resolvable_handle_log_fallback(
     if leg1 || leg3 {
         return None;
     }
-    let log_path = home.root().join("logs").join(format!("{name}.log"));
+    // No session id exists yet, so a mint stamp keys the file: a reused
+    // name never reopens an earlier agent's log.
+    let minted = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let log_path = home
+        .root()
+        .join("logs")
+        .join(format!("{name}-{minted}.log"));
     let mut open = std::fs::OpenOptions::new();
     std::fs::create_dir_all(log_path.parent()?).ok()?;
     open.write(true).create(true).open(&log_path).ok()?;
@@ -1557,5 +1612,45 @@ impl PaneReceipt {
             .map(|(k, v)| format!("{}: {}", Value::String(k.clone()), v))
             .collect();
         format!("{{{}}}", body.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod requested_model_tests {
+    use super::*;
+
+    #[test]
+    fn the_pair_form_names_its_model_whole() {
+        assert_eq!(
+            requested_model("zai/glm-5.3-flash[1m]", Path::new("/tmp")),
+            Some("glm-5.3-flash[1m]".to_string()),
+            "the pair form keeps a namespaced model id whole"
+        );
+    }
+
+    #[test]
+    fn a_declared_lane_names_its_declared_model() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        std::fs::write(
+            dir.path().join(".fno/config.toml"),
+            "[[routing.models]]\nname = \"lane-opus\"\nharness = \"claude\"\nmodel = \"opus\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            requested_model("lane-opus", dir.path()),
+            Some("opus".to_string()),
+            "a declared lane name resolves through the config's own row"
+        );
+    }
+
+    #[test]
+    fn an_unknown_name_resolves_no_model() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            requested_model("no-such-lane", dir.path()),
+            None,
+            "an unknown lane name stays model-less"
+        );
     }
 }

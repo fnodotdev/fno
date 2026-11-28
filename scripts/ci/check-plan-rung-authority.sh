@@ -495,8 +495,9 @@ fi
 
 # Every registered reader rejects any `"status"` string literal: serde YAML
 # accepts direct lookup, indexing, parsed-key comparisons, and Value::from, so
-# enumerating access syntax would be a decorative guard. The sole subtraction
-# is kill_criteria.rs's exact existing `git status --porcelain` argv line.
+# enumerating access syntax would be a decorative guard. Each subtraction
+# below is one reader's, with its reason beside it. The first is
+# kill_criteria.rs's exact existing `git status --porcelain` argv line.
 # Scan every registered reader so growing the allowlist cannot silently weaken
 # the guard.
 fm_status=""
@@ -649,6 +650,16 @@ while IFS= read -r reader; do
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '!= Some\("status"\)|"claim", "status"|row\.get\("status"\)' \
+                || true
+        )"
+    fi
+    if [ "$reader" = "crates/fno-agent/src/runtime/observer/fold.rs" ]; then
+        # fold's "status" literal is a #[cfg(test)] transcript fixture: the
+        # launch word in a tool result's record (transcript vocabulary, not
+        # plan frontmatter), the merge_hold precedent.
+        matches="$(
+            printf '%s\n' "$matches" \
+                | grep -vE '"status":[[:space:]]*"async_launched"' \
                 || true
         )"
     fi

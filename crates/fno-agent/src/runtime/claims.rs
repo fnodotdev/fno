@@ -6,6 +6,11 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+pub use crate::identity_markers::{
+    canonical_identity_from, same_session_id, CanonicalDisposition, HARNESS_SESSION_MARKERS,
+    LEGACY_HARNESS_SESSION_MARKERS,
+};
+use crate::identity_markers::{FNO_HARNESS_NAME, FNO_HARNESS_SESSION_ID};
 #[cfg(target_os = "macos")]
 use crate::pid::{Creation, Pid};
 
@@ -1177,24 +1182,6 @@ pub(crate) fn validate_inputs(
     Ok(())
 }
 
-/// Ambient harness session markers, highest precedence first. The shell twin
-/// is `detect_provider()` in `hooks/helpers/init-target-state.sh`: the same
-/// order, the same non-blank rule.
-pub(crate) const HARNESS_SESSION_MARKERS: &[(&str, &str)] = &[
-    ("CODEX_THREAD_ID", "codex"),
-    ("CLAUDE_CODE_SESSION_ID", "claude"),
-    ("CODEX_SESSION_ID", "codex"),
-    ("GEMINI_SESSION_ID", "gemini"),
-    ("OPENCODE_SESSION_ID", "opencode"),
-    ("PI_SESSION_ID", "pi"),
-];
-
-pub(crate) const LEGACY_HARNESS_SESSION_MARKERS: &[(&str, &str)] =
-    &[("CLAUDE_SESSION_ID", "claude")];
-
-const FNO_HARNESS_NAME: &str = "FNO_HARNESS_NAME";
-const FNO_HARNESS_SESSION_ID: &str = "FNO_HARNESS_SESSION_ID";
-
 pub(crate) const AMBIENT_IDENTITY_NAMES: &[&str] = &[
     "FNO_AGENT_SELF",
     "FNO_AGENT_HARNESS",
@@ -1302,15 +1289,6 @@ pub(crate) fn stamp_command_env(
     }
 }
 
-// Public: the spawn door's stamp parser exposes it in its signature.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CanonicalDisposition {
-    Absent,
-    Invalid,
-    NameOnly,
-    Complete,
-}
-
 /// The positive proof that this invocation is the attended human at a
 /// terminal: no harness process sits in this call's ancestry, and stdin is a
 /// terminal. "No identity resolved" alone reads the same for a user shell
@@ -1366,39 +1344,6 @@ pub(crate) fn set_test_stdin_tty(value: Option<bool>) {
 pub(crate) fn adopter_is_operator() -> bool {
     let (_, _, disposition) = canonical_identity_from(|key| std::env::var(key).ok());
     disposition == CanonicalDisposition::Absent && attended_human_proof().is_ok()
-}
-
-pub(crate) fn canonical_identity_from(
-    get: impl Fn(&str) -> Option<String>,
-) -> (Option<String>, Option<String>, CanonicalDisposition) {
-    let raw_name = get(FNO_HARNESS_NAME);
-    let raw_session = get(FNO_HARNESS_SESSION_ID);
-    let name_present = raw_name.is_some();
-    let session_present = raw_session.is_some();
-    let name = raw_name.as_deref().unwrap_or_default().trim().to_string();
-    let session = raw_session
-        .as_deref()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if !name_present && !session_present {
-        return (None, None, CanonicalDisposition::Absent);
-    }
-    if !name_present || name.is_empty() || (session_present && session.is_empty()) {
-        return (None, None, CanonicalDisposition::Invalid);
-    }
-    if !session_present {
-        return (None, Some(name), CanonicalDisposition::NameOnly);
-    }
-    (Some(session), Some(name), CanonicalDisposition::Complete)
-}
-
-pub(crate) fn same_session_id(left: &str, right: &str) -> bool {
-    if left.starts_with("ses_") || right.starts_with("ses_") {
-        left == right
-    } else {
-        left.eq_ignore_ascii_case(right)
-    }
 }
 
 fn vendor_identity_from(get: &impl Fn(&str) -> Option<String>) -> (Option<(String, String)>, bool) {
