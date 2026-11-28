@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|settings-config|settings-config-filter|settings-config-toggle|settings-config-cycle|settings-config-page|settings-config-detail|settings-config-error|settings-config-paths|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|persona-drill|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|row-menu-node|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|settings-config|settings-config-filter|settings-config-toggle|settings-config-cycle|settings-config-page|settings-config-detail|settings-config-error|settings-config-paths|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|persona-drill|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -54,6 +54,9 @@ pub enum ViewKind {
     Feed,
     /// The sideline row context menu on the first agent row.
     RowMenu,
+    /// The row context menu on the first agent row bound to a node, so the
+    /// Copy section shows its node entry.
+    RowMenuNode,
     /// The pointer resting on the third agent row, away from the chosen one.
     Hover,
     /// The selector cursor on the fourth agent row, away from the chosen one.
@@ -388,6 +391,7 @@ const VIEW_TABLE: &[(&str, ViewKind)] = &[
     ("bell-full", ViewKind::BellFull),
     ("feed", ViewKind::Feed),
     ("row-menu", ViewKind::RowMenu),
+    ("row-menu-node", ViewKind::RowMenuNode),
     ("hover", ViewKind::Hover),
     ("cursor", ViewKind::Cursor),
     ("needs-input", ViewKind::NeedsInput),
@@ -2245,11 +2249,15 @@ shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
 fn stage_menu(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotError> {
     match kind {
         Some(ViewKind::Dock) => dock_shot(view)?,
-        Some(ViewKind::RowMenu) => {
+        Some(kind @ (ViewKind::RowMenu | ViewKind::RowMenuNode)) => {
+            let with_node = matches!(kind, ViewKind::RowMenuNode);
             let i = view
                 .display_rows()
                 .iter()
-                .position(|r| matches!(r, super::DisplayRow::Agent(_)))
+                .position(|r| match r {
+                    super::DisplayRow::Agent(a) => !with_node || a.node.is_some(),
+                    _ => false,
+                })
                 .ok_or("no agent rows to open a row menu on")?;
             view.open_row_menu(i, Anchor::Center);
             // The shot must pair the menu with the row it acts on: the
@@ -2892,6 +2900,7 @@ mod tests {
             ("bell-full", ViewKind::BellFull),
             ("feed", ViewKind::Feed),
             ("row-menu", ViewKind::RowMenu),
+            ("row-menu-node", ViewKind::RowMenuNode),
             ("hover", ViewKind::Hover),
             ("cursor", ViewKind::Cursor),
             ("needs-input", ViewKind::NeedsInput),

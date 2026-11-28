@@ -153,6 +153,10 @@ pub(super) enum MenuAction {
     /// Copy the row's full harness session id to the clipboard. Built only
     /// for a row that carries one.
     CopySessionId,
+    /// Copy the row's label (its name). Every agent row has one.
+    CopyName,
+    /// Copy the node id the row works. Built only for a row bound to a node.
+    CopyNodeId,
     /// Rename a sideline row's registry LABEL - opens the shared rename
     /// overlay on `RenameTarget::Agent`. Built only for a non-external,
     /// unambiguous agent row.
@@ -298,9 +302,7 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
             &[MenuAction::PortalAt(None)],
         );
         add(entry("◉", "Peek"), &[MenuAction::Peek]);
-        if agent.harness_session_id.is_some() {
-            add(entry("⧉", "Copy session ID"), &[MenuAction::CopySessionId]);
-        }
+        add_copy_section(&mut add, agent);
         return RowMenu {
             popup: Popup::new(rows, anchor),
             target: MenuTarget::Agent(AgentIdent::of(agent)),
@@ -405,7 +407,6 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
     // The id and the pin are session facts, so only a row with a session id
     // offers them.
     if agent.harness_session_id.is_some() {
-        add(entry("⧉", "Copy session ID"), &[MenuAction::CopySessionId]);
         let (glyph, label) = if agent.pinned {
             (super::sideline::PIN_OUTLINE, "Unpin")
         } else {
@@ -440,10 +441,33 @@ pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
     if !agent.external {
         add(entry("✎", "Rename"), &[MenuAction::RenameAgent]);
     }
+    add_copy_section(&mut add, agent);
     RowMenu {
         popup: Popup::new(rows, anchor),
         target: MenuTarget::Agent(AgentIdent::of(agent)),
         actions,
+    }
+}
+
+/// The Copy section closes every agent row menu: a rule, a `Copy` header,
+/// then the name, the node id (only on a row bound to a node) and the session
+/// id (only on a row that carries one). It sits apart from the commands that
+/// act on the row, so a copy never reads as one of them.
+fn add_copy_section(add: &mut impl FnMut(PopupRow, &[MenuAction]), agent: &AgentRow) {
+    let copy = |label: &str| PopupRow::Entry {
+        glyph: "⧉".into(),
+        label: label.into(),
+        hint: String::new(),
+        enabled: true,
+    };
+    add(PopupRow::Rule, &[]);
+    add(PopupRow::Header("Copy".into()), &[]);
+    add(copy("Copy name"), &[MenuAction::CopyName]);
+    if agent.node.as_deref().is_some_and(|n| !n.is_empty()) {
+        add(copy("Copy node id"), &[MenuAction::CopyNodeId]);
+    }
+    if agent.harness_session_id.is_some() {
+        add(copy("Copy session ID"), &[MenuAction::CopySessionId]);
     }
 }
 
@@ -639,6 +663,48 @@ mod tests {
         a.pane_id = None;
         a.attach_id = Some("deadbee2".into());
         a
+    }
+
+    #[test]
+    fn the_copy_section_holds_name_node_and_session_id_after_the_commands() {
+        // The copy items close the menu under a `Copy` header. A row with a
+        // node and a session offers all three; a bare row offers only the
+        // name.
+        let mut row = paneless_row();
+        row.node = Some("demo-node".into());
+        row.harness_session_id = Some("sid-0123".into());
+        let menu = build_row_menu(&row, test_anchor());
+        let header = menu
+            .popup
+            .rows
+            .iter()
+            .position(|r| matches!(r, PopupRow::Header(h) if h == "Copy"))
+            .expect("the menu has a Copy section");
+        assert!(
+            matches!(
+                menu.popup.rows.get(header.saturating_sub(1)),
+                Some(PopupRow::Rule)
+            ),
+            "a rule sets the section apart"
+        );
+        let tail: Vec<&str> = menu
+            .popup
+            .rows
+            .iter()
+            .skip(header + 1)
+            .filter_map(|r| match r {
+                PopupRow::Entry { label, .. } => Some(label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tail, ["Copy name", "Copy node id", "Copy session ID"]);
+        let mut bare = paneless_row();
+        bare.node = None;
+        bare.harness_session_id = None;
+        let menu = build_row_menu(&bare, test_anchor());
+        assert!(offers(&menu, "Copy name"));
+        assert!(!offers(&menu, "Copy node id"));
+        assert!(!offers(&menu, "Copy session ID"));
     }
 
     #[test]
@@ -1273,6 +1339,11 @@ pub(super) async fn execute_row_menu_action(
         MenuAction::CopySessionId => match a.harness_session_id.clone() {
             Some(sid) => super::feed_detail::copy_value(view, sid),
             None => view.set_notice("this row has no session id yet".into()),
+        },
+        MenuAction::CopyName => super::feed_detail::copy_value(view, a.name.clone()),
+        MenuAction::CopyNodeId => match a.node.clone().filter(|n| !n.is_empty()) {
+            Some(node) => super::feed_detail::copy_value(view, node),
+            None => view.set_notice("this row has no node id yet".into()),
         },
         MenuAction::ReleaseHold => {
             // The by-session release command (mail_hold.rs `--release`): the
