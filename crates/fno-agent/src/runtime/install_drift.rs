@@ -618,7 +618,12 @@ mod tests {
     /// the one version.rs prints, not a test-local invention.
     fn fake_binary_real_shape(dir: &Path, crates_rev: &str) -> String {
         let mut v = crate::version::version_json();
-        v["crates_rev"] = serde_json::Value::String(crates_rev.to_string());
+        v.as_object_mut()
+            .expect("version_json is an object")
+            .insert(
+                "crates_rev".to_string(),
+                serde_json::Value::String(crates_rev.to_string()),
+            );
         let body = format!(
             "#!/bin/bash\necho '{}'\n",
             serde_json::to_string(&v).unwrap()
