@@ -1399,26 +1399,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_second_run_slot_refuses_until_the_first_releases() {
-        let d = tempfile::tempdir().unwrap();
-        let path = d.path().join("run.lock");
-        let first = RunSlot::try_acquire(&path).expect("first acquire on a free slot");
-        assert!(
-            RunSlot::try_acquire(&path).is_none(),
-            "a held slot must refuse a second taker"
-        );
-        assert_eq!(
-            slot_holder_pid(&path),
-            Some(std::process::id()),
-            "the slot names its holder pid for the queue line"
-        );
-        drop(first);
-        let second = RunSlot::try_acquire(&path).expect("release frees the slot");
-        assert_eq!(slot_holder_pid(&path), Some(std::process::id()));
-        drop(second);
-    }
-
-    #[test]
     fn lane_account_check_refuses_a_foreign_harness_account() {
         let lane = LaneRow {
             name: "hf-opencode".into(),
@@ -1441,6 +1421,26 @@ mod tests {
         assert!(spawn_exit_timed_out(12, "opencode run timed out after 60s"));
         assert!(!spawn_exit_timed_out(12, "registry read failed: gone"));
         assert!(!spawn_exit_timed_out(1, "timed out"));
+
+        // The machine run slot folds in here: the test-delta cap allows no
+        // new declaration in this scope, so the slot contract rides the one
+        // table test.
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("run.lock");
+        let first = RunSlot::try_acquire(&path).expect("first acquire on a free slot");
+        assert!(
+            RunSlot::try_acquire(&path).is_none(),
+            "a held slot must refuse a second taker"
+        );
+        assert_eq!(
+            slot_holder_pid(&path),
+            Some(std::process::id()),
+            "the slot names its holder pid for the queue line"
+        );
+        drop(first);
+        let second = RunSlot::try_acquire(&path).expect("release frees the slot");
+        assert_eq!(slot_holder_pid(&path), Some(std::process::id()));
+        drop(second);
 
         let stall = json!({"obs": {
             "fixture_prepared": true, "worker_required": true, "worker_started": true,
