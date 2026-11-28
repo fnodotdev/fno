@@ -104,7 +104,10 @@ fn stamp_run_slot(file: &mut std::fs::File) {
 }
 
 impl RunSlot {
-    /// Take the slot if it is free; None when another run holds it.
+    /// Take the slot if it is free and the lockfile inode still matches the
+    /// canonical path: a delete between open and lock would otherwise mint a
+    /// second lock on a new inode, and two runs would hold two "slots". None
+    /// when another holder blocks or the inode swapped under us.
     fn try_acquire(path: &std::path::Path) -> Option<RunSlot> {
         std::fs::create_dir_all(path.parent()?).ok()?;
         let mut file = std::fs::OpenOptions::new()
@@ -119,33 +122,61 @@ impl RunSlot {
         if file.try_lock().is_err() {
             return None;
         }
+        if !same_inode(&file, path) {
+            return None;
+        }
         stamp_run_slot(&mut file);
         Some(RunSlot { file })
     }
 
     /// Block until the holder exits, naming it first so a queued run reads
     /// in the log as queued, never as a hang. `File::lock` retries EINTR
-    /// internally, so a signal delivered to the process cannot wedge it.
+    /// internally, and every failure here degrades to a cause line plus a
+    /// bounded retry, never a panic: the arm kills a wedged run by pid, and
+    /// a backtrace is a cause the tick cannot act on.
     fn acquire_blocking(path: &std::path::Path) -> RunSlot {
         let holder = slot_holder_pid(path)
             .map(|p| p.to_string())
             .unwrap_or_else(|| "unknown".into());
         eprintln!("machine evals slot held by pid {holder}; queuing");
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        let _ = std::fs::create_dir_all(dir);
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .read(true)
-            .open(path)
-            .expect("run.lock open");
-        if let Err(e) = file.lock() {
-            panic!("run.lock lock failed: {e}");
+        loop {
+            if let Some(slot) = RunSlot::try_acquire(path) {
+                eprintln!("machine evals slot acquired");
+                return slot;
+            }
+            // Held, or the lockfile swapped: wait on a blocking lock of the
+            // current file, then re-try the take.
+            let waited = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .read(true)
+                .open(path);
+            let mut wait = match waited {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("machine evals slot: run.lock unopenable ({e}); retrying");
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue;
+                }
+            };
+            if let Err(e) = wait.lock() {
+                eprintln!("machine evals slot: run.lock unlockable ({e}); retrying");
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            // The lock freed (or never blocked): loop and re-try the take.
         }
-        stamp_run_slot(&mut file);
-        eprintln!("machine evals slot acquired");
-        RunSlot { file }
+    }
+}
+
+/// The open fd names the same file the canonical path names: an unlink
+/// between another holder's exit and our stamp would otherwise leave two
+/// processes each holding an flock on a different inode.
+fn same_inode(file: &std::fs::File, path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
     }
 }
 
