@@ -1913,6 +1913,24 @@ fn provenance_lines(row: &Value) -> Vec<String> {
     lines
 }
 
+/// The open question whose id is the queried token, or the registry key the
+/// token resolves to: a D-number can name an unruled ask through the number
+/// table (D3634 -> q-0d70e47b), and that record lives in the open-question
+/// index, not the decisions family. `None` keeps the door's plain refusal.
+fn open_question_holding(
+    token: &str,
+    resolved: Option<String>,
+    open: &[crate::outstanding::Question],
+) -> Option<crate::outstanding::Question> {
+    let token = token.to_lowercase();
+    open.iter()
+        .find(|q| {
+            let id = q.id.to_lowercase();
+            id == token || resolved.as_deref() == Some(id.as_str())
+        })
+        .cloned()
+}
+
 fn render_human(
     payload: &Value,
     standing_law: Option<&Value>,
@@ -2023,15 +2041,56 @@ fn render_human(
                 near[0].0,
             );
         } else if subject.is_some_and(|s| looks_like_decision_id(s)) {
-            eprintln!(
-                "{LABEL}: '{subject_label}' is shaped like a decision id, and no \
-                 decision on this machine carries it{hint}. It is not indexed \
-                 as a subject either. Browse the store with: fno backlog decisions",
-                subject_label = payload
-                    .get("subject")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            );
+            let subject_label = payload
+                .get("subject")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            // An unreadable index degrades to the plain refusal, and the
+            // reason rides the text: a miss that names nothing must say why
+            // it could not look (the law split's fail-open posture).
+            let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+            let open = subject
+                .map(|_| crate::outstanding::read_open_questions(&index))
+                .unwrap_or_else(|| Ok(Vec::new()));
+            let holder = subject.and_then(|s| {
+                let resolved = crate::numbers::resolve('d', s);
+                open.as_ref()
+                    .ok()
+                    .and_then(|questions| open_question_holding(s, resolved, questions))
+            });
+            let index_error = open.err();
+            if let Some(q) = holder {
+                let host_tail = q
+                    .host
+                    .as_deref()
+                    .map(|host| format!(" (asked on {host})"))
+                    .unwrap_or_default();
+                let node_tail = q
+                    .node
+                    .as_deref()
+                    .map(|node| format!(" on node {node}"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "{LABEL}: '{subject_label}' carries no decision row: the number's \
+                     record is a live outstanding question{host_tail}, asked {ts} by \
+                     {asker}{node_tail}: \"{text}\". Read or answer it with: \
+                     fno inbox outstanding",
+                    ts = q.ts,
+                    asker = q.asker.as_deref().unwrap_or("(unknown asker)"),
+                    node_tail = node_tail,
+                    text = q.question,
+                );
+            } else {
+                let degraded = index_error
+                    .map(|e| format!(" (open-question index unreadable: {e})"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "{LABEL}: '{subject_label}' is shaped like a decision id, and no \
+                     decision on this machine carries it{hint}{degraded}. It is not \
+                     indexed as a subject either. Browse the store with: \
+                     fno backlog decisions",
+                );
+            }
         } else {
             // A subject that names a graph node carries authority this store
             // structurally cannot hold: a lead's ruling or an operator note
@@ -2281,6 +2340,46 @@ mod tests {
             "{{\"type\":\"decision_retracted\",\"ts\":\"{ts}\",\"data\":{{\
              \"retraction_id\":\"d-rrrr0001\",\"target_decision_id\":\"{target}\",\"reason\":\"{reason}\"}}}}"
         )
+    }
+
+    fn open_question(id: &str) -> crate::outstanding::Question {
+        crate::outstanding::Question {
+            id: id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn question_holding_matches_the_queried_token() {
+        let open = vec![
+            open_question("D3682"),
+            open_question("q-0d70e47b"),
+            open_question("D3680"),
+        ];
+        // The token itself is a live question id.
+        let hit = open_question_holding("D3682", None, &open).unwrap();
+        assert_eq!(hit.id, "D3682");
+        // A D-number whose registry key is another question's id.
+        let hit = open_question_holding("D3634", Some("q-0d70e47b".into()), &open).unwrap();
+        assert_eq!(hit.id, "q-0d70e47b");
+    }
+
+    #[test]
+    fn question_holding_keeps_the_plain_refusal_on_a_miss() {
+        let open = vec![open_question("D3682")];
+        // A number no record holds anywhere.
+        assert!(open_question_holding("D999999", None, &open).is_none());
+        // A registry key that resolves to a decision row, not a question.
+        assert!(open_question_holding("D3467", Some("d-0d828a3e".into()), &open).is_none());
+        // The empty index reads as a miss, not a hit.
+        assert!(open_question_holding("D3682", Some("D3682".into()), &[]).is_none());
+    }
+
+    #[test]
+    fn question_holding_matches_case_insensitively() {
+        let open = vec![open_question("D3682")];
+        let hit = open_question_holding("d3682", None, &open).unwrap();
+        assert_eq!(hit.id, "D3682");
     }
 
     /// Store rows over a JSONL-only fixture: the graph half is absent, the
