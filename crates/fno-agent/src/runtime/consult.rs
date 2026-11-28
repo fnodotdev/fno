@@ -1127,7 +1127,9 @@ mod tests {
             "status": "live",
         });
         if let Some(model) = model {
-            row["model"] = json!(model);
+            if let Some(fields) = row.as_object_mut() {
+                fields.insert("model".to_string(), json!(model));
+            }
         }
         row
     }
