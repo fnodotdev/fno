@@ -17,6 +17,9 @@ dir="${1:?$usage}"
 k="${2:?$usage}"
 n="${3:?$usage}"
 shift 3
+# Resolve the retry wrapper against the invoking directory before the cd
+# below moves the cwd to the crate: a relative $0 dirname breaks there.
+script_dir="$(cd "$(dirname "$0")" && pwd)"
 cd "$dir"
 
 # libtest prints one `<name>: test` line per test under --list.
@@ -46,4 +49,6 @@ if [ "${#mine[@]}" -eq 0 ]; then
   exit 1
 fi
 
-cargo test --test '*' --no-fail-fast -- "$@" --exact "${mine[@]}"
+# The retry-once wrapper records one-off timing flakes as FLAKE-RETRY lines
+# instead of reddening main; a test that fails the retry keeps the red.
+bash "$script_dir/cargo-test-retry.sh" cargo test --test '*' --no-fail-fast -- "$@" --exact "${mine[@]}"
