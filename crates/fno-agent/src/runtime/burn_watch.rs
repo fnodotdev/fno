@@ -1175,7 +1175,7 @@ pub(crate) fn wake_with_text(
         return (true, "mail");
     }
     let durable = crate::mail_inject::mail_send_receipt(&stdout).contains("durable")
-        || mail_send_queued_for_drain(&stdout);
+        || crate::mail_inject::mail_send_queued_for_drain(&stdout);
     if durable && busy {
         return (false, "durable");
     }
@@ -1203,17 +1203,6 @@ pub(crate) fn wake_with_text(
         return (false, "durable");
     }
     (code == 0, "resume")
-}
-
-/// The send door's two queued-for-drain verdicts, matched over the whole
-/// send stdout. The demotion JSON carries "queued (durable)" in its status
-/// field, and the live-drain hold prints "queued, not landed yet", whose
-/// last stdout line is only the verify-later hint, so a last-line receipt
-/// parse reads neither. Tests build their fixtures through the renderers
-/// in mail_receipt.rs, so rewording either verdict fails beside its own
-/// test.
-fn mail_send_queued_for_drain(stdout: &str) -> bool {
-    stdout.contains("queued (durable)") || stdout.contains("queued, not landed yet")
 }
 
 fn sample_session(
@@ -1896,6 +1885,71 @@ mod tests {
         assert!(escalated.escalated);
         let (d, _) = decide(Some(&escalated), &flat, 9000, 7200, 0.01);
         assert_eq!(d, Decision::Hold);
+    }
+
+    #[test]
+    fn an_exit14_failed_live_leg_wake_maps_to_the_durable_hold_counting_one_queue() {
+        // The refused-live-leg arm: the send door prints the demotion JSON
+        // ("queued (durable)"), then report_landing appends the
+        // failed-live-leg ladder, whose last line is the re-send rung - so a
+        // last-line parse reads neither verdict, and the copy the door
+        // already queued durably (mail_receipt.rs NOT_LANDED_EXIT=14) would
+        // fall to an unflagged resume carrying the full text. The busy arm
+        // ends on the durable lane with one queue (the mail leg only); the
+        // idle arm's resume carries --message-already-queued, so the body
+        // never types twice. Fixtures ride the real renderers, so rewording
+        // either verdict fails beside its own test.
+        let stdout = format!(
+            "{}\n{}",
+            crate::mail_receipt::demotion(
+                "fmail-14",
+                Some("no-pane-ref"),
+                6.0,
+                Some("s-1"),
+                None,
+                None,
+                None,
+                None,
+            ),
+            crate::mail_receipt::failed_live_leg("fmail-14", "s-1", Some("no-pane-ref")),
+        );
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            calls.push(argv.to_vec());
+            if argv.get(2).is_some_and(|step| step == "mail") {
+                (14, stdout.clone(), String::new())
+            } else {
+                panic!("busy durable hold must not run a resume");
+            }
+        };
+        let (landed, via) = wake_with_text("s-1", true, "body", "fno/notice-router", &mut runner);
+        assert_eq!((landed, via), (false, "durable"));
+        assert_eq!(
+            calls.len(),
+            1,
+            "exit-14 busy hold: the mail leg is the only leg"
+        );
+
+        // The idle arm: the resume runs flagged, and its refusal records as
+        // the durable lane - the sitting copy owns the body.
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            calls.push(argv.to_vec());
+            if argv.get(2).is_some_and(|step| step == "mail") {
+                (14, stdout.clone(), String::new())
+            } else {
+                (
+                    16,
+                    String::new(),
+                    "already queued and will not be resent".into(),
+                )
+            }
+        };
+        let (landed, via) = wake_with_text("s-1", false, "body", "fno/notice-router", &mut runner);
+        assert_eq!((landed, via), (false, "durable"));
+        assert!(calls
+            .last()
+            .is_some_and(|argv| argv.iter().any(|a| a == "--message-already-queued")));
     }
 
     #[test]

@@ -603,6 +603,17 @@ pub fn mail_send_accepted(code: i32, stdout: &str) -> bool {
     code == 0 && fno_mail::state::receipt_reached(mail_send_receipt(stdout))
 }
 
+/// The send door's two queued-for-drain verdicts, matched over the whole
+/// send stdout. The demotion JSON carries "queued (durable)" in its status
+/// field, and the live-drain hold prints "queued, not landed yet", whose
+/// last stdout line is only the verify-later hint, so a last-line receipt
+/// parse reads neither. Tests build their fixtures through the renderers
+/// in mail_receipt.rs, so rewording either verdict fails beside its own
+/// test.
+pub fn mail_send_queued_for_drain(stdout: &str) -> bool {
+    stdout.contains("queued (durable)") || stdout.contains("queued, not landed yet")
+}
+
 /// Print the outcome JSON to stdout and return its exit code.
 fn emit(state: &DeliveryState) -> i32 {
     println!("{}", outcome_json(state));
