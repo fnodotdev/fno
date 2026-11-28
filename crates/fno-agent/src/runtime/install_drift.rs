@@ -666,7 +666,7 @@ mod tests {
         // human line a real build prints. Both answers carry a second line,
         // so the detail must collapse them: the beat line is one line.
         let body = "#!/bin/bash\nif [ \"$1\" = \"version\" ]; then echo '{}'; echo 'banner line'; else echo 'fno-agent 0.0.17 (deadbeef1234, release)'; echo 'second line'; fi\n";
-        let binary = crate::write_exec_stub(bin_dir, "fake-fno-agent", body)
+        let binary = crate::write_exec_stub(bin_dir.path(), "fake-fno-agent", body)
             .to_string_lossy()
             .into_owned();
         let drift = drift_of(
