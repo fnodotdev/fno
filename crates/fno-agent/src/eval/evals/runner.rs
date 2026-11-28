@@ -59,6 +59,104 @@ pub fn evals_enabled() -> bool {
     }
 }
 
+/// One evals run per machine: the run slot is an exclusive std file lock on
+/// `<history dir>/evals-gate/run.lock`, held for the process lifetime. A
+/// second run queues here instead of stacking its fixture git steps on the
+/// first's, which drove the gate machine to load 82-92 on 16 cores when the
+/// head and main runs overlapped. The kernel frees the slot when the holder
+/// dies, so no TTL applies.
+pub struct RunSlot {
+    file: std::fs::File,
+    #[allow(dead_code)]
+    path: std::path::PathBuf,
+}
+
+pub(crate) fn run_slot_path() -> std::path::PathBuf {
+    let history = super::history_path();
+    history
+        .parent()
+        .map(|p| p.join("evals-gate"))
+        .unwrap_or_else(|| history.clone())
+        .join("run.lock")
+}
+
+fn slot_holder_pid(path: &std::path::Path) -> Option<u32> {
+    std::fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .next()
+        .and_then(|l| l.trim().parse().ok())
+}
+
+/// Take the machine's evals run slot, queueing behind the holder if one
+/// lives. Held until the returned slot drops, at `run_command` scope.
+pub(crate) fn acquire_run_slot() -> RunSlot {
+    let path = run_slot_path();
+    if let Some(slot) = RunSlot::try_acquire(&path) {
+        return slot;
+    }
+    RunSlot::acquire_blocking(&path)
+}
+
+fn stamp_run_slot(file: &mut std::fs::File) {
+    use std::io::Write as _;
+    let _ = file.set_len(0);
+    let _ = std::io::Write::write_all(&mut *file, format!("{}\n", std::process::id()).as_bytes());
+    let _ = std::io::Write::flush(file);
+}
+
+impl RunSlot {
+    /// Take the slot if it is free; None when another run holds it.
+    fn try_acquire(path: &std::path::Path) -> Option<RunSlot> {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .read(true)
+            .open(path)
+            .ok()?;
+        // try_lock: a held slot reads as "someone else is running", never as
+        // a hang; the blocking path below is the queue.
+        if file.try_lock().is_err() {
+            return None;
+        }
+        stamp_run_slot(&mut file);
+        Some(RunSlot {
+            file,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Block until the holder exits, naming it first so a queued run reads
+    /// in the log as queued, never as a hang. `File::lock` retries EINTR
+    /// internally, so a signal delivered to the process cannot wedge it.
+    fn acquire_blocking(path: &std::path::Path) -> RunSlot {
+        let holder = slot_holder_pid(path)
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "unknown".into());
+        eprintln!("machine evals slot held by pid {holder}; queuing");
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let _ = std::fs::create_dir_all(dir);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .read(true)
+            .open(path)
+            .expect("run.lock open");
+        if let Err(e) = file.lock() {
+            panic!("run.lock lock failed: {e}");
+        }
+        stamp_run_slot(&mut file);
+        eprintln!("machine evals slot acquired");
+        RunSlot {
+            file,
+            path: path.to_path_buf(),
+        }
+    }
+}
+
 /// The run's checkout ref resolved to a sha; a missing ref grades as a
 /// failure, never a crash.
 fn git_rev(repo_root: &std::path::Path, ref_name: &str) -> Option<String> {
@@ -112,6 +210,7 @@ fn make_disposable_worktree(
     ref_name: &str,
     tag: &str,
 ) -> Result<std::path::PathBuf, String> {
+    let _git_step = git_step_lock();
     let base = evals_worktree_base();
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let pid = std::process::id();
@@ -148,7 +247,19 @@ fn apply_overlay(dir: &std::path::Path, overlay_ref: &str) -> Result<String, Str
     commit_all(dir, "evals: overlay golden fixtures")
 }
 
+/// Serialises this process's fixture git steps across `--workers` threads:
+/// the sealed-tree `git add -A -f` and commits are CPU-heavy, and running
+/// them N threads wide stacks load the machine run slot already confines
+/// to one process. Poison-tolerant: a panicking worker must not wedge the
+/// others' prep forever.
+static GIT_STEP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn git_step_lock() -> std::sync::MutexGuard<'static, ()> {
+    GIT_STEP_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn git_in(dir: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let _git_step = git_step_lock();
     // A run started from a git hook inherits these, and they would turn this
     // `git add` and commit on the real repo.
     let out = std::process::Command::new("git")
@@ -223,6 +334,7 @@ pub(super) fn extract_ref(
     paths: &[&str],
     dest: &std::path::Path,
 ) -> Result<(), String> {
+    let _git_step = git_step_lock();
     use std::process::{Command, Stdio};
     let mut archive = Command::new("git")
         .args(["archive", "--format=tar", ref_name])
@@ -372,6 +484,7 @@ fn commit_all(dir: &std::path::Path, message: &str) -> Result<String, String> {
 }
 
 fn remove_worktree(repo_root: &std::path::Path, path: &std::path::Path) {
+    let _git_step = git_step_lock();
     let _ = std::process::Command::new("git")
         .args(["worktree", "remove", "--force"])
         .arg(path)
@@ -637,6 +750,7 @@ fn spawn_exit_timed_out(code: i32, message: &str) -> bool {
 /// the whole checkout. None when git cannot say, which compare reads as
 /// unknown.
 fn tree_hash(workdir: &std::path::Path) -> Option<String> {
+    let _git_step = git_step_lock();
     let git = |args: &[&str], index: Option<&std::path::Path>| {
         let mut cmd = std::process::Command::new("git");
         cmd.args(args).current_dir(workdir);
@@ -1283,6 +1397,26 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_second_run_slot_refuses_until_the_first_releases() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("run.lock");
+        let first = RunSlot::try_acquire(&path).expect("first acquire on a free slot");
+        assert!(
+            RunSlot::try_acquire(&path).is_none(),
+            "a held slot must refuse a second taker"
+        );
+        assert_eq!(
+            slot_holder_pid(&path),
+            Some(std::process::id()),
+            "the slot names its holder pid for the queue line"
+        );
+        drop(first);
+        let second = RunSlot::try_acquire(&path).expect("release frees the slot");
+        assert_eq!(slot_holder_pid(&path), Some(std::process::id()));
+        drop(second);
+    }
 
     #[test]
     fn lane_account_check_refuses_a_foreign_harness_account() {
