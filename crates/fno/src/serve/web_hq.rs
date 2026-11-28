@@ -57,6 +57,11 @@ pub struct Board {
     next: Vec<Value>,
     /// The last backlog read failed; `next` is the last good list.
     next_error: Option<String>,
+    /// The HQ Requests rows in rank order (the fold's own sort). A failed
+    /// read keeps the last good list and names the reason.
+    requests: Vec<crate::requests_model::RequestRow>,
+    /// The last requests read failed; `requests` is the last good list.
+    requests_error: Option<String>,
     read_at: Option<Instant>,
 }
 
@@ -140,6 +145,22 @@ impl Board {
         self.read_at = Some(now);
     }
 
+    /// Store the requests fold of one refresh. A failed requests read keeps
+    /// the last good rows, matching the fleet and question reads. The caller
+    /// holds the board guard across record() and this, so readers never see
+    /// a fresh read_at beside the previous refresh's requests.
+    pub fn record_requests(&mut self, requests: crate::requests_model::RequestsRead) {
+        match requests {
+            crate::requests_model::RequestsRead::Rows(rows) => {
+                self.requests = rows;
+                self.requests_error = None;
+            }
+            crate::requests_model::RequestsRead::Failed(reason) => {
+                self.requests_error = Some(reason)
+            }
+        }
+    }
+
     /// The last good fleet fold, if any read has succeeded.
     pub fn fleet(&self) -> Option<&Fleet> {
         self.good.as_ref().map(|(f, _, _)| f)
@@ -197,6 +218,10 @@ impl Board {
     pub fn next_error(&self) -> Option<&str> {
         self.next_error.as_deref()
     }
+    /// Why the newest requests read failed, or that none has run.
+    pub fn requests_error(&self) -> Option<&str> {
+        self.requests_error.as_deref()
+    }
 
     pub fn model(&self) -> Value {
         let mut waiting = serde_json::Map::new();
@@ -212,6 +237,11 @@ impl Board {
             }
         };
         let fleet = self.fleet();
+        let topics: Vec<Value> =
+            crate::client::messages_view::asks_topics::request_groups(&self.requests)
+                .into_iter()
+                .map(|g| json!({"name": g.name, "rows": g.rows}))
+                .collect();
         let fleet_error = match (&self.failure, &self.good) {
             (Some((reason, at)), _) => {
                 json!({"reason": reason, "failed_age_s": at.elapsed().as_secs()})
@@ -227,6 +257,9 @@ impl Board {
             "seat_error": fleet.and_then(|f| f.seat_error.clone()),
             "fleet_error": fleet_error,
             "machines": self.good.as_ref().map_or_else(|| json!([]), |(_, m, _)| m.clone()),
+            "requests": json!(self.requests),
+            "requests_error": json!(self.requests_error),
+            "request_topics": json!(topics),
             "waiting": waiting,
         })
     }
@@ -482,6 +515,10 @@ mod tests {
             ..Inputs::default()
         };
         cache.board().await.record(fleet, qs, &backlog, at, agents);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         cache.model().await
     }
 
@@ -562,6 +599,10 @@ mod tests {
             .board()
             .await
             .record(fail("x"), Err("x".into()), &locked, 300, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let m = cache.model().await;
         assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
         assert_eq!(m["waiting"]["prs_error"], "graph locked");
@@ -589,6 +630,10 @@ mod tests {
             .board()
             .await
             .record(Ok(two_machines()), Ok(questions(&[None])), &backlog, 1, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let m = cache.model().await;
         assert_eq!(
             m.pointer("/waiting/next"),
@@ -612,6 +657,10 @@ mod tests {
             .board()
             .await
             .record(Ok(two_machines()), Ok(questions(&[])), &good, 1, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let locked = Inputs {
             rows_error: Some("graph locked".into()),
             ..Inputs::default()
@@ -620,6 +669,10 @@ mod tests {
             .board()
             .await
             .record(Err("x".into()), Err("x".into()), &locked, 2, &[]);
+        cache
+            .board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let board = cache.board().await;
         assert_eq!(board.next_error(), Some("graph locked"));
         let ids: Vec<&str> = board
@@ -654,6 +707,7 @@ mod tests {
             1,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         let ids: Vec<&str> = board.answered().iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, ["q-new", "q-old"]);
         // A failed question read keeps the last good answered list beside the
@@ -665,7 +719,55 @@ mod tests {
             2,
             &[],
         );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         assert_eq!(board.answered().len(), 2);
         assert_eq!(board.questions_error(), Some("needs timed out"));
+    }
+
+    #[test]
+    fn requests_keep_last_good_rows_and_name_the_reason() {
+        let mut board = Board::default();
+        let good = vec![serde_json::from_value::<crate::requests_model::RequestRow>(
+            json!({"key": "ask:t1", "rank_score": 9}),
+        )
+        .unwrap()];
+        board.record(
+            Err("no fleet".into()),
+            Err("q".into()),
+            &Inputs::default(),
+            1,
+            &[],
+        );
+        board.record_requests(crate::requests_model::RequestsRead::Rows(good));
+        assert!(board.requests_error().is_none());
+        assert_eq!(
+            board
+                .model()
+                .pointer("/requests")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(1)
+        );
+        board.record(
+            Err("no fleet".into()),
+            Err("q".into()),
+            &Inputs::default(),
+            2,
+            &[],
+        );
+        board.record_requests(crate::requests_model::RequestsRead::Failed(
+            "requests read timed out after 30s".into(),
+        ));
+        let m = board.model();
+        assert_eq!(
+            m.pointer("/requests")
+                .and_then(|v| v.as_array())
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            m.pointer("/requests_error").and_then(|v| v.as_str()),
+            Some("requests read timed out after 30s")
+        );
     }
 }

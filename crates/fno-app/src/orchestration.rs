@@ -619,6 +619,7 @@ mod tests {
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         b
     }
 
@@ -641,6 +642,7 @@ mod tests {
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         assert!(!quiet_board(&b));
     }
 
@@ -654,6 +656,7 @@ mod tests {
             1,
             &[],
         );
+        b.record_requests(fno::requests_model::RequestsRead::Rows(Vec::new()));
         assert!(!quiet_board(&b));
     }
 

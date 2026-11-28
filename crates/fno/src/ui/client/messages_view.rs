@@ -5,7 +5,7 @@
 //! path; keys and mouse mirror org_board. The strip row
 //! (`Agents  Messages`) is the sideline's, not this module's.
 
-mod asks_topics;
+pub(crate) mod asks_topics;
 mod exchanges;
 mod you_thread;
 use super::*;

@@ -230,12 +230,21 @@ pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> V
     out
 }
 
-pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: usize) -> Vec<Line> {
+pub(crate) fn feed(
+    fold: Option<&crate::needs_overlay::QuestionsFold>,
+    requests: Option<&[crate::requests_model::RequestRow]>,
+    error: Option<&str>,
+    grouped: bool,
+    width: usize,
+) -> Vec<Line> {
     let mut out = vec![
         Lb::default().s(" fleet / the user", TextStyle::Meta).done(),
         blank(),
-        Lb::default().s(" Human requests", TextStyle::Title).done(),
+        Lb::default().s(" Your thoughts", TextStyle::Title).done(),
     ];
+    out.extend(requests_section(requests, error, grouped, width));
+    out.push(blank());
+    out.push(Lb::default().s(" Waiting on you", TextStyle::Title).done());
     match fold {
         None => out.push(meta("   questions not read yet")),
         Some(f) if f.items.is_empty() => out.push(meta("   no open question")),
@@ -279,6 +288,177 @@ pub(crate) fn feed(fold: Option<&crate::needs_overlay::QuestionsFold>, width: us
         " Viewing is not approval. Rule on the question board.",
     ));
     out
+}
+
+/// The HQ Thoughts rows above the questions: rank order, or the by-topic
+/// groups, each row with its ask count, dates, node state and flag.
+pub(crate) fn requests_section(
+    requests: Option<&[crate::requests_model::RequestRow]>,
+    error: Option<&str>,
+    grouped: bool,
+    width: usize,
+) -> Vec<Line> {
+    let Some(rows) = requests else {
+        return vec![meta("   thoughts not read yet")];
+    };
+    let mut out = Vec::new();
+    if rows.is_empty() {
+        out.push(meta(match error {
+            Some(e) => format!("   thoughts not read: {e}"),
+            None => "   no asks recorded yet".to_string(),
+        }));
+        return out;
+    }
+    if grouped {
+        for g in crate::client::messages_view::asks_topics::request_groups(rows) {
+            let n = g.rows.len();
+            let s = if n == 1 { "" } else { "s" };
+            out.push(kv(&g.name, format!("{n} ask{s}"), TextStyle::Item));
+            for i in &g.rows {
+                if let Some(r) = rows.get(*i) {
+                    out.extend(request_row_lines(r, width));
+                }
+            }
+        }
+    } else {
+        for r in rows {
+            out.extend(request_row_lines(r, width));
+        }
+    }
+    if let Some(e) = error {
+        out.push(meta(format!(
+            "   last read failed: {e}; showing the last good rows"
+        )));
+    }
+    out.push(meta(
+        "   ranked by asks x days unaddressed \u{b7} t groups by topic",
+    ));
+    out
+}
+
+/// Render-safe text: markdown heading markers a pasted ask carries read as
+/// prose here; the web page renders the same markers as a real heading.
+fn strip_hashes(s: &str) -> String {
+    s.lines()
+        .map(|line| {
+            let t = line.trim_start();
+            let hashes = t.chars().take_while(|c| *c == '#').count();
+            let rest = t.get(hashes..).unwrap_or(t);
+            if hashes > 0 && hashes <= 6 && (rest.starts_with(' ') || rest.is_empty()) {
+                rest.trim_start()
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One row: the ask text with its flag, then dim lines with the count,
+/// node state, dates, the judged outcome, the reply excerpt and the
+/// response chain.
+fn request_row_lines(r: &crate::requests_model::RequestRow, width: usize) -> Vec<Line> {
+    let text = strip_hashes(if r.text.is_empty() {
+        "(empty ask)"
+    } else {
+        r.text.as_str()
+    });
+    let ask_count = r.ask_count.max(1);
+    let asked_word = if ask_count == 1 {
+        "asked once".to_string()
+    } else {
+        format!("asked {ask_count} times")
+    };
+    let days = r.days_unaddressed.unwrap_or(0);
+    let open_word = if days <= 0 {
+        "new today".to_string()
+    } else if days == 1 {
+        "open 1 day".to_string()
+    } else {
+        format!("open {days} days")
+    };
+    let node = r.node.as_deref().unwrap_or("");
+    let status = r.node_status.as_deref();
+    let node_word = match (node.is_empty(), status) {
+        (true, _) => "no linked node".to_string(),
+        (false, Some(s)) => format!("{node} {s}"),
+        (false, None) => node.to_string(),
+    };
+    // The state word joins the line only when the row's own fields do not
+    // already say it: no_node reads through "no linked node".
+    let state = r.state.as_str();
+    let state_word = match state {
+        "stalled" => "stalled".to_string(),
+        "regression" => "asked again after done".to_string(),
+        _ => String::new(),
+    };
+    let first = r.first_ts.as_str();
+    let last = r.last_ts.as_str();
+    let window = if first.is_empty() || first.get(0..10) == last.get(0..10) {
+        String::new()
+    } else {
+        format!(
+            "window {} to {}",
+            first.get(0..10).unwrap_or(first),
+            last.get(0..10).unwrap_or(last)
+        )
+    };
+    let reply = strip_hashes(r.reply_excerpt.as_str());
+    let meta_word = [asked_word, open_word, node_word, state_word, window]
+        .into_iter()
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    let head = Lb::default()
+        .s("  ", TextStyle::Meta)
+        .s(
+            fit(&text, width.saturating_sub(4)).trim_end().to_string(),
+            TextStyle::Item,
+        )
+        .done();
+    let mut out2 = vec![head];
+    out2.push(meta(format!("      {meta_word}")));
+    let outcome_word = match r.outcome.as_deref() {
+        Some("solved") => Some("solved"),
+        Some("lost") => Some("lost"),
+        Some("forgotten") => Some("acknowledged but forgotten"),
+        Some("open") => Some("open"),
+        _ => None,
+    };
+    if let Some(word) = outcome_word {
+        let why = r.outcome_why.as_deref().unwrap_or("");
+        let line = if why.is_empty() {
+            word.to_string()
+        } else {
+            format!("{word} \u{b7} {why}")
+        };
+        out2.push(meta(format!("      outcome: {line}")));
+    }
+    if !reply.is_empty() {
+        out2.push(meta(format!("      reply: {reply}")));
+    }
+    // The responses line names the count and the latest reply's handle, so
+    // it stays on screen; a chain with no reply at all reads through the
+    // outcome line's "no reply" and lists nothing.
+    let replied: Vec<_> = r
+        .responses
+        .iter()
+        .filter(|x| !strip_hashes(x.reply.as_str()).trim().is_empty())
+        .collect();
+    if let Some(latest) = replied.last() {
+        let handle = if latest.name.is_empty() {
+            "unnamed session".to_string()
+        } else {
+            latest.name.clone()
+        };
+        out2.push(meta(format!(
+            "      responses: {} \u{b7} latest {} {}",
+            replied.len(),
+            latest.ts.get(0..10).unwrap_or(&latest.ts),
+            handle
+        )));
+    }
+    out2
 }
 
 pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {

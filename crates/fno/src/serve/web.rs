@@ -1463,16 +1463,18 @@ async fn hq_decisions(
 
 async fn refresh_hq(st: AppState) {
     let inputs = model_inputs(&st).await;
-    let (fleet, questions) = tokio::join!(
+    let (fleet, questions, requests) = tokio::join!(
         crate::client::org_seats::read_fleet(),
-        crate::needs_overlay::questions_now()
+        crate::needs_overlay::questions_now(),
+        crate::requests_model::gather()
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
     let agents = layout_agents(&st.snap).unwrap_or_default();
-    st.hq
-        .board()
-        .await
-        .record(fleet, questions, &inputs, measured_at, &agents);
+    // One guard across both writes: a reader must never see the fresh
+    // read_at beside the previous refresh's requests.
+    let mut board = st.hq.board().await;
+    board.record(fleet, questions, &inputs, measured_at, &agents);
+    board.record_requests(requests);
 }
 
 /// `GET /backlog/model.json`: the whole board as JSON behind the token.
@@ -3378,6 +3380,9 @@ console.log("backlog page helpers: 18 cases ok");
         hq.board()
             .await
             .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Failed("gone".into()));
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,
@@ -3450,6 +3455,9 @@ console.log("backlog page helpers: 18 cases ok");
         hq.board()
             .await
             .record(Ok(fleet), Err("x".into()), &none, 1, &[]);
+        hq.board()
+            .await
+            .record_requests(crate::requests_model::RequestsRead::Rows(Vec::new()));
         hq.first.set(()).unwrap();
         let state = AppState {
             tx,

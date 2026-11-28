@@ -1332,7 +1332,7 @@ pub(crate) use overlay_lines::nav_overlay_lines;
 use overlay_lines::squad_peek_lines;
 pub(crate) use overlay_lines::{humanize_age, humanize_ago, nav_agent_tokens, peek_overlay_lines};
 mod decisions_view;
-mod messages_view;
+pub(crate) mod messages_view;
 mod org_board;
 pub(crate) mod org_pages;
 pub(crate) mod org_seats;

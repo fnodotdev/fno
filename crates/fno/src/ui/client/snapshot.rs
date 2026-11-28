@@ -2154,6 +2154,22 @@ fn org_view_shot(
     super::org_board::apply_fold(view, gen, inputs);
     let questions = runtime.block_on(crate::needs_overlay::questions_now());
     view.apply_questions_fold(questions);
+    // The feed page folds its Requests rows in the same synchronous shape,
+    // so the shot paints populated rows instead of "not read yet".
+    if matches!(kind, Some(ViewKind::OrgFeed)) {
+        let requests = runtime.block_on(crate::requests_model::gather());
+        if let Some(b) = view.org_board.as_mut() {
+            match requests {
+                crate::requests_model::RequestsRead::Rows(rows) => {
+                    b.requests = Some(rows);
+                    b.requests_error = None;
+                }
+                crate::requests_model::RequestsRead::Failed(reason) => {
+                    b.requests_error = Some(reason)
+                }
+            }
+        }
+    }
     let Some(b) = view.org_board.as_mut() else {
         return Err("org view did not open".into());
     };

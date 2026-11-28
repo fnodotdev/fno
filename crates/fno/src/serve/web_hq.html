@@ -24,8 +24,8 @@
 .hinfo{display:flex;flex-direction:column;gap:5px;min-width:0}.hname{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.hname b{font-size:14px;font-weight:700}.hname span{font-size:11px;color:var(--overlay1)}
 .live{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--green)}.live i{width:7px;height:7px;background:var(--green)}.live.stale{color:var(--yellow)}.live.stale i{background:var(--yellow)}
 .meter{display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:8px;align-items:center;font-size:11.5px}.meter>span:first-child{color:var(--overlay1)}.meter b{font-weight:500;font-variant-numeric:tabular-nums}.track{height:4px;background:var(--surface0);overflow:hidden}.track i{display:block;height:100%}.mix{display:flex;height:4px;overflow:hidden;gap:1px}
-.panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}.panel h2,.panel h3{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}.panel h2::before,.panel h3::before{content:"## "}
-.lk{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.lt{display:flex;flex-direction:column;min-width:0;gap:2px;flex:1}.lt b{font-weight:600;overflow-wrap:anywhere}.lt code{font:inherit;font-size:11px;color:var(--yellow);overflow-wrap:anywhere}
+.panel{border:1px solid var(--surface0);background:var(--mantle);padding:10px 12px;display:flex;flex-direction:column;gap:6px}.panel h2,.panel h3{margin:4px 0 2px;font-size:11px;color:var(--overlay1);font-weight:700}
+.lk{display:flex;align-items:center;gap:10px;padding:6px 8px;border:1px solid var(--surface0);background:var(--base)}.lt{display:flex;flex-direction:column;min-width:0;gap:2px;flex:1}.lt b{font-weight:600;overflow-wrap:anywhere}.lt h2.reqhead,.lt h3.reqhead{margin:0;font-size:12.5px;font-weight:700;color:var(--text)}.lt h2.reqhead::before,.lt h3.reqhead::before{content:""}.lt code{font:inherit;font-size:11px;color:var(--yellow);overflow-wrap:anywhere}
 .empty{color:var(--overlay1);margin:0}.qrow{cursor:pointer}
 .ans{display:flex;flex-direction:column;gap:8px}.ans .opts{display:flex;flex-direction:column;gap:6px}.ans .lkb{text-align:left;min-height:30px;padding:4px 10px}.ans .lkb[disabled]{opacity:.5;cursor:default}.ans textarea{width:100%;box-sizing:border-box;min-height:56px;resize:vertical;background:var(--base);border:1px solid var(--surface1);color:var(--text);padding:6px 8px;font:12px var(--mono)}.ans .note{margin:0;font-size:11.5px;color:var(--subtext0);overflow-wrap:anywhere}.ans .note.err{color:var(--red);border-left:2px solid var(--red);padding-left:8px}.ans .note.ok{color:var(--text)}
 .filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.filters label{font-size:12px;color:var(--overlay1);margin-right:2px}
@@ -44,7 +44,7 @@
 tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--base)}td .sub{color:var(--overlay1);font-size:11px;margin-top:2px;display:block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .drawer{position:fixed;top:calc(var(--fno-nav-h,0px) + 8px);right:8px;bottom:8px;width:min(440px,calc(100vw - 16px));z-index:20;background:var(--mantle);border:1px solid var(--surface1);transform:translateX(calc(100% + 16px));visibility:hidden;transition:transform .2s ease-out,visibility .2s;display:flex;flex-direction:column;overflow:hidden}.drawer.on{transform:none;visibility:visible}
 .dhead{padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid var(--surface0)}.dtop{display:flex;align-items:center;gap:8px}.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;font-size:11.5px;font-weight:700;border:1px solid var(--surface1)}.x{margin-left:auto;width:26px;height:26px;border:1px solid var(--surface1);background:var(--base);color:var(--subtext0);cursor:pointer;font:inherit;font-size:14px;line-height:1}.x:hover{color:var(--text);border-color:var(--text)}
-.dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}.sec h3::before{content:"## "}
+.dhead h2{margin:0;font-size:14px;line-height:1.35;font-weight:700}.dnode{font-size:11.5px;color:var(--overlay1)}.dbody{padding:10px 14px 18px;overflow:auto;display:flex;flex-direction:column;gap:14px}.sec h3{margin:0 0 6px;font-size:11px;color:var(--overlay1);font-weight:700}
 .kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:4px 12px;font-size:12px;margin:0}.kv dt{color:var(--overlay1)}.kv dd{margin:0;min-width:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.mono{font-size:11.5px}.dbox{margin:0;border:1px solid var(--surface0);background:var(--base);padding:8px 10px;font:inherit;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto}.dbox.none{color:var(--overlay1)}.dbox b{font-weight:700}.dbox code{font:inherit;color:var(--yellow)}.sec:first-child .dbox{max-height:170px}.links{display:flex;flex-direction:column;gap:6px}.lkb{flex:none;border:1px solid var(--surface1);background:var(--mantle);color:var(--subtext0);font:inherit;font-size:11px;padding:2px 8px;cursor:pointer;min-height:24px;text-decoration:none;display:inline-flex;align-items:center}.lkb:hover{color:var(--text);border-color:var(--text)}
 @media (max-width:640px){.drawer{top:auto;left:8px;right:8px;bottom:8px;width:auto;height:78vh;transform:translateY(calc(100% + 16px))}.kv{grid-template-columns:96px minmax(0,1fr)}}
 /* Mine: the caller's own views. The accent tints this frame only. */
@@ -69,6 +69,7 @@ body[data-density="compact"] .wrap{gap:6px;padding-top:6px}body[data-density="co
       <div class="hint">Hover to fire · click for details · drag to pan · scroll to zoom</div>
       <div class="tip" id="tip"></div>
     </section>
+    <section class="panel" aria-label="Thoughts"><h2>Thoughts <button id="req-topics" class="chip" aria-pressed="false">by topic</button></h2><div id="requests"></div></section>
     <section class="panel" aria-label="Waiting on you"><h2>Waiting on you</h2><div id="waiting"></div></section>
   </div>
   <section class="tablewrap" id="view-table" hidden aria-label="Seats">
@@ -143,6 +144,69 @@ function banners(model) {
   if (e && model.machines.length) add("fleet read failed " + ago(e.failed_age_s) + " ago: " + e.reason + "; showing the read from " + ago(model.age_s) + " ago");
   if (model.notice) add(model.notice);
   if (model.seat_error) add(model.seat_error);
+}
+
+let reqTopics = false;
+function requests(model) {
+  const box = document.getElementById("requests");
+  box.replaceChildren();
+  const btn = document.getElementById("req-topics");
+  btn.onclick = () => { reqTopics = !reqTopics; btn.setAttribute("aria-pressed", String(reqTopics)); requests(model); };
+  if (model.requests_error && !(model.requests || []).length) box.append(el("p", "empty", "thoughts not read: " + model.requests_error));
+  const rows = model.requests || [];
+  if (!reqTopics) {
+    for (const r of rows) box.append(reqRow(r));
+    if (!rows.length && !model.requests_error) box.append(el("p", "empty", "No asks recorded yet"));
+    return;
+  }
+  for (const g of model.request_topics || []) {
+    box.append(el("h3", null, g.name + " (" + g.rows.length + ")"));
+    for (const i of g.rows) { const r = rows[i]; if (r) box.append(reqRow(r)); }
+  }
+}
+
+function mdHeadline(text) {
+  const m = (text || "").match(/^(#{1,6})\s+(.*)$/);
+  return m ? { level: m[1].length <= 2 ? "h2" : "h3", body: m[2], cls: "reqhead" } : null;
+}
+function stripHashes(s) {
+  return (s || "").replace(/^#{1,6}\s+/gm, "");
+}
+
+function reqRow(r) {
+  const r0 = el("div", "lk qrow"), t = el("span", "lt");
+  r0.dataset.fno = "request_row";
+  const asked = r.ask_count === 1 ? "asked once" : "asked " + r.ask_count + " times";
+  const days = r.days_unaddressed;
+  const open = days == null ? "" : days <= 0 ? "new today" : days === 1 ? "open 1 day" : "open " + days + " days";
+  const nodeWord = r.node ? (r.node + (r.node_status ? " " + r.node_status : "")) : "no linked node";
+  const stateWord = r.state === "stalled" ? "stalled" : (r.state === "regression" ? "asked again after done" : "");
+  const outcomeWord = { solved: "solved", lost: "lost", open: "open", forgotten: "acknowledged but forgotten" }[r.outcome] || "";
+  const outcomeLine = outcomeWord ? outcomeWord + (r.outcome_why ? " · " + r.outcome_why : "") : "";
+  const windowWord = (r.first_ts && r.last_ts && r.first_ts.slice(0, 10) !== r.last_ts.slice(0, 10))
+    ? "window " + r.first_ts.slice(0, 10) + " to " + r.last_ts.slice(0, 10) : "";
+  const meta = [asked, open, stateWord, outcomeWord, windowWord].filter(Boolean).join(" · ");
+  const h = mdHeadline(r.text);
+  const head = h ? el(h.level, h.cls, h.body) : el("b", null, r.text || "(empty ask)");
+  head.title = meta;
+  t.append(head, el("code", null, meta));
+  if (outcomeLine) t.append(el("code", null, "outcome: " + outcomeLine));
+  if (r.reply_excerpt) t.append(el("code", null, "reply: " + stripHashes(r.reply_excerpt)));
+  const replies = (r.responses || []).filter((x) => stripHashes(x.reply || "").trim());
+  for (const x of replies.slice(-4)) {
+    const handle = x.name || "unnamed session";
+    const resp = el("code", null, x.ts.slice(0, 10) + " " + handle + ": " + stripHashes(x.reply || "").trim().slice(0, 90));
+    // Provenance: the session id rides the hover, never the visible line.
+    resp.title = x.session + (x.transcript ? " · " + x.transcript : "");
+    t.append(resp);
+  }
+  if (r.node) {
+    const a = el("a", null, nodeWord);
+    a.href = "/backlog?node=" + encodeURIComponent(r.node);
+    t.append(a);
+  }
+  r0.append(t);
+  return r0;
 }
 
 function waiting(model) {
@@ -826,7 +890,7 @@ async function load() {
   const model = await res.json();
   canAnswer = model.writable === true;
   lastModel = model;
-  header(model); banners(model); waiting(model); machines(model); seats(model);
+  header(model); banners(model); requests(model); waiting(model); machines(model); seats(model);
   // A /hq?question=<id> link opens that card once, after the first read.
   if (wantQuestion) {
     const id = wantQuestion;

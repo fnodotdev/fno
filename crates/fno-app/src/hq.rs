@@ -62,13 +62,15 @@ pub async fn read(
             None => Arc::new(fno::backlog_model::gather(&graph, agents.to_vec()).await),
         }
     };
-    let (fleet, questions, backlog) = tokio::join!(
+    let (fleet, questions, requests, backlog) = tokio::join!(
         fno::app_api::client::org_seats::read_fleet(),
         fno::needs_overlay::questions_now(),
+        fno::requests_model::gather(),
         gather,
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
     board.record(fleet, questions, &backlog, measured_at, agents);
+    board.record_requests(requests);
     backlog
 }
 

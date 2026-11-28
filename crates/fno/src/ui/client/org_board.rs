@@ -30,6 +30,8 @@ pub(crate) enum OrgMsg {
     OwnHost(Option<String>),
     /// A settings Mods read landed off the loop.
     Mods(super::mods::Landed),
+    /// The HQ Requests rows read off the loop, rank order.
+    Requests(crate::requests_model::RequestsRead),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
@@ -40,6 +42,7 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
         OrgMsg::HostProbe(name, state) => super::remote_hosts::apply(view, name, state),
         OrgMsg::OwnHost(name) => super::remote_hosts::set_own_host(view, name),
         OrgMsg::Mods(landed) => super::mods::apply(view, landed),
+        OrgMsg::Requests(read) => apply_requests(view, gen, read),
     }
 }
 
@@ -110,6 +113,15 @@ pub(crate) struct OrgBoard {
     page: Option<Page>,
     /// The spawn prompt being typed, as raw bytes so UTF-8 survives.
     prompt: Option<Vec<u8>>,
+    /// The HQ Requests rows in rank order and the last read's failure; the
+    /// feed page paints them. The read runs off the loop in maybe_kick.
+    pub(crate) requests: Option<Vec<crate::requests_model::RequestRow>>,
+    pub(crate) requests_error: Option<String>,
+    /// The off-loop read's single-flight and cadence, plus the feed
+    /// page's by-topic toggle (t).
+    requests_inflight: bool,
+    requests_kicked_at: Option<Instant>,
+    pub(crate) requests_grouped: bool,
 }
 
 struct Page {
@@ -161,6 +173,11 @@ impl OrgBoard {
             acting: None,
             page: None,
             prompt: None,
+            requests: None,
+            requests_error: None,
+            requests_inflight: false,
+            requests_kicked_at: None,
+            requests_grouped: false,
         }
     }
 
@@ -351,7 +368,13 @@ impl OrgBoard {
         if item == Item::Feed {
             return (
                 vec![title("Feed", width)],
-                super::org_pages::feed(questions, width),
+                super::org_pages::feed(
+                    questions,
+                    self.requests.as_deref(),
+                    self.requests_error.as_deref(),
+                    self.requests_grouped,
+                    width,
+                ),
             );
         }
         let Some(f) = &self.fleet else {
@@ -701,12 +724,49 @@ pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     b.last_read = Some(Instant::now());
     let gen = b.gen;
     let agents = view.layout.agents.clone();
-    let tx = tx.clone();
+    let fleet_tx = tx.clone();
     tokio::spawn(async move {
         let inputs = super::org_seats::gather(&crate::backlog_view::graph_path(), agents).await;
-        let _ = tx.send((gen, OrgMsg::Gather(inputs)));
+        if fleet_tx.send((gen, OrgMsg::Gather(inputs))).is_err() {
+            return; // the viewer left: neither fold has anywhere to land
+        }
+    });
+    // The HQ Requests read: own single-flight and 60s cadence, the fleet
+    // kick's shape, feeding the feed page's Requests section.
+    if b.requests_inflight
+        || b.requests_kicked_at
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+    {
+        return;
+    }
+    b.requests_inflight = true;
+    b.requests_kicked_at = Some(Instant::now());
+    let gen = b.gen;
+    let req_tx = tx.clone();
+    tokio::spawn(async move {
+        let rows = crate::requests_model::gather().await;
+        if req_tx.send((gen, OrgMsg::Requests(rows))).is_err() {
+            return; // the viewer left: the read has nowhere to land
+        }
     });
 }
+/// The HQ Requests read landed: keep the last good rows on a failure,
+/// naming the reason (AC4-ERR), under the same generation guard as the
+/// fleet fold.
+pub(crate) fn apply_requests(view: &mut View, gen: u64, read: crate::requests_model::RequestsRead) {
+    let Some(b) = view.org_board.as_mut().filter(|b| b.gen == gen) else {
+        return;
+    };
+    b.requests_inflight = false;
+    match read {
+        crate::requests_model::RequestsRead::Rows(rows) => {
+            b.requests = Some(rows);
+            b.requests_error = None;
+        }
+        crate::requests_model::RequestsRead::Failed(reason) => b.requests_error = Some(reason),
+    }
+}
+
 /// A failed read, or a primary error after a good read, keeps the last good
 /// fleet and records the failure for the bottom bar. With no good read yet,
 /// fleet top's own local fallback paints.
@@ -1052,6 +1112,10 @@ pub(crate) async fn keys(
             },
             // Refuse before the prompt opens, so nobody types a prompt for
             // a machine that cannot take it.
+            // The feed page's by-topic toggle for the Requests rows.
+            ModalKey::Byte(b't') if b.current() == Item::Feed => {
+                b.requests_grouped = !b.requests_grouped;
+            }
             ModalKey::Byte(b's') => match b.plan(Act::Spawn, "") {
                 Err(e) if e != actions::NO_PROMPT => view.set_notice(e),
                 _ => b.prompt = Some(Vec::new()),

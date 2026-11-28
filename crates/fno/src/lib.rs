@@ -154,9 +154,9 @@ pub use ui::{
     context_used, cursor, decisions_overlay, decisions_table, digest_overlay, dispatch_launch,
     feed_overlay, keybindings_file, keys, lane_colors_panel, link, messages_model, modal_select,
     mouse, mux_rows, needs_overlay, notify, open_router, org_model, org_overlay, org_titles,
-    pane_border, popup, provider_picker, ratatui_blit, registry_label, sideline_color, splash,
-    team_census, templates, text_style, theme, theme_import, transcript_tail, tree, ui_usage,
-    view_store, wordmark,
+    pane_border, popup, provider_picker, ratatui_blit, registry_label, requests_model,
+    sideline_color, splash, team_census, templates, text_style, theme, theme_import,
+    transcript_tail, tree, ui_usage, view_store, wordmark,
 };
 #[cfg(feature = "app")]
 pub(crate) use ui::{band_remap, lattice, plugins_feed, thread_viewer};
