@@ -536,7 +536,7 @@ enum Role {
     BoardRender(Vec<String>),
     /// `fno --help [--all]`: the root menu.
     RootHelp(bool),
-    /// `fno --version`: `fno <crate version>`.
+    /// `fno --version`: the same rev line `fno version` prints.
     RootVersion,
     /// A group menu (`fno config`, `fno do --help`, ...), already rendered.
     GroupHelp(String),
@@ -2200,7 +2200,9 @@ fn run_root_role(role: Role, args: &[OsString]) -> ControlFlow<(), Role> {
             fno::cli_usage::exit(0);
         }
         Role::RootVersion => {
-            println!("fno {}", env!("CARGO_PKG_VERSION"));
+            // Parity with `fno version` and `fno-agent --version`: the bare
+            // flag answers the same rev-carrying line.
+            fno::version::print_version(false);
             fno::cli_usage::exit(0);
         }
         Role::GroupHelp(menu) => {

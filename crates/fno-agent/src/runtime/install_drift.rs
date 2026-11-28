@@ -62,12 +62,8 @@ fn reading_from(binary: Option<String>, cwd: &Path, cache: Option<String>) -> Re
         .and_then(|v| v.crates_rev)
         .filter(|rev| !rev.is_empty() && rev != "unknown");
     let Some(binary_rev) = binary_rev else {
-        return Ok(unknown(
-            &binary,
-            None,
-            None,
-            "installed binary reports no crates/ rev",
-        ));
+        let detail = revless_detail(&binary);
+        return Ok(unknown(&binary, None, None, &detail));
     };
     let Some(root) = source_root(cwd, cache) else {
         return Ok(unknown(
@@ -160,13 +156,17 @@ fn unknown(
 
 /// The deployed set only: sibling of the running exe, then PATH. The cargo
 /// dev target and `$FNO_AGENT_BIN` are deliberately absent, matching the
-/// doctor resolver's installed-first contract.
+/// doctor resolver's installed-first contract. A sibling under a `target/`
+/// dir is a dev build, not the deployed set, so it never qualifies: a beat
+/// running from a dev-built binary still probes the installed one.
 fn resolve_installed_binary() -> Option<String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sibling = dir.join("fno-agent");
-            if sibling.is_file() {
-                return Some(sibling.to_string_lossy().into_owned());
+            if is_deployed_dir(dir) {
+                let sibling = dir.join("fno-agent");
+                if sibling.is_file() {
+                    return Some(sibling.to_string_lossy().into_owned());
+                }
             }
         }
     }
@@ -181,13 +181,73 @@ fn resolve_installed_binary() -> Option<String> {
 }
 
 fn binary_version(binary: &str) -> Option<BinaryVersion> {
-    let mut cmd = Command::new(binary);
-    cmd.arg("version").arg("--json");
-    let out = crate::bounded_cmd::output_with_timeout(cmd, PROBE_BUDGET_S)?;
+    let out = version_json_raw(binary)?;
     if !out.status.success() {
         return None;
     }
     serde_json::from_slice(&out.stdout).ok()
+}
+
+/// The unfiltered `version --json` answer, kept raw so a rev-less answer
+/// can name its evidence instead of reading blind.
+fn version_json_raw(binary: &str) -> Option<std::process::Output> {
+    let mut cmd = Command::new(binary);
+    cmd.arg("version").arg("--json");
+    crate::bounded_cmd::output_with_timeout(cmd, PROBE_BUDGET_S)
+}
+
+/// The human `--version` line. A failure-path probe: it runs only when the
+/// json read gave no rev.
+fn human_version_line(binary: &str) -> Option<String> {
+    let mut cmd = Command::new(binary);
+    cmd.arg("--version");
+    let out = crate::bounded_cmd::output_with_timeout(cmd, PROBE_BUDGET_S)?;
+    if !out.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line)
+    }
+}
+
+/// The detail a rev-less answer reports: which binary, what its json read
+/// returned, what its human line says. The 2026-11-28 blind read was
+/// diagnosed by hand; this composes the same evidence into the beat line.
+fn revless_detail(binary: &str) -> String {
+    let mut parts = vec!["installed binary reports no crates/ rev".to_string()];
+    match version_json_raw(binary) {
+        Some(out) => {
+            let code = out
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            parts.push(format!("{binary} version --json exit {code}"));
+            let head: String = String::from_utf8_lossy(&out.stdout)
+                .chars()
+                .take(160)
+                .collect();
+            let head = head.trim();
+            if !head.is_empty() {
+                parts.push(format!("stdout: {head}"));
+            }
+        }
+        None => parts.push(format!("{binary} version --json failed or timed out")),
+    }
+    match human_version_line(binary) {
+        Some(line) => parts.push(format!("--version: {line}")),
+        None => parts.push("--version: unreadable".to_string()),
+    }
+    parts.join("; ")
+}
+
+/// True when `dir` is not inside a cargo build tree (`*/target/*`), the one
+/// layout the deployed set never uses.
+fn is_deployed_dir(dir: &Path) -> bool {
+    !dir.components().any(|c| c.as_os_str() == "target")
 }
 
 /// The source checkout through the same ladder an update installs from:
@@ -544,5 +604,85 @@ mod tests {
         assert!(line.contains("fno doctor update"), "{line}");
         diverged.behind_n = Some(0);
         assert_eq!(attention_line(&diverged), None);
+    }
+
+    /// A binary answering in the real `version_json` shape, with the fixture
+    /// rev spliced in as crates_rev: the version string the probe parses is
+    /// the one version.rs prints, not a test-local invention.
+    fn fake_binary_real_shape(dir: &Path, crates_rev: &str) -> String {
+        let mut v = crate::version::version_json();
+        v["crates_rev"] = serde_json::Value::String(crates_rev.to_string());
+        let body = format!(
+            "#!/bin/bash\necho '{}'\n",
+            serde_json::to_string(&v).unwrap()
+        );
+        crate::write_exec_stub(dir, "fake-fno-agent", &body)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn reads_fresh_and_stale_off_the_real_version_json_shape() {
+        let (_guard, root, first) = source_repo("real-shape-repo");
+        let bin_dir = tempfile::tempdir().unwrap();
+        let binary = fake_binary_real_shape(bin_dir.path(), &first);
+        let fresh = drift_of(
+            &reading_from(
+                Some(binary.clone()),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
+        assert_eq!(fresh.status.as_deref(), Some("fresh"), "{fresh:?}");
+        // A second crates/ commit the binary predates: same real shape, stale read.
+        commit_crates(&root, "c2");
+        let stale_bin = tempfile::tempdir().unwrap();
+        let stale_binary = fake_binary_real_shape(stale_bin.path(), &first);
+        let stale = drift_of(
+            &reading_from(
+                Some(stale_binary),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
+        assert_eq!(stale.status.as_deref(), Some("stale"), "{stale:?}");
+        assert_eq!(stale.behind_n, Some(1), "{stale:?}");
+    }
+
+    #[test]
+    fn revless_detail_names_path_exit_and_human_line() {
+        let (_guard, root, _rev) = source_repo("revless-detail-repo");
+        let bin_dir = tempfile::tempdir().unwrap();
+        // Answer version --json with a rev-less object; --version with the
+        // human line a real build prints.
+        let body = "#!/bin/bash\nif [ \"$1\" = \"version\" ]; then echo '{}'; else echo 'fno-agent 0.0.17 (deadbeef1234, release)'; fi\n";
+        let binary = crate::write_exec_stub(bin_dir, "fake-fno-agent", body)
+            .to_string_lossy()
+            .into_owned();
+        let drift = drift_of(
+            &reading_from(
+                Some(binary.clone()),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
+        assert_eq!(drift.status.as_deref(), Some("unknown"), "{drift:?}");
+        let detail = drift.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("no crates/ rev"), "{detail}");
+        assert!(detail.contains("exit 0"), "{detail}");
+        assert!(detail.contains(&binary), "{detail}");
+        assert!(
+            detail.contains("fno-agent 0.0.17 (deadbeef1234, release)"),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn deployed_dir_predicate_splits_target_trees_from_installed_dirs() {
+        assert!(!is_deployed_dir(Path::new("/repo/target/debug")));
+        assert!(is_deployed_dir(Path::new("/Users/x/.local/bin")));
     }
 }
