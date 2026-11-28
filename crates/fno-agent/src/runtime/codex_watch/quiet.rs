@@ -628,6 +628,7 @@ fn send_recovery(entry: &RegistryEntry, sid: &str, text: &str) -> Result<(), Str
     );
     if crate::mail_inject::mail_send_accepted(code, &out)
         || crate::mail_inject::mail_send_receipt(&out).contains("durable")
+        || crate::mail_inject::mail_send_queued_for_drain(&out)
     {
         Ok(())
     } else {

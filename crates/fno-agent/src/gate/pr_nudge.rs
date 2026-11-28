@@ -512,8 +512,9 @@ pub fn apply(
                 // land, so the same pass falls back to the
                 // content-confirmed resume.
                 if !landed {
-                    let durable_receipt =
-                        crate::mail_inject::mail_send_receipt(&stdout).contains("durable");
+                    let durable_receipt = crate::mail_inject::mail_send_receipt(&stdout)
+                        .contains("durable")
+                        || crate::mail_inject::mail_send_queued_for_drain(&stdout);
                     // A busy row is mid-turn: the durable leg delivers at
                     // the next turn (39 of 40 did), and a resume must not
                     // type into a turn. The attempt still counts as
@@ -1888,6 +1889,126 @@ mod tests {
         assert!(ev["data"].get("reason").is_none());
         assert!(ev["data"].get("resume_reason").is_none());
         let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+
+        // The refused-live-leg arm on the nudge lane: the send door prints
+        // the demotion JSON ("queued (durable)"), then report_landing
+        // appends the failed-live-leg ladder whose last line is the re-send
+        // rung, so the last-line durable read missed it and the Mail rung
+        // fell to an unflagged resume carrying the full text - a second
+        // copy beside the sitting durable one. The busy arm ends after one
+        // queue (the mail leg; no resume leg at all), and the idle-claude
+        // arm's resume carries --message-already-queued, so the body never
+        // types twice. Fixtures ride the real renderers, so rewording either
+        // verdict fails beside its own test.
+        let exit14_stdout = format!(
+            "{}\n{}",
+            crate::mail_receipt::demotion(
+                "fmail-14",
+                Some("no-pane-ref"),
+                6.0,
+                Some("11111111-2222-3333-4444-555555555555"),
+                None,
+                None,
+                None,
+                None,
+            ),
+            crate::mail_receipt::failed_live_leg(
+                "fmail-14",
+                "11111111-2222-3333-4444-555555555555",
+                Some("no-pane-ref"),
+            ),
+        );
+        // The busy arm: durable and mid-turn - the mail leg is the only leg.
+        let busy_row = OpenPrRow {
+            busy: true,
+            ..row(true)
+        };
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner = |argv: &[String], _cwd: &str| -> (i32, String, String) {
+            calls.push(argv.to_vec());
+            if argv.contains(&"do".to_string()) {
+                (
+                    0,
+                    status_payload("green", true, "0123456789abcdef"),
+                    String::new(),
+                )
+            } else if argv.contains(&"send".to_string()) {
+                (14, exit14_stdout.clone(), String::new())
+            } else {
+                panic!("a busy durable hold must not run a resume leg");
+            }
+        };
+        let home = AgentsHome::at(std::env::temp_dir().join("fno-pn-exit14-busy"));
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        apply(
+            &home,
+            &emitter,
+            &busy_row,
+            &LadderState::default(),
+            false,
+            900,
+            1900,
+            &mut runner,
+        );
+        assert_eq!(
+            calls.len(),
+            2,
+            "exit-14 busy hold: status read + one mail queue, no resume leg"
+        );
+        let saved = load_state(&home, &busy_row.session_id);
+        assert_eq!(saved.attempts, 1);
+        assert_eq!(saved.undelivered, 1, "the attempt still counts undelivered");
+        assert!(!saved.mail_durable);
+        let ev = last_event(&home, "pr_nudge_sent");
+        assert_eq!(ev["data"]["delivered"], serde_json::json!(false));
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+
+        // The idle-claude arm: the resume runs flagged, so the Working hold
+        // refuses it and the sitting copy owns the body.
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner = |argv: &[String], _cwd: &str| -> (i32, String, String) {
+            calls.push(argv.to_vec());
+            if argv.contains(&"do".to_string()) {
+                (
+                    0,
+                    status_payload("green", true, "fedcba9876543210"),
+                    String::new(),
+                )
+            } else if argv.contains(&"send".to_string()) {
+                (14, exit14_stdout.clone(), String::new())
+            } else {
+                (
+                    16,
+                    String::new(),
+                    "already queued and will not be resent".into(),
+                )
+            }
+        };
+        let home = AgentsHome::at(std::env::temp_dir().join("fno-pn-exit14-idle"));
+        let _ = std::fs::remove_dir_all(home.root().to_path_buf());
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        apply(
+            &home,
+            &emitter,
+            &row(true),
+            &LadderState::default(),
+            false,
+            900,
+            1900,
+            &mut runner,
+        );
+        assert_eq!(calls.len(), 3, "status read + mail + flagged resume");
+        let resume = calls.last().expect("the flagged resume ran");
+        assert!(resume.iter().any(|a| a == "--message-already-queued"));
+        let saved = load_state(&home, &row(true).session_id);
+        assert_eq!(saved.attempts, 1);
+        assert_eq!(saved.undelivered, 1);
+        assert!(saved.mail_durable, "the exit-14 send stamps mail_durable");
+        let ev = last_event(&home, "pr_nudge_sent");
+        assert_eq!(ev["data"]["delivered"], serde_json::json!(false));
+        assert_eq!(ev["data"]["fallback"], "resume");
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("fno-pn-exit14-idle"));
     }
 
     #[test]
