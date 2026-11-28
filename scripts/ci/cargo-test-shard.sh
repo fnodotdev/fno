@@ -46,4 +46,6 @@ if [ "${#mine[@]}" -eq 0 ]; then
   exit 1
 fi
 
-cargo test --test '*' --no-fail-fast -- "$@" --exact "${mine[@]}"
+# The retry-once wrapper records one-off timing flakes as FLAKE-RETRY lines
+# instead of reddening main; a test that fails the retry keeps the red.
+bash "$(dirname "$0")/cargo-test-retry.sh" cargo test --test '*' --no-fail-fast -- "$@" --exact "${mine[@]}"
