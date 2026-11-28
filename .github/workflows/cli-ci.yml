@@ -942,6 +942,12 @@ jobs:
           cargo test --test hook_latency -- hook_sources_stay_small budget_judge_takes_best_of_passes budget_judge_keeps_real_regression_red budget_retry_trips_on_any_metric_over_its_bound
           cargo test --test test_owned_keeper_reap every_triad_spawning_test_file_declares_its_owner
 
+      - name: Cargo test retry wrapper self-test
+        # The wrapper now sits in the path of every integration shard; this
+        # pins its parse, arg rebuild and refuse arms with a stub command,
+        # no cargo needed.
+        run: bash tests/ci/test_cargo_test_retry.sh
+
       - name: Install cargo-nextest
         # One process per test: the fno-agent lib suite's PATH and FNO_HOME mutations become process-local, so the cross-test env races that keep reddening clean branches are structurally impossible instead of lock-guarded. nextest never runs doctests, but plain `cargo test --lib --bins` never ran them either.
         timeout-minutes: 3
@@ -1187,8 +1193,11 @@ jobs:
         # the ubuntu-latest runner (the harness needs no TTY of its own).
         # Run the previously first failing binaries first and every selected
         # test binary once, with the two integration shards divided by timing.
+        # The retry-once wrapper records one-off timing flakes as FLAKE-RETRY
+        # lines instead of reddening main; a test that fails the retry keeps the red.
         working-directory: crates/fno
         run: >-
+          bash ${{ github.workspace }}/scripts/ci/cargo-test-retry.sh
           cargo test --test idle_cpu_budget_e2e --test mux_restore_doneness_e2e
           --test cross_door_property --test persistence --test search_e2e
           --test org_fold_degrade --test agent_edge_e2e --test squad_prune
@@ -1243,8 +1252,11 @@ jobs:
           echo "FNO_AGENT_WORKER=$worker" >> "$GITHUB_ENV"
 
       - name: cargo test integration binaries (fno mux shard 2 of 2)
+        # The retry-once wrapper records one-off timing flakes as FLAKE-RETRY
+        # lines instead of reddening main; a test that fails the retry keeps the red.
         working-directory: crates/fno
         run: >-
+          bash ${{ github.workspace }}/scripts/ci/cargo-test-retry.sh
           cargo test --test agent_launcher_client_e2e
           --test process_admission_e2e --test script_api_e2e
           --test workspace_persistence_e2e --test client_e2e
