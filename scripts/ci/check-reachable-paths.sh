@@ -116,7 +116,7 @@ REGISTRY = [
         # advertisement, or deleting the arms, is itself a finding.
         "glob": "cli/src/fno/agents/cli.py",
         "site": r"^\s*\"(--(?:split|tab|at))\",\s*$",
-        "must_appear_in": "crates/fno-agent/src/bin/client.rs",
+        "must_appear_in": "crates/fno-agent/src/client_cli/mod.rs",
         "reach_only": ["--portal"],
         "why": "a placement flag advertised with no Rust match arm exits 2 on the default runtime",
     },
@@ -477,12 +477,12 @@ self_test() {
     printf 'def cmd_spawn():\n    "--split",\n' > "$1/cli/src/fno/agents/cli.py"
   }
   write_placement_reach_missing() {
-    mkdir -p "$1/crates/fno-agent/src/bin"
-    printf 'fn build() {\n    // no placement arms here\n}\n' > "$1/crates/fno-agent/src/bin/client.rs"
+    mkdir -p "$1/crates/fno-agent/src/client_cli"
+    printf 'fn build() {\n    // no placement arms here\n}\n' > "$1/crates/fno-agent/src/client_cli/mod.rs"
   }
   write_placement_reach_full() {
-    mkdir -p "$1/crates/fno-agent/src/bin"
-    printf 'fn build() {\n    "--split" | "-x" => {}\n    "--portal" => {}\n}\n' > "$1/crates/fno-agent/src/bin/client.rs"
+    mkdir -p "$1/crates/fno-agent/src/client_cli"
+    printf 'fn build() {\n    "--split" | "-x" => {}\n    "--portal" => {}\n}\n' > "$1/crates/fno-agent/src/client_cli/mod.rs"
   }
 
   # Canary fixture: one violation per engine.

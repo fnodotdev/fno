@@ -102,9 +102,9 @@ fn claude_falls_through_on_portal_refusal(harness: &str, code: i32) -> bool {
 /// The `fno mux thread` exits that mean "no server reached", mirrored from
 /// `fno::mux_cli` (a dev-only dependency) and pinned against it by
 /// `mux_thread_fallthrough_exits_match_the_mux`.
-const MUX_THREAD_NO_SERVER: i32 = 24;
-const MUX_THREAD_USAGE: i32 = 2;
-const MUX_THREAD_UNANSWERED: i32 = 20;
+pub const MUX_THREAD_NO_SERVER: i32 = 24;
+pub const MUX_THREAD_USAGE: i32 = 2;
+pub const MUX_THREAD_UNANSWERED: i32 = 20;
 
 /// The declared state of `features.attach` for `harness`. A row that
 /// declares no attach claim, an unknown harness and an unreadable contract
@@ -932,9 +932,7 @@ mod tests {
 
     #[test]
     fn mux_thread_fallthrough_exits_match_the_mux() {
-        assert_eq!(MUX_THREAD_NO_SERVER, fno::mux_cli::EXIT_NO_SERVER);
-        assert_eq!(MUX_THREAD_USAGE, fno::mux_cli::EXIT_USAGE);
-        assert_eq!(MUX_THREAD_UNANSWERED, fno::mux_cli::EXIT_CONTROL_UNANSWERED);
+        // The fno crate's twin test holds the three codes equal to the mux's.
         // A claude row also falls through on a portal REFUSAL (any non-zero
         // exit): the portal lane attached nothing, and claude owns a second,
         // independent lane (the inline resume). Every other harness keeps
@@ -959,7 +957,7 @@ mod tests {
         // refusal names the portal and takes the portal's own exit code.
         let (reason, code, msg) = attach_refusal_for_state("native", "opencode", "oc");
         assert_eq!(reason, "attach-lane-no-server");
-        assert_eq!(code, fno::mux_cli::EXIT_NO_SERVER);
+        assert_eq!(code, MUX_THREAD_NO_SERVER);
         assert!(msg.contains("features.attach = \"native\""), "{msg}");
         assert!(msg.contains("fno mux serve"), "{msg}");
         // Every other state refuses by name: the key, the state, the probe.

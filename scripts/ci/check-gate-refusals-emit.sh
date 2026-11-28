@@ -7,7 +7,7 @@
 # Rust gate: run_gate already emitted friction rows +
 # agent_spawn_refused + a machine-sample stamp, but no spawn_gate_refused
 # row - the kind the feed's dedicated handler keys on. The state-root
-# pre-gate (bin/client.rs) returned its exit code with no trace at all.
+# pre-gate (client_cli/mod.rs) returned its exit code with no trace at all.
 #
 # The fix is one emitter, emit_refusal_event, called at the two refusal
 # crossings. A convention nothing checks is a convention that decays.
@@ -15,7 +15,7 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 GATE="crates/fno-agent/src/spawn/spawn_gate.rs"
-CLIENT="crates/fno-agent/src/bin/client.rs"
+CLIENT="crates/fno-agent/src/client_cli/mod.rs"
 
 fail=0
 note() {
@@ -50,7 +50,7 @@ fi
 # 3. The state-root pre-gate door crosses the seam.
 if ! grep -A 10 'state_root_grant_gate(provider, declared_substrate, &roots)' "$CLIENT" | grep -q 'emit_refusal_event'; then
   note
-  echo "  bin/client.rs's state_root_grant_gate call must cross emit_refusal_event" >&2
+  echo "  client_cli/mod.rs's state_root_grant_gate call must cross emit_refusal_event" >&2
   echo "  before returning the refusal exit code." >&2
   exit 1
 fi

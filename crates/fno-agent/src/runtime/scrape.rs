@@ -490,7 +490,7 @@ pub(crate) fn explain_rung(e: &state::RegistryEntry, now_secs: u64) -> &'static 
 }
 
 /// The hidden `fno-agent detect` debug command (precedent: the hidden `claim`
-/// command - matched with `matches!` in bin/client.rs, out of CLIENT_COMMAND_USAGE
+/// command - matched with `matches!` in client_cli/mod.rs, out of CLIENT_COMMAND_USAGE
 /// and the routable-command parity guard). `detect explain <agent>` prints which
 /// authority currently badges the agent and, for screen-manifest, the matched
 /// rule + stored verdict + age. Read-only over the registry; no live

@@ -13,9 +13,10 @@
 //!   alone, so a Python or clap path under a retired root is not counted,
 //!   and its rows below the root add the names a Rust classifier claims;
 //! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
-//! - `crates/fno-agent/src/bin/client.rs` and its doors module
-//!   `bin/doors/client_doors.rs`: the fno-agent binary's own top-level
-//!   commands, which count the same as fno's;
+//! - `crates/fno-agent/src/client_cli/mod.rs`, its doors module
+//!   `client_cli/doors/client_doors.rs`, and the module tables in
+//!   `AGENTS_DOOR_TABLES`: every argv[0] word the fno-agent binary answers,
+//!   in `run` or before it, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. The group is
 //!   counted from the table alone; the map's `agents` rows are the spellings
 //!   the table's own test places, and no Python registers them.
@@ -47,34 +48,111 @@ pub fn cap_for(path: &str) -> usize {
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/bin/client.rs";
+const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/client_cli/mod.rs";
 /// The binary-direct doors `run` dispatches through, split out of client.rs.
-pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/bin/doors/client_doors.rs";
+pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/client_cli/doors/client_doors.rs";
+/// The module tables client.rs hands argv[0] to, in `run` or before it: each
+/// file and the function whose `match` is the table.
+pub(crate) const AGENTS_DOOR_TABLES: &[(&str, &str)] = &[
+    (
+        "crates/fno-agent/src/family_doors.rs",
+        "pub fn client_dispatch",
+    ),
+    ("crates/fno-agent/src/gate/pr_door.rs", "pub fn run_command"),
+    (
+        "crates/fno-agent/src/gate/review_doors.rs",
+        "pub fn dispatch",
+    ),
+    (
+        "crates/fno-agent/src/client_transport.rs",
+        "pub fn transport_early_arms",
+    ),
+    (
+        "crates/fno-agent/src/gate/pr_status/adapter.rs",
+        "pub fn gh_transport_door",
+    ),
+    (
+        "crates/fno-agent/src/runtime/worktree/mod.rs",
+        "pub fn client_dispatch",
+    ),
+    (
+        "crates/fno-agent/src/spawn/launch_workdir.rs",
+        "pub fn client_dispatch",
+    ),
+    (
+        "crates/fno-agent/src/runtime/org_board/pr_closure.rs",
+        "pub fn run_command",
+    ),
+];
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
+
+/// The fno-agent client's dispatch sources, as text.
+pub struct AgentSources {
+    pub client: String,
+    pub doors: String,
+    /// Each door table: its file, its marker, and the file's text.
+    pub tables: Vec<(&'static str, &'static str, String)>,
+}
+
+impl AgentSources {
+    pub fn read(root: &Path) -> Result<Self, ReadError> {
+        let mut tables = Vec::new();
+        for &(rel, marker) in AGENTS_DOOR_TABLES {
+            tables.push((rel, marker, read_rel(root, rel)?));
+        }
+        Ok(Self {
+            client: read_rel(root, AGENTS_SOURCE_REL)?,
+            doors: read_rel(root, AGENTS_DOORS_REL)?,
+            tables,
+        })
+    }
+}
 
 /// The committed files the guard reads, as text.
 pub struct Inputs {
     pub collapse_map: String,
     pub baseline: String,
     pub native_tree: String,
-    pub agents_source: String,
-    pub agents_doors: String,
+    pub agents: AgentSources,
     pub debt: String,
 }
 
+/// A committed input the guard could not read.
+#[derive(Debug)]
+pub struct ReadError {
+    rel: &'static str,
+    root: std::path::PathBuf,
+    error: std::io::Error,
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "menu-caps: cannot read {} under {}: {}",
+            self.rel,
+            self.root.display(),
+            self.error
+        )
+    }
+}
+
+fn read_rel(root: &Path, rel: &'static str) -> Result<String, ReadError> {
+    std::fs::read_to_string(root.join(rel)).map_err(|error| ReadError {
+        rel,
+        root: root.to_path_buf(),
+        error,
+    })
+}
+
 /// Read every input under `root`; the error names the first missing file.
-pub fn read_inputs(root: &Path) -> Result<Inputs, String> {
-    let read = |rel: &str| {
-        std::fs::read_to_string(root.join(rel))
-            .map_err(|e| format!("menu-caps: cannot read {rel} under {}: {e}", root.display()))
-    };
+pub fn read_inputs(root: &Path) -> Result<Inputs, ReadError> {
     Ok(Inputs {
-        collapse_map: read(MAP_REL)?,
-        baseline: read(BASELINE_REL)?,
-        native_tree: read(NATIVE_REL)?,
-        agents_source: read(AGENTS_SOURCE_REL)?,
-        agents_doors: read(AGENTS_DOORS_REL)?,
-        debt: read(DEBT_REL)?,
+        collapse_map: read_rel(root, MAP_REL)?,
+        baseline: read_rel(root, BASELINE_REL)?,
+        native_tree: read_rel(root, NATIVE_REL)?,
+        agents: AgentSources::read(root)?,
+        debt: read_rel(root, DEBT_REL)?,
     })
 }
 
@@ -140,8 +218,9 @@ pub(crate) fn strip_comments(text: &str) -> String {
         .join("\n")
 }
 
-pub(crate) fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
-    let missing = || format!("menu-caps: {AGENTS_SOURCE_REL} has no dispatch marker {marker:?}");
+/// The brace-balanced body after `marker` in `text`, the file at `rel`.
+pub(crate) fn braced_region<'a>(text: &'a str, rel: &str, marker: &str) -> Result<&'a str, String> {
+    let missing = || format!("menu-caps: {rel} has no dispatch marker {marker:?}");
     let start = text.find(marker).ok_or_else(missing)?;
     let opening = start + text[start..].find('{').ok_or_else(missing)?;
     let mut depth = 0usize;
@@ -158,7 +237,7 @@ pub(crate) fn braced_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, 
         }
     }
     Err(format!(
-        "menu-caps: unbalanced dispatch marker {marker:?} in {AGENTS_SOURCE_REL}"
+        "menu-caps: unbalanced dispatch marker {marker:?} in {rel}"
     ))
 }
 
@@ -180,18 +259,19 @@ fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
     commands
 }
 
-/// The fno-agent binary's top-level commands, read from its dispatcher:
-/// `source` is client.rs and `doors` its doors module, whose whole text is
-/// dispatch arms. Shared with the command ratchet, whose surface rows defend
-/// each of these commands by name.
-pub(crate) fn fno_agent_commands(source: &str, doors: &str) -> Result<BTreeSet<String>, String> {
-    let text = strip_comments(source);
+/// Every argv[0] word the fno-agent binary answers, hidden ones included:
+/// `run`'s arms, the doors module (whose whole text is dispatch arms), the
+/// `main()` and pre-run argv doors, and each `AGENTS_DOOR_TABLES` match. The
+/// one reading of the client's top level: the command ratchet's surface rows
+/// defend each of these words by name, and the debt row caps their count.
+pub(crate) fn fno_agent_commands(sources: &AgentSources) -> Result<BTreeSet<String>, String> {
+    let text = strip_comments(&sources.client);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)
         .expect("static regex");
     let literal = Regex::new(r#""([a-z][a-z0-9-]*)""#).expect("static regex");
     let mut commands = BTreeSet::new();
-    let run = braced_region(&text, "async fn run(")?;
-    let doors = strip_comments(doors);
+    let run = braced_region(&text, AGENTS_SOURCE_REL, "async fn run(")?;
+    let doors = strip_comments(&sources.doors);
     let if_command = Regex::new(r#"\bif command == "([a-z][a-z0-9-]*)""#).expect("static regex");
     let matches = Regex::new(r"matches!\(\s*command\s*,([^)]*)\)").expect("static regex");
     for region in [run, doors.as_str()] {
@@ -204,11 +284,50 @@ pub(crate) fn fno_agent_commands(source: &str, doors: &str) -> Result<BTreeSet<S
             );
         }
     }
-    let retired = braced_region(&text, "fn retired_command_pointer(command:")?;
-    commands.extend(arm.captures_iter(retired).map(|c| c[1].to_string()));
-    let request = braced_region(&text, "let method = match command")?;
+    let request = braced_region(&text, AGENTS_SOURCE_REL, "let method = match command")?;
     let lines: Vec<&str> = request.lines().collect();
     commands.extend(arms_at_top_level(&lines, &arm));
+
+    // The argv doors outside `run`: main() and the pre-run door functions
+    // test argv[0] before the runtime builds, and `|| command == "x"`
+    // continues an `if command ==` arm.
+    let dispatch = format!("{text}\n{doors}");
+    let first_eq =
+        Regex::new(r#"args\.first\(\)\.map\(String::as_str\)\s*==\s*Some\("([a-z][a-z0-9-]*)"\)"#)
+            .expect("static regex");
+    let first_owned =
+        Regex::new(r#"args\.first\(\)\s*==\s*Some\(&"([a-z][a-z0-9-]*)"\.to_string\(\)\)"#)
+            .expect("static regex");
+    let continuation =
+        Regex::new(r#"\|\|\s*command == "([a-z][a-z0-9-]*)""#).expect("static regex");
+    for single in [&first_eq, &first_owned, &continuation] {
+        commands.extend(single.captures_iter(&dispatch).map(|c| c[1].to_string()));
+    }
+    let first_matches =
+        Regex::new(r"matches!\(\s*args\.first\(\)\.map\(String::as_str\)\s*,\s*Some\(([^)]*)\)")
+            .expect("static regex");
+    for alternatives in first_matches.captures_iter(&dispatch) {
+        commands.extend(
+            literal
+                .captures_iter(&alternatives[1])
+                .map(|c| c[1].to_string()),
+        );
+    }
+
+    // The module tables: a `"x" =>`, `Some("x") =>` or `Some("x" | "y") =>`
+    // arm. A nested purpose match (`Some(p @ ("a" | "b")) =>`) is a leaf's
+    // grammar, and the closing `))` keeps it out.
+    let table_arm =
+        Regex::new(r#"(?:Some\()?((?:"[a-z][a-z0-9-]*"\s*\|\s*)*"[a-z][a-z0-9-]*")\)?\s*=>"#)
+            .expect("static regex");
+    for (rel, marker, source) in &sources.tables {
+        let stripped = strip_comments(source);
+        let region = braced_region(&stripped, rel, marker)?;
+        for arms in table_arm.captures_iter(region) {
+            commands.extend(literal.captures_iter(&arms[1]).map(|c| c[1].to_string()));
+        }
+        commands.extend(first_eq.captures_iter(region).map(|c| c[1].to_string()));
+    }
     commands.insert("help".into());
     commands.insert("version".into());
     if !commands.contains("claim") || !commands.contains("detect") {
@@ -266,7 +385,7 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
             add(&path, 0, &plain);
         }
     }
-    for command in fno_agent_commands(&inputs.agents_source, &inputs.agents_doors)? {
+    for command in fno_agent_commands(&inputs.agents)? {
         add(&[command], 0, &|_: &[String]| "fno-agent".to_string());
     }
     Ok(children.into_iter().map(|(k, v)| (k, v.len())).collect())
@@ -351,6 +470,43 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
     ))
 }
 
+/// The fno-agent words an fno root answers by its own name, with no menu
+/// row: the client's front doors and the help and version every binary has.
+const ROOT_SPELLED: &[&str] = &["backlog", "do", "help", "pr", "version"];
+
+/// The client word each `fno agent` row forwards to.
+pub(crate) fn menu_forwarded() -> BTreeSet<String> {
+    crate::agents_menu::walk(&crate::agents_menu::ROOT)
+        .into_iter()
+        .filter_map(|(_, node)| node.legacy.first())
+        .map(|word| crate::agents_client_route::client_word(word).to_string())
+        .collect()
+}
+
+/// Every fno-agent word needs an fno spelling: an `fno agent` row that
+/// forwards to it, or an fno root that answers it by name. The refusal names
+/// each word with none.
+pub(crate) fn check_homes(
+    words: &BTreeSet<String>,
+    forwarded: &BTreeSet<String>,
+) -> Result<(), Vec<String>> {
+    let homeless: Vec<String> = words
+        .iter()
+        .filter(|w| !forwarded.contains(*w) && !ROOT_SPELLED.contains(&w.as_str()))
+        .map(|w| {
+            format!(
+                "fno-agent `{w}` has no fno spelling. Add an `fno agent` row whose legacy \
+                 word is `{w}` (crates/fno/src/cli/agents_menu.rs), or delete its arm."
+            )
+        })
+        .collect();
+    if homeless.is_empty() {
+        Ok(())
+    } else {
+        Err(homeless)
+    }
+}
+
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
 Counts every command, hidden included, at the first three levels of fno and
@@ -383,7 +539,10 @@ pub fn run(args: &[std::ffi::OsString]) -> i32 {
             return 2;
         }
     };
-    match check(&counts, &inputs.debt) {
+    let homes = fno_agent_commands(&inputs.agents)
+        .map_err(|e| vec![e])
+        .and_then(|words| check_homes(&words, &menu_forwarded()));
+    match check(&counts, &inputs.debt).and_then(|line| homes.map(|()| line)) {
         Ok(line) => {
             println!("{line}");
             0
@@ -443,26 +602,55 @@ mod tests {
             let vis = if i % 2 == 0 { "hidden" } else { "visible" };
             native.push_str(&format!("mux v{i}\tleaf\t{vis}\t-\t-\n"));
         }
-        let inputs = Inputs {
+        let mut inputs = Inputs {
             collapse_map: "current-leaf\ttier\nlead board\tT1\nwhoami x\tT1\n".into(),
             baseline: "# c\ninbox a !--hid\nfno-agent\n".into(),
             native_tree: native,
-            agents_source: "async fn run(\n    args: X,\n    timing: Y,\n) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
-                 fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
-                 let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
-                .into(),
-            // A door module command counts like one dispatched in run.
-            agents_doors: "fn doors(command: &str) { if command == \"doored\" {} }\n".into(),
+            agents: AgentSources {
+                client: "async fn run(\n    args: X,\n    timing: Y,\n) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
+                     let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n\
+                     fn main() { if args.first().map(String::as_str) == Some(\"early\") {} }\n"
+                    .into(),
+                // A door module command counts like one dispatched in run.
+                doors: "fn doors(command: &str) { if command == \"doored\" {} }\n".into(),
+                // A pre-run table counts its arms, alternation included; a
+                // nested purpose match is a leaf's grammar.
+                tables: vec![(
+                    "t.rs",
+                    "pub fn client_dispatch",
+                    "pub fn client_dispatch(a: &[String]) -> Option<i32> { match a {\n\
+                     Some(\"tabled\" | \"twin\") => 1,\n\"plain\" => 2,\n\
+                     Some(p @ (\"leaf\" | \"grammar\")) => 3,\n_ => None } }\n"
+                        .into(),
+                )],
+            },
             debt: String::new(),
         };
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got.get("fno-agent"), Some(&8), "{got:?}");
+        assert_eq!(got.get("fno-agent"), Some(&11), "{got:?}");
+        // A door table whose marker moved refuses by file and marker, never
+        // a silent zero for its words.
+        inputs.agents.tables.first_mut().expect("fixture table").2 = "pub fn renamed() {}".into();
+        let lost = counts(&inputs).unwrap_err();
+        assert!(
+            lost.contains("t.rs") && lost.contains("\"pub fn client_dispatch\""),
+            "{lost}"
+        );
         // The root is the table's thirteen; Rust-claimed rows count (AC1-HP).
         assert_eq!(got["(root)"], 13, "{got:?}");
         assert!(got["inbox"] >= 2, "{got:?}");
         assert_eq!(got["config accounts"], 15, "{got:?}");
         assert!(got.contains_key("agent fleet"));
+
+        // A client word with no fno spelling refuses by name; a menu-forwarded
+        // word and a root-spelled word pass.
+        let words: BTreeSet<String> = ["zz-homeless", "census", "help"].map(String::from).into();
+        let homes = check_homes(&words, &BTreeSet::from(["census".to_string()])).unwrap_err();
+        assert!(
+            matches!(homes.as_slice(), [only] if only.contains("`zz-homeless`")),
+            "{homes:?}"
+        );
     }
 }

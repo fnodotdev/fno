@@ -14,7 +14,7 @@
 //! parent/child lineage, which is why this reaches a grandchild the leader
 //! never `wait()`s for - the shape a plain `wait()`-based reaper cannot see.
 //!
-//! Internal dispatch only (`fno-agent test-run`, matched in `bin/client.rs`
+//! Internal dispatch only (`fno-agent test-run`, matched in `client_cli/mod.rs`
 //! next to `probe-run`) - never a public `fno` command.
 //! `cli/src/fno/test_runner.py` is the thin Python adapter that shells to
 //! this binary.

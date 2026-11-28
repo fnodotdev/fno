@@ -1282,7 +1282,7 @@ fn charges_local_memory(substrate: &str) -> bool {
 /// Fails open on exactly one case: `roots` is empty. There is then no root to
 /// grant and nothing to refuse.
 /// The state-root grant gate. Sits BEFORE `run_gate` in the spawn path
-/// (bin/client.rs), so it carries the same wrapper duty: its refusal ends
+/// (client_cli/mod.rs), so it carries the same wrapper duty: its refusal ends
 /// with one [`verdict_line`], or the reader sees the remedy prose with no
 /// verdict.
 pub fn state_root_grant_gate(
@@ -1522,7 +1522,7 @@ pub fn run_gate(
 
 /// The one emitter of the `spawn_gate_refused` kind. Every gate refusal
 /// crosses here exactly once: `run_gate`'s `map_err` for the decide body,
-/// and bin/client.rs's state-root pre-gate door for the early refusal. The
+/// and client_cli/mod.rs's state-root pre-gate door for the early refusal. The
 /// cause fields (axis, measured value vs cap, remedy) are built at the
 /// refusal site into `Refusal.event`; this adds the identity the feed row
 /// reads (`reason`, `name`) and the emitting leg. Best-effort like the

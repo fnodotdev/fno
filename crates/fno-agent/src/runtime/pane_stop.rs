@@ -804,7 +804,7 @@ pub(crate) struct FnoRun {
 }
 
 /// The ONE door out of this crate into the `fno` CLI for a read that
-/// answers and exits. `fno` is a dev-only link here, so a direct call is not
+/// answers and exits. This crate never links `fno`, so a direct call is not
 /// available and the shellout is the only lane. Keeping it in one place is
 /// what the Rust/Python seam ratchet measures, and what lets a future
 /// in-process path replace every caller at once.

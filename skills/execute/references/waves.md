@@ -219,7 +219,7 @@ fi
 if [[ -n "$WORKER_BAND" ]]; then
     READY_ARGS+=(--band "$WORKER_BAND")
 fi
-READY_JSON=$(fno-agent wave ready "$PLAN_PATH" "${READY_ARGS[@]}")
+READY_JSON=$(fno agent internal target wave ready "$PLAN_PATH" "${READY_ARGS[@]}")
 ```
 
 A task appears under `ready` when its effective blockers are all complete and no peer holds it. A declared `blocked_by` list wins, including an explicit empty list. A task without that key derives every task in the previous wave. Inside a parallel wave, `collision.partition` adds derived edges: tasks sharing a file (or a hidden shared output root) serialize in wave order, and a task with no parseable file list waits for every evaluated sibling. Live foreign task claims appear under `claimed`. Stale or self-owned claims are re-offered. Tasks held back by unfinished blockers appear under `blocked_on` with those blockers and re-enter `ready` on a later round, so they need no action now. Unknown task-row statuses appear under `blocked` and never dispatch. Dispatch every entry under `ready` before running the query again:
@@ -236,9 +236,9 @@ Keep each `verify` script unchanged until its process exits. When a verification
 - A lone target with fewer than two ready tasks runs them sequentially in place.
 - A lone target (`--band` absent) with at least two ready tasks first runs `fno config assert-subagent-budget --width <ready-count>`. On refusal, record the reason in STATE.md and run sequentially in place.
 - Resolve provider capabilities. A sequential-fallback provider records the downgrade and runs sequentially in place.
-- Run `fno-agent wave fork "$PLAN_PATH" --wave <n>` with one `--task <ready-id>` per ready task. It prints `B<TAB><base-sha>` and one `O<TAB><task-id><TAB><absolute-worktree><TAB><branch>` per selected task. A refusal records the reason in STATE.md and runs sequentially in place. For each worktree, best-effort run `CANONICAL=<repo-root> WORKTREE=<path> bash scripts/setup/setup-worktree.sh`.
+- Run `fno agent internal target wave fork "$PLAN_PATH" --wave <n>` with one `--task <ready-id>` per ready task. It prints `B<TAB><base-sha>` and one `O<TAB><task-id><TAB><absolute-worktree><TAB><branch>` per selected task. A refusal records the reason in STATE.md and runs sequentially in place. For each worktree, best-effort run `CANONICAL=<repo-root> WORKTREE=<path> bash scripts/setup/setup-worktree.sh`.
 - Dispatch one executor per `O` line in one message. Name its task id and worktree path in the prompt. Require edits only there, absolute paths with `git -C <path>`, and a commit before return.
-- When all task results arrive, run `fno-agent wave join "$PLAN_PATH" --wave <n> --base <base-sha>` with one `--task <id>` per returned `O` row. A refusal pauses the wave and names the task/error. `OFF<TAB><task-id><TAB><file>` rows are written under `## Off-surface writes` in SUMMARY.md. Join reruns each selected task's `verify` once in the target worktree. A failure names the task and enters the existing fix loop.
+- When all task results arrive, run `fno agent internal target wave join "$PLAN_PATH" --wave <n> --base <base-sha>` with one `--task <id>` per returned `O` row. A refusal pauses the wave and names the task/error. `OFF<TAB><task-id><TAB><file>` rows are written under `## Off-surface writes` in SUMMARY.md. Join reruns each selected task's `verify` once in the target worktree. A failure names the task and enters the existing fix loop.
 - Joiner workers (`--band`), Gemini fallback, and sequential waves keep their current flow. They do not fork task worktrees.
 - With `--node` bound: update STATE.md as each task completes, then rerun the `--ready` query; do not wait for the round - the peers' live task rows hold their in-flight claims back
 - Node-less: wait for the whole round to complete, update STATE.md, then re-query - with no node rows an in-flight sibling still reads `ready`, and re-dispatching it double-spawns the work
@@ -268,7 +268,7 @@ Use Task tool to spawn fresh executors for each task. The executor loads `fno:te
 #   1. Explicit `executor:` on the task block (highest)
 #   2. Explicit `executor:` on the plan frontmatter
 #   3. Surface inference from the task's file list
-#      (fno-agent executor-route surface)
+#      (fno agent internal target executor-route surface)
 #   4. 'do' (default)
 TASK_EXECUTOR=$(TASK_EXEC="$task_executor_field" \
                 PLAN_EXEC="$plan_executor_field" \
@@ -294,7 +294,7 @@ Before dispatching `frontend-executor` for any task whose resolved executor is
 
 ```bash
 # --stages is the task's impeccable stages, comma-separated.
-if ! fno-agent wave product-gate --repo "$REPO_ROOT" --plan "$PLAN_PATH" --stages craft,critique,harden; then
+if ! fno agent internal target wave product-gate --repo "$REPO_ROOT" --plan "$PLAN_PATH" --stages craft,critique,harden; then
     # The <help> is already on stdout. Do NOT dispatch frontend-executor.
     exit 0
 fi
@@ -421,11 +421,11 @@ For each task in wave.tasks:
 ```
 1. Announce: "## Executing Wave {n} (parallel: {count} tasks)"
 2. For a lone target with 2+ ready tasks, check `fno config assert-subagent-budget --width {count}`; on refusal, record the reason and use the sequential flow.
-3. Run `fno-agent wave fork "$PLAN_PATH" --wave {n}` with one `--task {id}` per ready task; capture `B` and every `O` row. On refusal, record the reason and use the sequential flow.
+3. Run `fno agent internal target wave fork "$PLAN_PATH" --wave {n}` with one `--task {id}` per ready task; capture `B` and every `O` row. On refusal, record the reason and use the sequential flow.
 4. Best-effort initialize every returned worktree with `CANONICAL=<repo-root> WORKTREE=<path> bash scripts/setup/setup-worktree.sh`.
 5. Dispatch one executor per `O` row concurrently. Pass the task id and absolute worktree path; require all edits and commits in that worktree.
 6. Wait for all results. A missing or failed result pauses the wave.
-7. Run `fno-agent wave join "$PLAN_PATH" --wave {n} --base {base-sha}` with one `--task {id}` per returned `O` row. A merge error pauses and names the task and conflict. Join reruns each selected task's verify once; a failure names the task and enters the fix loop.
+7. Run `fno agent internal target wave join "$PLAN_PATH" --wave {n} --base {base-sha}` with one `--task {id}` per returned `O` row. A merge error pauses and names the task and conflict. Join reruns each selected task's verify once; a failure names the task and enters the fix loop.
 8. Record every `OFF` row in SUMMARY.md under `## Off-surface writes`, then update STATE.md with all task results.
 ```
 
@@ -460,10 +460,10 @@ already fired from `resolve-executor.sh` at dispatch; `run_summary` fires from
 
 ```bash
 # task_done with the parsed outcome (SUCCESS | DONE_WITH_CONCERNS | FAILED):
-fno-agent wave emit-boundary task_done \
+fno agent internal target wave emit-boundary task_done \
   --task "{N.M}" --outcome "{status}" --data '{"commit":"{sha}","concerns":{k}}'
 # blocked on a RESULT: BLOCKED return (or a <help> distress emission):
-fno-agent wave emit-boundary blocked \
+fno agent internal target wave emit-boundary blocked \
   --task "{N.M}" --data '{"reason":"{why}"}'
 ```
 

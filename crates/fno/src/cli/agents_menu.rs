@@ -304,18 +304,210 @@ const WORKSPACE: &[Node] = &[
 
 #[rustfmt::skip]
 const INTERNAL: &[Node] = &[
-    command("registry-json", &["registry-json"], "Registry rows as JSON, daemon-free."),
-    command("discovered-json", &["discovered-json"], "The discovered-live-sessions lane as JSON."),
-    command("codex-session-for-pid", &["codex-session-for-pid"], "A codex pane's session id from its rollout."),
-    command("heal-token", &["heal-token"], "Adopt the session a token names, as JSON."),
-    command("registry-repair", &["registry-repair"], "Roll a poisoned registry's schema_version back."),
-    command("select-read", &["select-read"], "One bounded backlog read under the select timeout."),
-    command("worked-nodes", &["worked-nodes"], "The worked-overlay join over a stdin rows payload."),
-    command("target-family", &["target-family"], "The merge-posture family test for a message."),
-    command("session-start-bytes", &["session-start-bytes"], "The session-start preamble byte total."),
-    command("permission-tokens", &["permission-tokens"], "The permission-posture owner over a stdin payload."),
-    command("sandbox-probe", &["sandbox-probe"], "The codex sandbox verdict over a stdin payload."),
-    command("authorized-merge", &["authorized-merge"], "The one authorized merge operation over stdin JSON."),
+    group("registry", "Registry rows and the session records the daemon and mux write.", INTERNAL_REGISTRY),
+    group("session", "Session discovery, birth, resume and wake plumbing.", INTERNAL_SESSION),
+    group("mail", "The mail transport doors hooks and the mux call.", INTERNAL_MAIL),
+    group("pr", "PR gates, the GitHub transport and the merge operation.", INTERNAL_PR),
+    group("target", "Target, plan, wave and task-context doors.", INTERNAL_TARGET),
+    group("backlog", "Backlog reads and writes outside the backlog CLI.", INTERNAL_BACKLOG),
+    group("harness", "Harness capability reads, the hook fire and plugin installs.", INTERNAL_HARNESS),
+    group("evals", "Evals, intel, scoreboards and release records.", INTERNAL_EVALS),
+    group("names", "Name, term and lead-shape parsers.", INTERNAL_NAMES),
+    group("worktree", "Worktree and launch-directory doors.", INTERNAL_WORKTREE),
+    group("fleet", "Fleet sweeps, reaps, scratch space and remote hand-offs.", INTERNAL_FLEET),
+];
+
+#[rustfmt::skip]
+const INTERNAL_REGISTRY: &[Node] = &[
+    moved("json", &["registry-json"], &[&["internal", "registry-json"]], "Registry rows as JSON, daemon-free."),
+    moved("repair", &["registry-repair"], &[&["internal", "registry-repair"]], "Roll a poisoned registry's schema_version back."),
+    moved("heal-token", &["heal-token"], &[&["internal", "heal-token"]], "Adopt the session a token names, as JSON."),
+    command("commit", &["registry-commit"], "Commit one registry row write."),
+    command("pending-row", &["pending-session-row"], "The pending session row a spawn writes before birth."),
+    command("pane-rebind", &["pane-rebind"], "The workspace restore's registry rebind."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_SESSION: &[Node] = &[
+    moved("discovered-json", &["discovered-json"], &[&["internal", "discovered-json"]], "The discovered-live-sessions lane as JSON."),
+    moved("codex-for-pid", &["codex-session-for-pid"], &[&["internal", "codex-session-for-pid"]], "A codex pane's session id from its rollout."),
+    moved("start-bytes", &["session-start-bytes"], &[&["internal", "session-start-bytes"]], "The session-start preamble byte total."),
+    command("backfill", &["session-backfill"], "Fill a session row's missing fields."),
+    command("claude-birth-exec", &["claude-birth-exec"], "Exec a claude birth under the supervisor."),
+    command("codex-assign-project", &["codex-assign-project"], "Bind a codex session to its project."),
+    command("manifest", &["manifest-for-session"], "The target manifest a session owns."),
+    command("resume-argv", &["resume-argv"], "The harness resume argv for one session."),
+    command("resume-receipt", &["resume-receipt"], "The resume receipt's argv door."),
+    command("reentry-plan", &["reentry-plan"], "The re-entry plan for a restored session."),
+    command("worker-wake", &["worker-wake"], "Wake one parked worker."),
+    command("wake-context", &["wake-context"], "The context a bare resume word wakes with."),
+    command("context-run", &["context-run"], "The context-meter probe and session cost read."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_MAIL: &[Node] = &[
+    command("envelope", &["mail-envelope"], "Wrap a payload in the mail envelope."),
+    command("notify-self", &["mail-notify-self"], "The inject-mail-notify hook's self notice."),
+    command("inject", &["mail-inject"], "Inject one message into a live pane."),
+    command("receipt", &["mail-receipt"], "A delivery receipt read."),
+    command("record", &["mail-record"], "Record one mail row."),
+    command("backfill", &["mail-backfill"], "Backfill mail rows into the record plane."),
+    command("hold", &["mail-hold"], "The mux keystroke arm's mail hold."),
+    command("threads", &["mail-threads"], "The Messages tab's thread read model."),
+    command("machine-send", &["machine-mail-send"], "Send machine mail as the daemon."),
+    command("notify-watch", &["notify-watch"], "The operator-notice sampler."),
+    command("chats", &["chats"], "The conversation record plane."),
+    command("remote", &["mail-remote"], "Mail to a session on another host."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_PR: &[Node] = &[
+    moved("authorized-merge", &["authorized-merge"], &[&["internal", "authorized-merge"]], "The one authorized merge operation over stdin JSON."),
+    command("gh", &["gh"], "The gh proxy the gh shim execs."),
+    command("gh-adapter", &["gh-adapter"], "The fixed-purpose gh read: coverage or discretionary."),
+    command("gh-cache", &["gh-cache"], "Permanent GitHub-fact rows."),
+    command("canonical-check", &["canonical-check"], "The canonical-sync divergence read."),
+    command("body-check", &["pr-body-check"], "Run the repo's PR-body guards on a body file."),
+    command("cite-check", &["pr-cite-check"], "Refuse an internal D number a customers-scope body cites."),
+    command("closure-parse", &["pr-closure-parse"], "Parse a PR body's closure line."),
+    command("closure-render", &["pr-closure-render"], "Render a node's closure line."),
+    command("park", &["pr-park"], "Park a PR watch."),
+    command("watch", &["pr-watch"], "The PR-state watcher family."),
+    command("worktree", &["pr-worktree"], "The local checkout for a PR head branch."),
+    command("base-check", &["pr-base-check"], "The stale-base age guard."),
+    command("base-lineage-check", &["pr-base-lineage-check"], "Refuse a base that no longer leads to the default branch."),
+    command("merge-result-check", &["pr-merge-result-check"], "Compile a PR's merge result against its base."),
+    command("verify", &["pr-verify"], "Verify an external PR gate: merged or reviews."),
+    command("create", &["pr-create"], "The duplicate-guarded PR create."),
+    command("heal", &["pr-heal"], "Classify a red check and apply its fix."),
+    command("push", &["pr-push"], "The one guarded push."),
+    command("rebase", &["pr-rebase"], "The conflict-delegation rebase."),
+    command("publish-review", &["publish-review"], "Post a review verdict as the reviewer identity."),
+    command("sync-canonical", &["sync-canonical"], "The post-merge canonical-checkout sync."),
+    command("review-summary", &["review-summary"], "The one display line for a reviewed head."),
+    command("review-start", &["review-start"], "Open a review round."),
+    command("review-level", &["review-level"], "Resolve a review level and its findings."),
+    command("review-policy", &["review-policy"], "The review assurance verdict."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_TARGET: &[Node] = &[
+    moved("family", &["target-family"], &[&["internal", "target-family"]], "The merge-posture family test for a message."),
+    moved("permission-tokens", &["permission-tokens"], &[&["internal", "permission-tokens"]], "The permission-posture owner over a stdin payload."),
+    moved("sandbox-probe", &["sandbox-probe"], &[&["internal", "sandbox-probe"]], "The codex sandbox verdict over a stdin payload."),
+    command("gates", &["target-gates"], "The target gate commands."),
+    command("status", &["target-status"], "The target orientation report."),
+    command("init", &["target-init"], "Write a target manifest and claim its node."),
+    command("start", &["target-start"], "Cold-start a target worktree."),
+    command("blast-check", &["target-blast-check"], "The blast-radius classifier for target init."),
+    command("state", &["state"], "Session state reads and writes."),
+    command("state-cli", &["state-cli"], "The state family's CLI."),
+    command("stub-manifest", &["stub-manifest"], "The stub-manifest surface."),
+    command("plan-cli", &["plan-cli"], "The plan document CLI."),
+    command("executor-route", &["executor-route"], "Resolve a task's executor."),
+    command("surface-check", &["surface-check"], "The plan surface check validate-plan.sh reads."),
+    command("style-check", &["style-check"], "The house style check."),
+    command("wave", &["wave"], "The wave dispatcher."),
+    command("evidence-gate", &["evidence-gate"], "The evidence gate."),
+    command("test-delta", &["test-delta"], "Net test declarations against a base."),
+    command("think-inspect", &["think-inspect"], "The read-only design-discovery receipt."),
+    command("think-dispatch", &["think-dispatch"], "Hand a node to a background think."),
+    command("research", &["research"], "The scout backbone."),
+    command("visual", &["visual"], "The visual door."),
+    command("delivery-evaluate", &["delivery-evaluate"], "The native delivery evaluator."),
+    command("task-context-gate", &["task-context-gate"], "The task-context execution gate."),
+    command("task-context-payload", &["task-context-payload"], "The task-context payload."),
+    command("task-context-prepare", &["task-context-prepare"], "Prepare a task context."),
+    command("task-context-revalidate", &["task-context-revalidate"], "Revalidate a task context."),
+    command("task-context-show", &["task-context-show"], "Show a task context."),
+    command("task-context-stage", &["task-context-stage"], "Stage a task context."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_BACKLOG: &[Node] = &[
+    moved("select-read", &["select-read"], &[&["internal", "select-read"]], "One bounded backlog read under the select timeout."),
+    moved("worked-nodes", &["worked-nodes"], &[&["internal", "worked-nodes"]], "The worked-overlay join over a stdin rows payload."),
+    command("orphan-plans", &["backlog-orphan-plans"], "The SessionStart reconcile sweep."),
+    command("active-receipt", &["active-backlog-receipt"], "The active backlog receipt."),
+    command("node-bind", &["node-bind"], "The first-turn node bind."),
+    command("node-origin", &["node-origin"], "A node's origin read."),
+    command("node-route", &["node-route"], "The cascade verdict per name."),
+    command("question-intake", &["question-intake"], "Take in a filed question."),
+    command("question-clear", &["question-clear"], "Clear an answered question."),
+    command("territory-rows", &["territory-rows"], "The territory fact set's reads."),
+    command("territory-verdict", &["territory-verdict"], "The territory verdict."),
+    command("board", &["board"], "The lead board collector."),
+    command("day", &["day"], "The day read."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_HARNESS: &[Node] = &[
+    command("probe", &["harness-probe"], "Harness capability probe."),
+    command("matrix", &["harness-matrix"], "The harness capability matrix."),
+    command("beat", &["harness-beat"], "The harness beat read."),
+    command("roster", &["harness-roster"], "The one-roster JSON read."),
+    command("terminals", &["terminals"], "The delivered-terminal vocabulary."),
+    command("user-hours", &["user-hours"], "The [user.working_hours] read."),
+    command("state-root", &["state-root"], "The state-root seal handshake."),
+    command("hook", &["hook"], "Fire one hook."),
+    command("commands", &["commands"], "The harness command list."),
+    command("plugin-install", &["plugin-install"], "Install the plugin for one harness."),
+    command("detect", &["detect"], "Detect a pane's prompt state."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_EVALS: &[Node] = &[
+    command("evals", &["evals"], "The evals family."),
+    command("arm", &["evals-arm"], "The evals arm."),
+    command("attempt", &["evals-attempt"], "The attempt-eligibility verdict."),
+    command("trend", &["evals-trend"], "The evals trend fold."),
+    command("intel", &["intel"], "The session-provenance fold."),
+    command("scoreboard", &["scoreboard"], "The telemetry scoreboard."),
+    command("manifest-eval", &["manifest-eval"], "Evaluate a manifest."),
+    command("component-verdict", &["component-verdict"], "One component's install verdict."),
+    command("release-notes", &["release-notes"], "The update modal's release notes."),
+    command("update-journal", &["update-journal"], "The update lifecycle's journal."),
+    command("source-pin", &["source-pin"], "The source pin read."),
+    command("stalls", &["stalls"], "The stall-cause table."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_NAMES: &[Node] = &[
+    command("codes", &["name-codes"], "The name code table."),
+    command("mint", &["name-mint"], "Mint a name."),
+    command("parse", &["name-parse"], "Parse a name."),
+    command("term-shape", &["term-shape"], "A term's shape."),
+    command("term-state", &["term-state"], "A term's state."),
+    command("lead-shape", &["lead-shape"], "A lead's shape."),
+    command("lead-state", &["lead-state"], "A lead's state."),
+    command("lead-escalation-text", &["lead-escalation-text"], "A lead escalation's text."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_WORKTREE: &[Node] = &[
+    command("policy", &["worktree-policy"], "The worktree policy read."),
+    command("ensure", &["worktree-ensure"], "Ensure a worktree."),
+    command("status", &["worktree-status"], "One worktree's status."),
+    command("list", &["worktree-list"], "List worktrees."),
+    command("stranded", &["worktree-stranded"], "Stranded worktrees."),
+    command("resolve-node", &["worktree-resolve-node"], "The node a worktree serves."),
+    command("overlap-record", &["worktree-overlap-record"], "Record a worktree overlap."),
+    command("overlaps", &["worktree-overlaps"], "The worktree overlap report."),
+    command("register-worker", &["workspace-register-worker"], "Register a worker in the workers registry."),
+    command("dispatch-pin", &["worktree-dispatch-pin"], "The dispatch pin."),
+    command("reapable", &["worktree-reapable"], "Is removing this worktree safe."),
+    command("launch-workdir", &["launch-workdir"], "Ensure a launched worker's directory."),
+];
+
+#[rustfmt::skip]
+const INTERNAL_FLEET: &[Node] = &[
+    command("fleet-task", &["fleet-task"], "One fleet task."),
+    command("orphan-reap", &["orphan-reap"], "Reap orphaned processes."),
+    command("roster-reap", &["roster-reap"], "Reap claude rows no fno row names."),
+    command("reclaim", &["reclaim"], "The machine janitor."),
+    command("scratch", &["scratch"], "Scratch space."),
+    command("org-remote", &["org-remote"], "Promote a role on another host."),
+    command("spawn-remote", &["spawn-remote"], "Spawn on another host."),
 ];
 
 #[rustfmt::skip]

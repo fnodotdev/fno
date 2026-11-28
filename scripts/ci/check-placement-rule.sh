@@ -461,7 +461,7 @@ crates/fno-agent/src/gate/test_run.rs
 crates/fno-agent/src/runtime/worktree/ensure.rs
 crates/fno-agent/src/runtime/worktree/status.rs
 crates/fno-agent/src/runtime/worktree_reapable.rs
-crates/fno-agent/src/bin/client.rs
+crates/fno-agent/src/client_cli/mod.rs
 crates/fno/src/cli/worktree_door.rs
 crates/fno-agent/tests/claude_ask_dispatch.rs
 crates/fno-agent/src/runtime/mail_cli/reply.rs

@@ -123,7 +123,7 @@ For walk-away / overnight execution, drive this skill from a terminal via the ex
 bash scripts/run-target-loop.sh path/to/plan/
 ```
 
-The wrapper re-invokes the CLI until the session terminates (DonePRGreen, Budget, NoProgress, or Interrupted). The in-Claude-Code interactive experience remains the recommended default for walk-up feature work. Note: the legacy `fno loop` command is removed (step-5 group 3); `fno-agent loop-check` is the stop authority and `fno-agent loop run` is the loop runtime.
+The wrapper re-invokes the CLI until the session terminates (DonePRGreen, Budget, NoProgress, or Interrupted). The in-Claude-Code interactive experience remains the recommended default for walk-up feature work. Note: the legacy `fno loop` command is removed (step-5 group 3); `fno agent loop check` is the stop authority and `fno agent loop run` is the loop runtime.
 
 ## Completion: what you do
 
@@ -137,7 +137,7 @@ sed -n 's/^auto_merge_approved:[[:space:]]*//p' .fno/target-state.md
 
 Read that RESOLVED field, never `fno config get auto_merge` directly. Init folds the config together with this run's modifiers. A per-run `--no-merge` flag (which `/target bg` injects **by default**) sets it false even with `auto_merge.enabled` set to true. The raw config then tells you to merge against an explicit per-run prohibition. Every refusal outranks every grant: `--no-merge` revokes merge authority even over an inherited `TARGET_AUTO_MERGE=1`. An `auto-merge` word grants nothing on its own (it needs `auto_merge.enabled` or `TARGET_AUTO_MERGE=1`). Free text carries NO posture in either direction. Honoring anything found in prose lets arbitrary writing manufacture merge authority or a merge prohibition. `fno do pr merge` reads the same field and refuses too, but that is a backstop. Decide from the manifest rather than firing the command and hoping it catches you.
 
-When it is `true` and `auto_merge.require_checks_pass` is satisfied, **MERGE FIRST, THEN promise**: `fno do pr merge <n>`, then `fno backlog reconcile` to close the node (a merge from inside a worktree skips the local post-merge step). Order matters - a promise emitted first terminates the loop as `DonePRGreen` the moment CI goes green, so the session is never re-invoked and never merges. `fno-agent finalize` now arms GitHub's native auto-merge on that same `DonePRGreen` terminal, so the PR is no longer stranded when you promise first; it is queued behind GitHub's own branch protections rather than merged against the gate you just satisfied. Merging first is still the instruction, because it is the path that closes the node in this session (reconcile) instead of leaving it to a later merge detector. Config set once IS the standing authorization; re-asking each time re-imposes the step it was configured to delete.
+When it is `true` and `auto_merge.require_checks_pass` is satisfied, **MERGE FIRST, THEN promise**: `fno do pr merge <n>`, then `fno backlog reconcile` to close the node (a merge from inside a worktree skips the local post-merge step). Order matters - a promise emitted first terminates the loop as `DonePRGreen` the moment CI goes green, so the session is never re-invoked and never merges. `fno agent loop finalize` now arms GitHub's native auto-merge on that same `DonePRGreen` terminal, so the PR is no longer stranded when you promise first; it is queued behind GitHub's own branch protections rather than merged against the gate you just satisfied. Merging first is still the instruction, because it is the path that closes the node in this session (reconcile) instead of leaving it to a later merge detector. Config set once IS the standing authorization; re-asking each time re-imposes the step it was configured to delete.
 
 When it is `false` (the default), stop at a **green, reviewed, mergeable PR** and hand the merge to a human (any out-of-band merge also satisfies `done()`). Never write "handing the merge to a human" without having read that field in the same turn. The gate reads `config.review.required_bots`; the loop-check code default is empty `[]` (no review gate, so a fresh install never hangs on an unconfigured bot), and a maintainer sets it explicitly (e.g. `["chatgpt-codex-connector"]`) to require an external pass. Internal review is advisory.
 
@@ -170,7 +170,7 @@ Run tests with `fno doctor test [paths...]` (pins worktree `PYTHONPATH`, bypasse
 
 **Preflight is opt-in, CI is the gate.** A stock config never runs `scripts/ci/preflight.sh` before a push. Every ship path asks `fno do pr evidence-required`, which reads `config.preflight.required` (default false) plus the `FNO_SKIP_PREFLIGHT=1` escape. The Python lanes and the bash ship path cannot disagree. Direct `fno do pr push` also skips the runner by default. Pass `--preflight` to opt in. `--no-preflight` remains an accepted no-op for compatibility. The pre-push obligation is the focused checks. They are `cargo fmt --check` for rust changes. Where the repo ships `scripts/ci/check-file-budget.sh`, run `bash scripts/ci/check-file-budget.sh` after each commit that grows code. It is the CI gate itself. It prints net lines against the allowance. You learn the number while a cut is cheap, not from a red check after the push. It counts commits only, and it names any uncommitted change it did not count. For markdown changes run `fno doctor lint style --surface markdown --files <changed .md> --diff-base origin/main`. Commit first, and not for hygiene. The line numbers come from `git diff <base>...HEAD`, so they describe the COMMITTED file. The content is read from the working tree. On a dirty tree those are two different files. The gate then reads a violation against a line nobody touched, while the added line goes unread. The `inspected N added line(s)` count it prints is how you tell a clean scan from an empty one. The run reads every added line, even in a file that carries a `style-exception` marker. This very file carries one, and the gate still checks any line you add to it. No local build or test joins the set (decision D3323). CI builds and tests the PR head. A worker builds locally only to reproduce a bug or take mux shots. A project that wants the full 22-to-47-minute local rehearsal back sets `preflight.required = true`. Full contract: [references/ship-phase.md](references/ship-phase.md) and the repo-root `docs/preflight.md`.
 
-Completion is decided by `fno-agent loop-check` from external truth (PR + CI + review), not from any file you write - you cannot self-authorize. The full machinery (immutable manifest, stop-hook shim, `done()` read list, fingerprint backstop, `TerminationReason`, degraded modes) is one Read hop away in **[references/completion-model.md](references/completion-model.md)**.
+Completion is decided by `fno agent loop check` from external truth (PR + CI + review), not from any file you write - you cannot self-authorize. The full machinery (immutable manifest, stop-hook shim, `done()` read list, fingerprint backstop, `TerminationReason`, degraded modes) is one Read hop away in **[references/completion-model.md](references/completion-model.md)**.
 
 ## The full pipeline + phase philosophy
 
@@ -331,7 +331,7 @@ The phase-routing table, invocation logic, scratchpad writes (after think and af
 
 #### Postcondition Checking
 
-Per-phase postcondition verifiers were removed in the control-plane collapse. Postcondition checking collapsed into the external-truth `done()` reads performed by `fno-agent loop-check` when a `<promise>` is seen: PR exists for HEAD + CI green + reviewed. Run the review and validate phases thoroughly; the loop-check command verifies the outcome against the world, not against state booleans.
+Per-phase postcondition verifiers were removed in the control-plane collapse. Postcondition checking collapsed into the external-truth `done()` reads performed by `fno agent loop check` when a `<promise>` is seen: PR exists for HEAD + CI green + reviewed. Run the review and validate phases thoroughly; the loop-check command verifies the outcome against the world, not against state booleans.
 
 #### Atomic Commit Discipline (NON-NEGOTIABLE for M/L)
 
@@ -395,7 +395,7 @@ The cross-project completion-gate variant (all projects must have status COMPLET
 | `.fno/STATE.md` | Wave/task progress | /execute waves |
 | `.fno/SUMMARY.md` | Task completion notes | archer |
 | `.fno/ledger.json` | Feature metrics | target |
-| `.fno/events.jsonl` | Loop-check events (loop_check, termination, etc.) | fno-agent loop-check |
+| `.fno/events.jsonl` | Loop-check events (loop_check, termination, etc.) | fno agent loop check |
 
 ## Model Fallback (Interactive)
 

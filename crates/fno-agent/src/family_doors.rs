@@ -1,4 +1,4 @@
-//! The ported target-family doors behind `bin/client.rs`'s one dispatch
+//! The ported target-family doors behind `client_cli/mod.rs`'s one dispatch
 //! line: the commands `cli/src/fno/target_cli.py`, `state/cli.py`, and
 //! `stub_manifest.py` served before the port. Hidden daemon-free leaves in
 //! the graph-get mold: dispatched by `==` on the first token and never

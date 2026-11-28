@@ -27,7 +27,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:think` | A question that one measurement cannot settle, or a refuted premise that needs research. | One cited findings document. |
 | `fno:talk` | A user brings a rough idea and no plan yet. User-invoked: name it, never run it for them. | One living brief bound to the idea node, ending on a Next test line. |
 | `fno:verify-footnotes` | Before the first edit (premises), before a figure reaches a reader (claims), and before a done claim. | A `## Premises` section in the plan, and a verdict with file and line for each claim. `fno do pr create` refuses a post-2026-11-16 plan with no `## Premises`. |
-| `fno:design-critic` | A diff touches `merge.visual_paint_paths`, after the shots and `fno-agent visual critique-prep`, before the look. | Findings in `<node>-critique.json`. |
+| `fno:design-critic` | A diff touches `merge.visual_paint_paths`, after the shots and `fno agent internal target visual critique-prep`, before the look. | Findings in `<node>-critique.json`. |
 | `fno:blueprint` | There is no plan, or a ruling changed the plan (amend). | A plan path and a node. |
 | `fno:execute` | The plan declares waves. | Executed tasks and `SUMMARY.md`. |
 | `fno:review` | Before the PR, on the final head. | Findings and the head-pinned attestation. |

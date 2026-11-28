@@ -13,7 +13,7 @@
 //! exactly as it did before this module existed.
 //!
 //! It is an argument on the existing `probe-run` action, not a new action
-//! (law d-fe66560a; `bin/client.rs` sits at the file budget).
+//! (law d-fe66560a; `client_cli/mod.rs` sits at the file budget).
 
 use serde_json::Value;
 use std::collections::BTreeSet;

@@ -117,7 +117,6 @@ fno-agent do ci
 fno-agent do diff
 fno-agent do pr
 fno-agent do show
-fno-agent drive
 fno-agent drive-authority
 fno-agent evals
 fno-agent evals-arm
@@ -134,15 +133,17 @@ fno-agent fleet-task
 fno-agent gh
 fno-agent gh-adapter
 fno-agent gh-cache
-fno-agent grid
+fno-agent harness-beat
+fno-agent harness-matrix
+fno-agent harness-probe
 fno-agent harness-roster
 fno-agent help
 fno-agent honesty-sweep
 fno-agent hook
-fno-agent host
 fno-agent intel
 fno-agent judge
 fno-agent kill-check
+fno-agent launch-workdir
 fno-agent lead-checkin
 fno-agent lead-escalation-text
 fno-agent lead-history
@@ -203,7 +204,6 @@ fno-agent pr-verify
 fno-agent pr-watch
 fno-agent pr-worktree
 fno-agent probe-run
-fno-agent promote
 fno-agent prove-it-verdicts
 fno-agent provider-cap
 fno-agent publish-review
@@ -292,6 +292,17 @@ fno-agent wake-context
 fno-agent wave
 fno-agent worked-nodes
 fno-agent worker-wake
+fno-agent workspace-register-worker
+fno-agent worktree-dispatch-pin
+fno-agent worktree-ensure
+fno-agent worktree-list
+fno-agent worktree-overlap-record
+fno-agent worktree-overlaps
+fno-agent worktree-policy
+fno-agent worktree-reapable
+fno-agent worktree-resolve-node
+fno-agent worktree-status
+fno-agent worktree-stranded
 help
 mux
 paths

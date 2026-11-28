@@ -1,6 +1,5 @@
 //! `fno::node_row` and `fno_agent::backlog` each name the node status
-//! words and the board columns (this crate links `fno` as a dev-dependency
-//! only). The mux reader classifies rows the keeper wrote, so a word or a
+//! words and the board columns (fno-agent never links fno). The mux reader classifies rows the keeper wrote, so a word or a
 //! column that one side adds alone is a row the two boards read apart.
 
 use fno::node_row::{KanbanColumn, NodeRow, Status as MuxStatus};
@@ -45,7 +44,11 @@ fn every_golden_store_row_round_trips_through_the_mux_row() {
         #[serde(default)]
         entries: Vec<Value>,
     }
-    let goldens = std::fs::read_dir("tests/golden/graph_store").expect("the golden dir");
+    let goldens = std::fs::read_dir(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fno-agent/tests/golden/graph_store"
+    ))
+    .expect("the golden dir");
     let mut rows = 0;
     for path in goldens.map(|e| e.expect("a dir entry").path()) {
         let doc: Golden = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

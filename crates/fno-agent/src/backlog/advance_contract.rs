@@ -215,7 +215,7 @@ pub fn queue_pending(id: &str, root: &Path) -> Result<Option<Value>, String> {
     if !advance::claim_is_live(&format!("reconcile:{id}")) {
         return Ok(None);
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = crate::client_exe::current().map_err(|e| e.to_string())?;
     let mut child = std::process::Command::new(exe)
         .args(["backlog", "advance", "--stdin"])
         .stdin(std::process::Stdio::piped())

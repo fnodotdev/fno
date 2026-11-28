@@ -84,7 +84,10 @@ web = ["app", "dep:axum"]
 transfer = ["app", "dep:magic-wormhole", "dep:futures-util"]
 # The file viewer's PDF pages.
 pdf = ["app", "dep:hayro"]
-full = ["app", "web", "transfer", "pdf"]
+# The agent runtime's client dispatch: every `fno agent` command the front
+# door used to exec as the fno-agent binary now runs in process.
+client = ["app", "dep:fno-agent"]
+full = ["app", "web", "transfer", "pdf", "client"]
 
 [dependencies]
 # The one class-home resolver (cache/data/state precedence + platform
@@ -96,6 +99,9 @@ fno-homes = { path = "../fno-homes", version = "0.1" }
 # range, as in fno-agent: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }
 fno-proto = { path = "../fno-proto", version = "0.2.4", features = ["async", "vt", "feed"], optional = true }
+# The agent runtime. The edge points one way: fno links fno-agent, and
+# fno-agent never links fno. Release publishes fno-agent first.
+fno-agent = { path = "../fno-agent", version = "0.0.18", optional = true }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
@@ -196,3 +202,7 @@ tokio = { optional = true, version = "1", features = [
     # bounded, fail-open shell-out to `fno-agent digest` on attach.
     "process",
 ] }
+
+[dev-dependencies]
+# The node vocabulary twin decodes the graph-store goldens fno-agent keeps.
+base64 = "0.22"

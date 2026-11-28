@@ -285,7 +285,7 @@ G1	crates/fno-agent/src/backlog/backlog_ready.rs	rs	17
 G1	crates/fno-agent/src/backlog/backlog_share.rs	rs	19
 G2	crates/fno-agent/src/gate/bank_pr.rs	rs	1
 G2	crates/fno-agent/src/eval/bash_census.rs	rs	4
-G2	crates/fno-agent/src/bin/client.rs	rs	1
+G2	crates/fno-agent/src/client_cli/mod.rs	rs	1
 G3	crates/fno-agent/src/bin/daemon.rs	rs	2
 G2	crates/fno-agent/src/bin/pr-affected.rs	rs	6
 G2	crates/fno-agent/src/birth_guard_tests.rs	rs	4

@@ -4,8 +4,8 @@
 //! carry it, since 3 of 5 live teams had no manifest and Python rewrites
 //! the rest with `force=True`).
 //!
-//! Wire contract. `crates/fno/src/team_names.rs` reads this FILE (the mux
-//! never links fno-agent), so the shape below is frozen:
+//! Wire contract. `crates/fno/src/team_names.rs` reads this FILE (the app
+//! build of the mux does not link fno-agent), so the shape below is frozen:
 //!
 //! ```json
 //! {"version": 1, "teams": {"<canonical scope>": {

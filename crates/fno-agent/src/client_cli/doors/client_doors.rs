@@ -1,4 +1,4 @@
-//! The binary-direct doors of `bin/client.rs`'s `run`, split out by the
+//! The binary-direct doors of `client_cli/mod.rs`'s `run`, split out by the
 //! question each group answers: which daemon-free command answers this argv.
 //! A door returns `Some(exit)` when it owns the command and `None` to let the
 //! next group look. The groups run in the order `run` once held them inline,
@@ -880,15 +880,6 @@ fn fleet_read_doors(command: &str, args: &[String]) -> Option<i32> {
 /// Which registry-direct door answers this command, before build_request.
 async fn registry_doors(command: &str, args: &[String]) -> Option<i32> {
     let rest = args.get(1..).unwrap_or(&[]);
-    // Retired at G4: the grid, the WebSocket drive surface, and the
-    // interactive daemon PTY hosting behind `host`/`promote` were deleted when
-    // the mux became the agent-PTY substrate. Each prints a one-line pointer to
-    // the mux and exits non-zero, never a silent no-op (AC5-EDGE).
-    if let Some(pointer) = super::retired_command_pointer(command) {
-        eprintln!("{pointer}");
-        return Some(2);
-    }
-
     // Python-only commands ported to the Rust client: these read state/registry/
     // event files directly (or print a stub) without a daemon RPC, so they
     // dispatch here before build_request. Byte-for-byte parity with the Python

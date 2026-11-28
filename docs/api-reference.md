@@ -65,7 +65,7 @@ Input ("feature" or path/to/plan)
 | Aspect | `flat` (default) | `waves` |
 |--------|------------------|--------------------|
 | Weight | Lightweight, in-session | Heavy, multi-agent |
-| Orchestration | Reads 00-INDEX.md, runs waves inline | Spawns subagent per task via `fno-agent wave ready` |
+| Orchestration | Reads 00-INDEX.md, runs waves inline | Spawns subagent per task via `fno agent internal target wave ready` |
 | Resume | `--resume`, `--retry <id>` | STATE.md based |
 | Best for | Small-to-medium plans | Large plans with parallel waves |
 
@@ -381,7 +381,7 @@ For the full field list see [architecture/control-plane-loop.md](architecture/co
 
 #### Completion (external truth, not gates)
 
-There are no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees: a PR exists, CI is green, every required bot has reviewed, plus a budget ceiling. That decision is made by the read-only `fno-agent loop-check` command (see [architecture/control-plane-loop.md](architecture/control-plane-loop.md)); terminal side effects (ledger record, plan stamp/graduate, handoff) are written by `fno-agent finalize`. The `<promise>` tag signals the agent's belief that work is complete; the loop only terminates when `loop-check` confirms it against the world.
+There are no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees: a PR exists, CI is green, every required bot has reviewed, plus a budget ceiling. That decision is made by the read-only `fno agent loop check` command (see [architecture/control-plane-loop.md](architecture/control-plane-loop.md)); terminal side effects (ledger record, plan stamp/graduate, handoff) are written by `fno agent loop finalize`. The `<promise>` tag signals the agent's belief that work is complete; the loop only terminates when `loop-check` confirms it against the world.
 
 ### STATE.md
 
@@ -472,20 +472,20 @@ Read or write any key with `fno config get|set|unset <key>` (atomic, schema-chec
 
 ## Wave CLI
 
-`fno-agent wave` serves the wave commands `/execute waves` calls. The code is in `crates/fno-agent/src/backlog/wave_ready.rs`.
+`fno agent internal target wave` serves the wave commands `/execute waves` calls. The code is in `crates/fno-agent/src/backlog/wave_ready.rs`.
 
 ```bash
 # Print the dispatchable tasks as JSON
-fno-agent wave ready path/to/plan.md [--state STATE.md] [--node <id>] [--band <band>]
+fno agent internal target wave ready path/to/plan.md [--state STATE.md] [--node <id>] [--band <band>]
 
 # Emit a task boundary event and settle the task claim
-fno-agent wave emit-boundary task_done --task 2.1 --outcome SUCCESS
+fno agent internal target wave emit-boundary task_done --task 2.1 --outcome SUCCESS
 
 # Check PRODUCT.md before an impeccable dispatch
-fno-agent wave product-gate --repo . --plan path/to/plan.md --stages craft,polish
+fno agent internal target wave product-gate --repo . --plan path/to/plan.md --stages craft,polish
 
 # Print the project constraints section for a dispatch prompt
-fno-agent wave constraints
+fno agent internal target wave constraints
 ```
 
 Executor choice is in [executor-resolution](../skills/execute/references/executor-resolution.md).

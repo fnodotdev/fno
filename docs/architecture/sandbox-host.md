@@ -17,11 +17,11 @@ The layer rule keeps a repository from turning the sandbox off. Any layer can ra
 
 ## The lifecycle
 
-The lane hands its composed command to `fno-agent hook sandbox-run`. That wrapper owns the whole lifecycle, so the registry row's pid is the wrapper's pid. Its argv carries env key names only. The values stay in its own env and cross to the guest over exec stdin.
+The lane hands its composed command to `fno agent internal harness hook sandbox-run`. That wrapper owns the whole lifecycle, so the registry row's pid is the wrapper's pid. Its argv carries env key names only. The values stay in its own env and cross to the guest over exec stdin.
 
 1. Resolve the image. A devcontainer is exported from the default-branch commit to a clean folder, never read from the worktree.
 2. Start a container labelled `dev.fno.sandbox=<id>` as uid 1000, with `--network none`, `--cap-drop ALL`, `--security-opt no-new-privileges` and no bind.
-3. Start the guest (`fno-agent hook sandbox-guest`) with `engine exec -i`. One status round trip proves it before any harness starts.
+3. Start the guest (`fno agent internal harness hook sandbox-guest`) with `engine exec -i`. One status round trip proves it before any harness starts.
 4. Bundle committed HEAD on the host and clone it at `/work`. The receipt names the dirty host paths the clone does not carry.
 5. Rewrite the harness argv. Worktree paths move to `/work`. Route `--settings` content crosses stdin to a guest copy. Host `--add-dir` grants drop. Any other host path refuses by name. Codex runs with its own sandbox off, because bwrap cannot start without user namespaces. The container is the boundary.
 6. Run the harness on a second `exec`, with its stdin, stdout, stderr and exit code passed through.
@@ -68,7 +68,7 @@ There is no merge, attest, spawn, decide or backlog update op. The refusal names
 
 ### Stop
 
-The harness Stop hook inside runs `fno-agent hook stop`, which sends loop stop. The host exports the live container into `refs/sandbox/<id>/head`, then runs `fno-agent hook stop --sandbox <id>` on the bound worktree with the sandbox session and the sandbox transcript. If the export record names another worktree, that flag binds no sandbox origin and the Stop blocks. Under that origin, the HEAD and tree reads take the sandbox head and the export's dirty reading. The correction gate records nothing, because the transcript's user turns are forgeable. The self-review floor is off, because the sandbox has no attest op, and review stays required, so a green PR ends `DoneUnreviewed` and never `DonePRGreen`. Done probes run inside through the engine. A probe that starts with `gh`, `fno`, `fno-agent`, `curl` or `ssh` blocks with its name, because it reads host state. Finalize makes no WIP commit on a sandbox's host worktree. If the relay cannot answer, the Stop blocks and names the relay. It never allows.
+The harness Stop hook inside runs `fno agent internal harness hook stop`, which sends loop stop. The host exports the live container into `refs/sandbox/<id>/head`, then runs `fno agent internal harness hook stop --sandbox <id>` on the bound worktree with the sandbox session and the sandbox transcript. If the export record names another worktree, that flag binds no sandbox origin and the Stop blocks. Under that origin, the HEAD and tree reads take the sandbox head and the export's dirty reading. The correction gate records nothing, because the transcript's user turns are forgeable. The self-review floor is off, because the sandbox has no attest op, and review stays required, so a green PR ends `DoneUnreviewed` and never `DonePRGreen`. Done probes run inside through the engine. A probe that starts with `gh`, `fno`, `fno-agent`, `curl` or `ssh` blocks with its name, because it reads host state. Finalize makes no WIP commit on a sandbox's host worktree. If the relay cannot answer, the Stop blocks and names the relay. It never allows.
 
 ### GitHub
 

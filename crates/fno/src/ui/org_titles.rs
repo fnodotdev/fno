@@ -1,5 +1,5 @@
 //! Tolerant title read for the mux: `teams.<scope>.title` from
-//! `team_names.json` beside `registry.json`. The mux never links fno-agent,
+//! `team_names.json` beside `registry.json`. The app build does not link fno-agent,
 //! so this mirrors the FILE contract (the same shape
 //! `crates/fno-agent/src/runtime/team_names.rs` freezes). A missing or malformed
 //! file reads as no title, like every other registry-file read here.

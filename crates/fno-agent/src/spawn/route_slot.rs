@@ -2363,7 +2363,7 @@ fn effective_work_kind(work_command: &str) -> (String, Option<String>) {
     (work_command.trim().to_lowercase(), None)
 }
 
-/// Print stdout/stderr and return the exit code. Used by `bin/client.rs`.
+/// Print stdout/stderr and return the exit code. Used by `client_cli/mod.rs`.
 pub fn run_route_slot(args: &[String]) -> i32 {
     let (code, stdout, stderr) = run_route_slot_capture(args);
     if !stdout.is_empty() {

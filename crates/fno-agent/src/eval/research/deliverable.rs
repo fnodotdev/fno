@@ -191,7 +191,7 @@ fn bind_plan_path(node: &str, brief_path: &Path) -> Option<String> {
             brief_path.display()
         ))
     };
-    let exe = match std::env::current_exe() {
+    let exe = match crate::client_exe::current() {
         Ok(exe) => exe,
         Err(e) => return fail(e.to_string()),
     };

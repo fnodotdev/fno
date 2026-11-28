@@ -1,6 +1,6 @@
 # Beat by harness
 
-The lead has one push contract on every harness. When a covered PR settles green, the daemon's `lead_settle` arm mails the lead. When a covered node merges and closes, it mails again. The beat column is data: each harness row's `beat` in `crates/fno-agent/src/harness_capabilities.toml`, read through `fno-agent harness-beat` while `agents.<harness>.beat` is `auto`. The daemon lead-wake mails an overdue lead on every harness. An unverified cell is an explicit gap, not a claim.
+The lead has one push contract on every harness. When a covered PR settles green, the daemon's `lead_settle` arm mails the lead. When a covered node merges and closes, it mails again. The beat column is data: each harness row's `beat` in `crates/fno-agent/src/harness_capabilities.toml`, read through `fno agent internal harness beat` while `agents.<harness>.beat` is `auto`. The daemon lead-wake mails an overdue lead on every harness. An unverified cell is an explicit gap, not a claim.
 
 | Harness | Beat | Heartbeat |
 |---|---|---|

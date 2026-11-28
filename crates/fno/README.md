@@ -19,13 +19,13 @@ refuses version-skewed clients with both versions named.
 
 ## The CLI
 
-This binary is the `fno` front door. It answers each command itself or hands it to the `fno-agent` binary installed beside it. No Python runs. The release tarball carries all four binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), and `curl -fsSL fno.sh | sh` installs it into `~/.fno/install/bin`. `fno update` keeps the set current.
+This binary is the `fno` front door. It links the `fno-agent` library and runs every agent command in process. No Python runs. The release tarball carries all four binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), and `curl -fsSL fno.sh | sh` installs it into `~/.fno/install/bin`. `fno update` keeps the set current.
 
 ```sh
 curl -fsSL fno.sh | sh
 fno --help
 ```
 
-`cargo install fno fno-agent` installs the full set into the cargo bin dir. The front door alone (`cargo install fno`) refuses an agents command with the install remedy.
+`cargo install fno fno-agent` installs the full set into the cargo bin dir. The front door alone (`cargo install fno`) answers every command. The agent daemon and the graph keeper still come from `fno-agent`.
 
 Apache-2.0.

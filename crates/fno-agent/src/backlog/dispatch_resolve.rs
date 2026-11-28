@@ -1294,7 +1294,7 @@ pub fn grid_lane_for(
         "explicit_vendor_value": serde_json::Value::Null,
         "capacity_refresh": true,
     });
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         return LanePick {
             harness: None,
             model: None,

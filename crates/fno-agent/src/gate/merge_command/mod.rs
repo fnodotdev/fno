@@ -1023,7 +1023,7 @@ fn resolve_agents_bin() -> Option<PathBuf> {
     if let Some(v) = std::env::var_os("FNO_AGENT_BIN").filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(v));
     }
-    std::env::current_exe()
+    crate::client_exe::current()
         .ok()
         .and_then(|exe| hop_client_bin(&exe))
 }

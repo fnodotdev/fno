@@ -31,7 +31,7 @@ One primitive, flat key namespace, atomic lockfiles, append-only audit trail.
 
 ### Lockfile claim store
 
-The lockfiles under the resolved claims root are the one store used by native `fno-agent claim` commands and other readers. The open direction is recorded in operator question `Q2975`.
+The lockfiles under the resolved claims root are the one store used by native `fno agent claim` commands and other readers. The open direction is recorded in operator question `Q2975`.
 
 ### Key namespace
 
@@ -88,7 +88,7 @@ is that contested or ambiguous liveness degrades to **skip**, never to
 - **dispatch** (`fno agent admit guard`, `dispatch-node.sh`, `backlog next`
   selection) skips a `suspect`-claimed node with a `skipped-contested` outcome
   and advances to the next unblocked ready node - it does not park the lane.
-- **lease renewal** rides `fno-agent loop-check`: on every stop, if the
+- **lease renewal** rides `fno agent loop check`: on every stop, if the
   manifest holder matches the lockfile holder it extends `expires_at` by the
   claim TTL, so a respawned worker keeps its claim alive under any pid with no
   separate heartbeat. Renewal is best-effort; a missed renewal only shortens
@@ -216,7 +216,7 @@ Concurrency is bounded where the spawn is refused. Two caps bind: `agents.max_li
 
 ## Reservations: a lane slot held for a name
 
-A reservation is a lane slot held for a worker that has not spawned yet. A lead can order the next freed slot to go to a named worker. Without enforcement the gate knows nothing about the promise. The reserved work loses the race to whatever spawns first, and obeying the order costs the slot. `fno-agent spawn-gate reserve <name> --provider <p> [--ttl 10m] --reason "<why>" [--node <id>]` mints `worker:<name>` under the global claims root with `model_provider`, `reserved_by` and `reserved_reason` metadata. The claim is counted by `provider_live_slot_claims`. A reservation already spends a lane slot against every stranger before the worker exists.
+A reservation is a lane slot held for a worker that has not spawned yet. A lead can order the next freed slot to go to a named worker. Without enforcement the gate knows nothing about the promise. The reserved work loses the race to whatever spawns first, and obeying the order costs the slot. `fno agent admit gate reserve <name> --provider <p> [--ttl 10m] --reason "<why>" [--node <id>]` mints `worker:<name>` under the global claims root with `model_provider`, `reserved_by` and `reserved_reason` metadata. The claim is counted by `provider_live_slot_claims`. A reservation already spends a lane slot against every stranger before the worker exists.
 
 The gate refuses on that lane and names the reservation, in these words:
 
@@ -230,7 +230,7 @@ The gate skips the redeemer's own reservation in the provider count. It releases
 
 ## Per-territory team cap
 
-`check_territory_cap` (`crates/fno-agent/src/spawn/spawn_gate.rs`) is the one enforcement home for the per-territory team cap. The Rust client's own gate passes the node through, and the binary door (`fno-agent territory-verdict`) serves the readout surfaces. Nothing recomputes the verdict elsewhere. A binary or payload fault reads as `territory_unknown`, never as headroom, since an unreadable verdict must never count as free capacity.
+`check_territory_cap` (`crates/fno-agent/src/spawn/spawn_gate.rs`) is the one enforcement home for the per-territory team cap. The Rust client's own gate passes the node through, and the binary door (`fno agent internal backlog territory-verdict`) serves the readout surfaces. Nothing recomputes the verdict elsewhere. A binary or payload fault reads as `territory_unknown`, never as headroom, since an unreadable verdict must never count as free capacity.
 
 The cap refuses (never queues) at `territory_cap`. It stays enforced under `--force`: force speaks for the machine being busy, never for one territory overrunning its team. Waiting cannot help, since the team is full where the caller is standing, so this refuses the same way the provider cap does. `EXIT_TERRITORY_CAP` (86) separates this from the machine-wide cap so a caller can tell "the fleet is full" (queueable) from "this territory's team is over the line" (the other territories keep their headroom).
 
@@ -365,7 +365,7 @@ Measured 2026-08-21: a live session finished one node and moved to the next. Its
 
 When the recorded pid is dead and the claim is local, renewal now rewrites `pid`, `host`, `machine_id` and `acquired_at` together. Reuse detection compares `create_time(pid)` against `acquired_at`. It survives **because the anchor moves with the pid**. The new anchor postdates the holder's start, and a later recycle of that pid number still reads as reused. A live recorded pid is never rewritten.
 
-The anchor is the DURABLE session pid from `fno agent claim session-pid`, never the renewing process. `fno-agent loop-check` exits about a second after it renews. Anchoring to it re-files the corpse under a fresh number and fixes nothing.
+The anchor is the DURABLE session pid from `fno agent claim session-pid`, never the renewing process. `fno agent loop check` exits about a second after it renews. Anchoring to it re-files the corpse under a fresh number and fixes nothing.
 
 ### A wedge fails, benign dedup does not
 

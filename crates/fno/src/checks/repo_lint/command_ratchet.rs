@@ -346,6 +346,10 @@ pub fn run(inv: &Invocation) -> i32 {
                     ));
                 }
             }
+            for failure in agents_surface::caller_failures(&inv.root, &surface.top) {
+                failed = true;
+                lines.push(failure);
+            }
             agents_ok_note = format!(
                 "; fno-agent surface: {} row(s), {} hidden command(s) recorded",
                 live_rows.len(),

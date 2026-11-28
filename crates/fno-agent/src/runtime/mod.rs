@@ -267,7 +267,7 @@ pub mod schedule_fire;
 pub mod scrape;
 pub mod scratch;
 pub mod screen;
-pub(crate) mod served_liveness;
+pub mod served_liveness;
 pub mod session_activity;
 pub mod session_backfill;
 pub mod session_join;

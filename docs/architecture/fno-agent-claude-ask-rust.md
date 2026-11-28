@@ -2,7 +2,7 @@
 
 ## What this is
 
-The Rust client (`crates/fno-agent`) can handle the `ask` command for **claude** agents itself, replicating Python's `claude --bg` path byte-for-byte, instead of routing through the daemon. It lives in `crates/fno-agent/src/spawn/claude_ask.rs` and is wired into `bin/client.rs::maybe_run_claude_ask`.
+The Rust client (`crates/fno-agent`) can handle the `ask` command for **claude** agents itself, replicating Python's `claude --bg` path byte-for-byte, instead of routing through the daemon. It lives in `crates/fno-agent/src/spawn/claude_ask.rs` and is wired into `client_cli/mod.rs::maybe_run_claude_ask`.
 
 ## Why the daemon is the wrong shape for claude
 

@@ -83,7 +83,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BIN` | rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/ui/backlog_view.rs:333 |
 | `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build carries (mux shots, an otherwise unshippable bug repro). The compile door reads it, admits only the build, and journals one row under it. check and clippy refuse with or without it; absent or whitespace-only refuses with the compile line. |
-| `FNO_BUS_DIR` | rs | The mail bus dir pin, the top rung of the one ladder: the mail readers (crates/fno-agent/src/runtime/mail_paths.rs) and the dir door (`fno-agent state path dir bus`, crates/fno-agent/src/runtime/state_path.rs) resolve it before `config.paths.bus_dir` and the layout fold. |
+| `FNO_BUS_DIR` | rs | The mail bus dir pin, the top rung of the one ladder: the mail readers (crates/fno-agent/src/runtime/mail_paths.rs) and the dir door (`fno agent internal target state path dir bus`, crates/fno-agent/src/runtime/state_path.rs) resolve it before `config.paths.bus_dir` and the layout fold. |
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
 | `FNO_BUS_RETAIN` | rs | Rotated bus segments the append door keeps; malformed degrades to 5. |

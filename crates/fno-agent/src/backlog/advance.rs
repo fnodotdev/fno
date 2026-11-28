@@ -541,7 +541,7 @@ pub(crate) fn bounded_command_env(
 /// the enrich second exec (30s), so the caller waits a bounded 180s.
 pub fn select_read(kind: &str, args: &[String]) -> Result<Value, String> {
     let exe =
-        std::env::current_exe().map_err(|_| "select-read: no fno-agent binary".to_string())?;
+        crate::client_exe::current().map_err(|_| "select-read: no fno-agent binary".to_string())?;
     let mut argv = vec!["select-read".to_string(), kind.to_string()];
     argv.extend(args.iter().cloned());
     let out = bounded_command_env(&exe, &argv, 180, &[])
@@ -938,7 +938,7 @@ pub fn refuse_repeated_dead_dispatch(node_id: &str, node_cwd: Option<&str>) -> O
     let reason = format!(
         "auto-failure: {streak} consecutive dead dispatches (worker reaped without termination)"
     );
-    let exe = match std::env::current_exe() {
+    let exe = match crate::client_exe::current() {
         Ok(e) => e,
         Err(_) => return Some("defer-failed".to_string()),
     };
@@ -1259,7 +1259,7 @@ pub fn project_unblocked(node_ids: &[String]) {
     }
     // The projection owner is the plan projection pass; native callers reach
     // it through the client command so a plan-doc renderer keeps one owner.
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         return;
     };
     let argv = vec![

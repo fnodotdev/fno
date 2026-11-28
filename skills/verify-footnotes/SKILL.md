@@ -56,7 +56,7 @@ A cannot claim is a negative claim about routes. Before saying a thing cannot be
 
 No done claim without fresh command output, read in this turn. The command that proves the claim runs now, and its output with the exit code sits beside the claim. A previous run, a partial check, and another agent's success report prove nothing.
 
-The stop hook, not this section, decides completion. When a promise is seen, `fno-agent loop-check` reads the world: the PR exists, CI is green, reviews are drained. Run the local gates, then let it read the world.
+The stop hook, not this section, decides completion. When a promise is seen, `fno agent loop check` reads the world: the PR exists, CI is green, reviews are drained. Run the local gates, then let it read the world.
 
 Section 3 adapts the verification-before-completion skill by Jesse Vincent (MIT). No sentence is copied.
 

@@ -94,12 +94,22 @@ pub fn pane_argv(remote: &proto::RemoteRow) -> Result<Vec<String>, String> {
 /// arrives as index 231, which `band_remap` never matches, and the far pane
 /// shows white text on white. The link always paints 24-bit (`frame_ansi`), so
 /// the attach states the same capability, as `pty` does for every pane.
-pub fn attach_command(bin: &Path, name: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new(bin);
-    cmd.args(["attach", "--inline", name]);
-    cmd.env("COLORTERM", "truecolor");
-    cmd.env_remove("NO_COLOR");
-    cmd
+pub struct InlineAttach<'a> {
+    /// The client argv.
+    pub argv: [&'a str; 3],
+    /// The variable the attach sets, with its value.
+    pub set: (&'static str, &'static str),
+    /// The variable the attach clears.
+    pub unset: &'static str,
+}
+
+/// The inline attach for the row `name`.
+pub fn inline_attach(name: &str) -> InlineAttach<'_> {
+    InlineAttach {
+        argv: ["attach", "--inline", name],
+        set: ("COLORTERM", "truecolor"),
+        unset: "NO_COLOR",
+    }
 }
 
 /// The far door: resolve the row, then link its pane or hand back its name.
@@ -546,12 +556,10 @@ mod tests {
     /// far pane as a 256-color index the remap cannot see.
     #[test]
     fn the_inline_attach_states_truecolor_whatever_ssh_forwarded() {
-        let cmd = attach_command(Path::new("fno-agent"), "ottoline");
-        let envs: Vec<_> = cmd.get_envs().collect();
-        assert!(envs.contains(&("COLORTERM".as_ref(), Some("truecolor".as_ref()))));
-        assert!(envs.contains(&("NO_COLOR".as_ref(), None)));
-        let args: Vec<_> = cmd.get_args().collect();
-        assert_eq!(args, ["attach", "--inline", "ottoline"]);
+        let attach = inline_attach("ottoline");
+        assert_eq!(attach.set, ("COLORTERM", "truecolor"));
+        assert_eq!(attach.unset, "NO_COLOR");
+        assert_eq!(attach.argv, ["attach", "--inline", "ottoline"]);
     }
 
     #[test]

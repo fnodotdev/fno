@@ -44,7 +44,7 @@ The path rule lives in one place, [`scopes.tsv`](scopes.tsv). It classes each `*
 
 ## Regrowth cap
 
-A scope row with a `max_net` caps the net test declarations one branch can add to that scope. The guards workflow runs `fno-agent test-delta --scopes docs/test-audit/scopes.tsv`, and a scope over its cap fails the check. G3 carries `max_net 0` (ruling D3448): a new G3 test must be paid for by a deleted G3 test. The repo-wide `--max-net 22` still applies on top.
+A scope row with a `max_net` caps the net test declarations one branch can add to that scope. The guards workflow runs `fno agent internal target test-delta --scopes docs/test-audit/scopes.tsv`, and a scope over its cap fails the check. G3 carries `max_net 0` (ruling D3448): a new G3 test must be paid for by a deleted G3 test. The repo-wide `--max-net 22` still applies on top.
 
 Two gaps stay open by design. A pure rename into a capped scope emits no declaration lines in `git diff`, so it moves tests without counting. A test that drives G3 code from a path outside G3 counts in its own scope.
 

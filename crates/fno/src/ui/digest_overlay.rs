@@ -1757,6 +1757,12 @@ pub fn fno_agent_bin() -> PathBuf {
     paired_bin("FNO_AGENT_BIN", "fno-agent")
 }
 
+/// `$FNO_AGENT_BIN` when it names a runnable file: the one way to put a
+/// separate client binary under the front door.
+pub fn fno_agent_override() -> Option<PathBuf> {
+    runnable_env_path("FNO_AGENT_BIN")
+}
+
 /// A runnable file: a regular file with an execute bit (unix), else any
 /// regular file.
 #[cfg(unix)]

@@ -61,7 +61,7 @@ The install id lives at `~/.fno/install/fno_install_seen.id`. The daemon checks 
 
 ## The usage events arm (fleet machines)
 
-The usage events arm is for the maintainers' own machines. It ships off. It turns on with `[telemetry.usage_events] enabled = true` plus a PostHog project token in `FNO_POSTHOG_PROJECT_TOKEN` or `~/.fno/secrets/posthog-project-token`. The token picks the PostHog project. Every 5 minutes the daemon posts each new allowlisted row from the last 24 hours as one `fno_<kind>` event. `fno-agent evals events --usage` prints the exact batch the next beat posts, token redacted.
+The usage events arm is for the maintainers' own machines. It ships off. It turns on with `[telemetry.usage_events] enabled = true` plus a PostHog project token in `FNO_POSTHOG_PROJECT_TOKEN` or `~/.fno/secrets/posthog-project-token`. The token picks the PostHog project. Every 5 minutes the daemon posts each new allowlisted row from the last 24 hours as one `fno_<kind>` event. `fno internal evals evals events --usage` prints the exact batch the next beat posts, token redacted.
 
 Each kind lives in one journal, and the arm reads it there. The agents journal is `~/.fno/agents/events.jsonl`. The global journal is `~/.fno/events.jsonl`. A space journal is the `events.jsonl` in the space of each project registered under `[work]` in config.
 

@@ -134,7 +134,7 @@ fn valid_expiry_ref(r: &Value) -> bool {
 /// T or W line: an unread index is never an empty one.
 fn decisions(node: &str) -> Result<Value, String> {
     // This binary's own backlog door: a hook or CI shell may have no `fno`.
-    let exe = std::env::current_exe().unwrap_or_else(|_| "fno-agent".into());
+    let exe = crate::client_exe::current().unwrap_or_else(|_| "fno-agent".into());
     let mut cmd = std::process::Command::new(exe);
     cmd.args([
         "backlog",

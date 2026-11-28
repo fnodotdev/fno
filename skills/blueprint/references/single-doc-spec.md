@@ -51,7 +51,7 @@ Every other section (problem, design rationale, open questions) is optional cont
 design → ready → in_progress → reviewing → shipping → shipped
 ```
 
-Enforced by `fno-agent plan-cli mutate` (`crates/fno-agent/src/backlog/plan_doc/mutate.rs`), over the `STATUS_PROGRESSION` ladder the `fno do plan parse` door serves. A `ready` plan refuses with exit 1 unless `--rewrite` is set, and a plan past blueprint refuses with exit 1 even then. `coerce_status` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
+Enforced by `fno agent internal target plan-cli mutate` (`crates/fno-agent/src/backlog/plan_doc/mutate.rs`), over the `STATUS_PROGRESSION` ladder the `fno do plan parse` door serves. A `ready` plan refuses with exit 1 unless `--rewrite` is set, and a plan past blueprint refuses with exit 1 even then. `coerce_status` reads an unquoted YAML boolean (`True`/`False`) that a bash writer can emit as its lowercase word.
 
 **Valid transition examples:**
 

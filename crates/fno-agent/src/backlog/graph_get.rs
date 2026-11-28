@@ -2,7 +2,7 @@
 //!
 //! Client-side and daemon-free, like [`crate::wait`]: a batch read is a
 //! filesystem read, not an agent-lifecycle operation, so it needs no daemon
-//! RPC. Not a routable `fno agent` command (it serves from `bin/client.rs`'s
+//! RPC. Not a routable `fno agent` command (it serves from `client_cli/mod.rs`'s
 //! dispatch, but stays out of `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`, the
 //! same rule `pr-heal` and `kill-check` follow) - the argv callers are
 //! `fno backlog get`'s Python forwarder (>1 id) and, through the stdin door,

@@ -71,7 +71,7 @@ pub(crate) fn resolve_repo_root() -> PathBuf {
 }
 
 pub(crate) fn self_exe() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("fno-agent"))
+    crate::client_exe::current().unwrap_or_else(|_| PathBuf::from("fno-agent"))
 }
 
 /// One JSON line from a self-exec'd door: payload through stdin, one JSON

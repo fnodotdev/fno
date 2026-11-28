@@ -1,11 +1,9 @@
 //! The fno-agent binary's command surface for the command ratchet.
 //!
 //! Two independent readings of one surface, cross-checked:
-//! - the dispatch: every command the client answers, read from the dispatcher's
-//!   own source - the run-region scan menu-caps also counts with, the main()
-//!   argv doors, the gh transport door, the `family_doors` table, the
-//!   `pr_door`/`review_doors`/`client_transport`/`pr_closure` delegate
-//!   tables, and the claim family's op arms in `claim_commands.rs`;
+//! - the dispatch: every command the client answers, read by
+//!   `menu_caps::fno_agent_commands` (the one reading menu-caps counts with),
+//!   plus the claim family's op arms in `claim_commands.rs`;
 //! - the refusal: `ALL_CLIENT_ACTIONS`, the exact slice the
 //!   unknown-command error prints, so the refusal can never name a command
 //!   nothing dispatches.
@@ -29,13 +27,7 @@ use regex::Regex;
 
 use crate::menu_caps;
 
-const CLIENT_REL: &str = "crates/fno-agent/src/bin/client.rs";
-const FAMILY_DOORS_REL: &str = "crates/fno-agent/src/family_doors.rs";
 const CLAIM_COMMANDS_REL: &str = "crates/fno-agent/src/runtime/claim_commands.rs";
-const PR_DOOR_REL: &str = "crates/fno-agent/src/gate/pr_door.rs";
-const REVIEW_DOORS_REL: &str = "crates/fno-agent/src/gate/review_doors.rs";
-const TRANSPORT_REL: &str = "crates/fno-agent/src/client_transport.rs";
-const GH_ADAPTER_REL: &str = "crates/fno-agent/src/gate/pr_status/adapter.rs";
 pub const HIDDEN_REL: &str = "scripts/ci/agents-hidden-commands.tsv";
 
 /// Pinned sub-command seams: baseline rows the scanner asserts exist in the
@@ -67,8 +59,7 @@ const SEAMS: &[(&str, &str)] = &[
 
 /// One cross-checked reading of the binary's surface.
 pub struct AgentsSurface {
-    /// Every dispatched command: run-region arms, argv doors, delegate tables,
-    /// the gh door, plus the help/version spellings menu-caps inserts.
+    /// Every dispatched command, as `menu_caps::fno_agent_commands` reads it.
     pub top: BTreeSet<String>,
     /// The `ALL_CLIENT_ACTIONS` slice: what the unknown-command refusal
     /// prints.
@@ -135,70 +126,25 @@ fn bracket_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
 
 impl AgentsSurface {
     pub fn read(root: &Path) -> Result<Self, String> {
-        let client = read(root, CLIENT_REL)?;
-        let doors = read(root, menu_caps::AGENTS_DOORS_REL)?;
-        // The spellings below read the binary's dispatch as one text: run's
-        // doors moved to their own module and dispatch exactly as before.
-        let dispatch = format!("{client}\n{doors}");
-        let family = read(root, FAMILY_DOORS_REL)?;
+        // One reading of the top level, shared with menu-caps: the debt row
+        // and these rows count the same words.
+        let sources = menu_caps::AgentSources::read(root).map_err(|e| e.to_string())?;
+        let top = menu_caps::fno_agent_commands(&sources)?;
+        let client = &sources.client;
+        // The seams read the binary's dispatch as one text: run's doors moved
+        // to their own module and dispatch exactly as before.
+        let dispatch = format!("{client}\n{}", sources.doors);
         let claim = read(root, CLAIM_COMMANDS_REL)?;
-        let pr_door = read(root, PR_DOOR_REL)?;
-        let review_doors = read(root, REVIEW_DOORS_REL)?;
-        let transport = read(root, TRANSPORT_REL)?;
-        let gh_adapter = read(root, GH_ADAPTER_REL)?;
-
-        let mut top = menu_caps::fno_agent_commands(&client, &doors)?;
-        // The `|| command == "x"` continuation arms menu-caps' single-literal
-        // regex cannot see; the shared extraction must not change its count,
-        // because the fno-agent debt ceiling pins that number.
-        let continuation = static_regex(r#"\|\|\s*command == "([a-z][a-z0-9-]*)""#);
-        top.extend(
-            continuation
-                .captures_iter(&dispatch)
-                .map(|c| c[1].to_string()),
-        );
-
-        // main() argv doors: `args.first().map(String::as_str) == Some("x")`.
-        let door = static_regex(
-            r#"args\.first\(\)\.map\(String::as_str\) == Some\("([a-z][a-z0-9-]*)"\)"#,
-        );
-        top.extend(door.captures_iter(&dispatch).map(|c| c[1].to_string()));
-
-        // The delegate tables: one match per module, read in place. The arm
-        // regex has no line anchor: Rust's `^` matches only at the haystack
-        // start, and the regions are small flat match bodies.
-        let table_arm = static_regex(r#""([a-z][a-z0-9-]*)"\s*=>"#);
-        let some_arm = static_regex(r#"Some\("([a-z][a-z0-9-]*)"\)\s*=>"#);
-        for (text, marker, regex) in [
-            (&family, "pub fn client_dispatch", &some_arm),
-            (&pr_door, "pub fn run_command", &table_arm),
-            (&review_doors, "pub fn dispatch", &table_arm),
-            (&transport, "pub fn transport_early_arms", &some_arm),
-        ] {
-            let stripped = menu_caps::strip_comments(text);
-            let region = menu_caps::braced_region(&stripped, marker)?;
-            top.extend(regex.captures_iter(region).map(|c| c[1].to_string()));
-        }
-        // pr_closure's produce door: an alternation arm, so read the literals
-        // of the match region instead of the arm shapes.
-        let closure = read(root, "crates/fno-agent/src/runtime/org_board/pr_closure.rs")?;
-        let closure_stripped = menu_caps::strip_comments(&closure);
-        let closure_region = menu_caps::braced_region(&closure_stripped, "pub fn run_command")?;
-        top.extend(literals(closure_region));
-
-        // The gh transport door: plain literal arms over its own match.
-        let gh_stripped = menu_caps::strip_comments(&gh_adapter);
-        let gh_region = menu_caps::braced_region(&gh_stripped, "pub fn gh_transport_door")?;
-        top.extend(table_arm.captures_iter(gh_region).map(|c| c[1].to_string()));
 
         // The refusal's registered spellings.
-        let client_stripped = menu_caps::strip_comments(&client);
+        let client_stripped = menu_caps::strip_comments(client);
         let all_region = bracket_region(&client_stripped, "const ALL_CLIENT_ACTIONS")?;
         let registered = literals(all_region);
 
         // The claim family: op arms plus what the no-operation refusal names.
         let claim_stripped = menu_caps::strip_comments(&claim);
-        let claim_region = menu_caps::braced_region(&claim_stripped, "pub fn run_claim")?;
+        let claim_region =
+            menu_caps::braced_region(&claim_stripped, CLAIM_COMMANDS_REL, "pub fn run_claim")?;
         let op_arm = static_regex(r#"if op == "([a-z][a-z0-9-]*)""#);
         let mut claim_ops: BTreeSet<String> = op_arm
             .captures_iter(claim_region)
@@ -291,8 +237,8 @@ impl AgentsSurface {
             if !self.top.contains(command) {
                 failures.push(format!(
                     "agents-surface: the refusal names `{command}` but no dispatch arm answers it. \
-                     A refused command must never read as registered: restore the arm, remove \
-                     the spelling from ALL_CLIENT_ACTIONS, or land it in the retired pointer."
+                     A refused command must never read as registered: restore the arm, or \
+                     remove the spelling from ALL_CLIENT_ACTIONS."
                 ));
             }
         }
@@ -357,6 +303,119 @@ pub fn baseline_drift(live: &[String], baseline: &[String]) -> (Vec<String>, Vec
     (added, removed)
 }
 
+/// The shrink-only record of `fno-agent <command>` mentions outside crates/:
+/// `path<TAB>count`, one row per file that still names the client binary.
+pub const CALLERS_REL: &str = "scripts/ci/fno-agent-callers.tsv";
+
+/// Each tracked file outside crates/ that names a live client command as
+/// `fno-agent <command>`, with the 1-based line of every mention.
+fn outside_callers(
+    root: &Path,
+    top: &BTreeSet<String>,
+) -> std::io::Result<BTreeMap<String, Vec<usize>>> {
+    let listed = super::git_capture(root, &["ls-files", "-z"])
+        .ok_or_else(|| std::io::Error::other("git ls-files exited non-zero"))?;
+    let mention = static_regex(r"\bfno-agent[ \t]+([a-z][a-z0-9-]*)");
+    let mut found = BTreeMap::new();
+    for rel in listed.split('\0') {
+        if rel.is_empty()
+            || rel.starts_with("crates/")
+            || [CALLERS_REL, HIDDEN_REL, "scripts/ci/command-baseline.txt"].contains(&rel)
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(root.join(rel)) else {
+            continue;
+        };
+        let lines: Vec<usize> = text
+            .lines()
+            .enumerate()
+            .flat_map(|(n, line)| {
+                mention
+                    .captures_iter(line)
+                    .filter(|c| top.contains(&c[1]))
+                    .map(move |_| n + 1)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if !lines.is_empty() {
+            found.insert(rel.to_string(), lines);
+        }
+    }
+    Ok(found)
+}
+
+/// The ratchet over the outside callers: a file may not pass its row, a file
+/// with no row may name none, and a row above its file's count comes down in
+/// the same change, so the count only falls.
+pub fn caller_drift(
+    found: &BTreeMap<String, Vec<usize>>,
+    rows: &BTreeMap<String, usize>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    for (path, lines) in found {
+        let ceiling = rows.get(path).copied().unwrap_or(0);
+        if lines.len() > ceiling {
+            let at: Vec<String> = lines.iter().map(|n| format!("{path}:{n}")).collect();
+            failures.push(format!(
+                "agents-surface: {path} names the fno-agent client {} time(s), above its {CALLERS_REL} \
+                 ceiling {ceiling}. Spell each as its fno command (`fno agent ...`): {}",
+                lines.len(),
+                at.join(", ")
+            ));
+        }
+    }
+    for (path, &ceiling) in rows {
+        let count = found.get(path).map_or(0, Vec::len);
+        if count < ceiling {
+            failures.push(format!(
+                "agents-surface: {path} names the fno-agent client {count} time(s), below its \
+                 {CALLERS_REL} ceiling {ceiling}. Lower the row to {count} (delete it at 0) in \
+                 this change."
+            ));
+        }
+    }
+    failures
+}
+
+/// The caller ratchet against the live tree and its committed record.
+pub fn caller_failures(root: &Path, top: &BTreeSet<String>) -> Vec<String> {
+    let rows = match std::fs::read_to_string(root.join(CALLERS_REL)) {
+        Ok(text) => {
+            let mut rows = BTreeMap::new();
+            for (n, line) in text.lines().enumerate() {
+                if line.trim().is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                let mut cols = line.split('\t');
+                match (
+                    cols.next(),
+                    cols.next().and_then(|c| c.trim().parse::<usize>().ok()),
+                ) {
+                    (Some(path), Some(count)) if !path.is_empty() => {
+                        rows.insert(path.to_string(), count);
+                    }
+                    _ => {
+                        return vec![format!(
+                            "agents-surface: {CALLERS_REL}:{} is not `path<TAB>count`",
+                            n + 1
+                        )]
+                    }
+                }
+            }
+            rows
+        }
+        Err(e) => return vec![format!("agents-surface: cannot read {CALLERS_REL}: {e}")],
+    };
+    match outside_callers(root, top) {
+        Ok(found) => caller_drift(&found, &rows),
+        Err(e) => vec![format!(
+            "agents-surface: git ls-files failed under {}: {e}",
+            root.display()
+        )],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +466,27 @@ mod tests {
             "{failures:?}"
         );
         assert_eq!(failures.len(), 4, "{failures:?}");
+
+        // The outside-caller ratchet: a new `fno-agent <command>` line in a
+        // file with no row refuses by file and line, and a row above its
+        // file's count must come down.
+        let found = BTreeMap::from([("skills/x/SKILL.md".to_string(), vec![3])]);
+        let callers = caller_drift(&found, &BTreeMap::new());
+        assert!(
+            matches!(callers.as_slice(), [only] if only.contains("skills/x/SKILL.md:3")),
+            "{callers:?}"
+        );
+        let slack = BTreeMap::from([("skills/x/SKILL.md".to_string(), 2)]);
+        let lower = caller_drift(&found, &slack);
+        assert!(
+            lower.iter().any(|f| f.contains("Lower the row to 1")),
+            "{lower:?}"
+        );
+        assert!(caller_drift(
+            &found,
+            &BTreeMap::from([("skills/x/SKILL.md".to_string(), 1)])
+        )
+        .is_empty());
     }
     #[test]
     fn agents_surface_holds_on_the_committed_tree() {
@@ -420,6 +500,12 @@ mod tests {
             "the claim sweep specimen row is missing: {:?}",
             surface.claim_ops
         );
+        // Every word the live client answers has an fno spelling.
+        if let Err(homeless) = menu_caps::check_homes(&surface.top, &menu_caps::menu_forwarded()) {
+            panic!("homeless fno-agent words:\n  {}", homeless.join("\n  "));
+        }
+        let callers = caller_failures(&root, &surface.top);
+        assert!(callers.is_empty(), "{}", callers.join("\n"));
         let hidden_text = std::fs::read_to_string(root.join(HIDDEN_REL))
             .unwrap_or_else(|e| panic!("agents-surface: cannot read {HIDDEN_REL}: {e}"));
         let rows = hidden_rows(&hidden_text).unwrap();

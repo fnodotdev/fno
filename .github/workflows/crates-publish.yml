@@ -55,12 +55,12 @@ jobs:
         run: |
           set -euo pipefail
           extra=()
-          # fno-mail and fno-proto version on their own. A version not on
-          # crates.io yet resolves through the tree, as release publishes it
-          # first. A version already there is what release will skip, so the
+          # fno-mail, fno-proto and fno-agent version on their own. A version
+          # not on crates.io yet resolves through the tree, as release
+          # publishes it first. A version already there is what release will skip, so the
           # dry run verifies against the registry copy: an API change merged
           # without a version bump fails here, not at release.
-          for sib in fno-mail fno-proto fno-homes; do
+          for sib in fno-mail fno-proto fno-homes fno-agent; do
             # Patch only what this crate depends on: an unused patch makes
             # cargo rewrite the lockfile, and the dry run refuses a dirty tree.
             grep -qE "^${sib} *=" "${{ matrix.dir }}/Cargo.toml" || continue

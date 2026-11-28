@@ -3197,7 +3197,7 @@ pub fn decide(args: &[String]) -> (i32, String) {
     result
 }
 
-/// Entry point called from `bin/client.rs` direct dispatch.
+/// Entry point called from `client_cli/mod.rs` direct dispatch.
 /// Prints JSON to stdout, returns exit code.
 pub fn run_loop_check(args: &[String]) -> i32 {
     let (code, json) = decide(args);

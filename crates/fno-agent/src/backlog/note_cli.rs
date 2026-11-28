@@ -462,7 +462,7 @@ pub(crate) fn notice_holder(node_id: &str, pointer: &str) -> Option<String> {
     if crate::claims::ambient_session_candidates().contains(&sid) {
         return Some(format!("holder {} is this session", record.holder));
     }
-    let mut command = std::process::Command::new(std::env::current_exe().ok()?);
+    let mut command = std::process::Command::new(crate::client_exe::current().ok()?);
     command.args(["mail", "send", "--from-name", "note", "--", &sid, pointer]);
     Some(deliver_pointer(command, &record.holder, NOTICE_BOUND))
 }

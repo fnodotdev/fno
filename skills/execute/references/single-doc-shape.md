@@ -4,9 +4,9 @@ Reference for how `/execute waves` reads plans. Architectural overview: `docs/ar
 
 A plan is always a single `.md` file (G1 blocks authoring new folder plans; G3 removed folder-plan *reading* entirely). There is no shape detection step anymore - callers pass a file path directly.
 
-## `fno-agent wave ready <plan>`
+## `fno agent internal target wave ready <plan>`
 
-`/execute waves` asks `fno-agent wave ready <plan> [--state <STATE.md>] [--node <id>] [--band low|medium|high]` for the tasks it can dispatch. The loader (`load` in `crates/fno-agent/src/backlog/wave_ready.rs`):
+`/execute waves` asks `fno agent internal target wave ready <plan> [--state <STATE.md>] [--node <id>] [--band low|medium|high]` for the tasks it can dispatch. The loader (`load` in `crates/fno-agent/src/backlog/wave_ready.rs`):
 
 1. Reads the plan through `plan_doc::doc::load_plan`, the same parser the `fno do plan parse` door uses. `fno do plan brief` uses the same parser.
 2. Validates the frontmatter through the plan-schema door. It refuses on a missing strategy section, a strategy parse error, or an edge error.

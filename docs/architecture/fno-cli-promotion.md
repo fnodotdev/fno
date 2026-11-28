@@ -76,7 +76,7 @@ The wrapper validates `script_path.is_file()` before the subprocess so a missing
 | `fno do pr verify --kind merged\|reviews` | `verify-pr-merged.sh` OR `verify-review-replies.sh` | enum dispatches to the right script |
 | `fno do pr rebase` | `scripts/lib/rebase-resolve.sh` | conflict-delegation rebase protocol |
 | `fno do phase verify PHASE_NAME [--session-id]` | `phase-verifier.sh::pv_run` (sourceable) | per-phase postcondition verifier |
-| `fno do phase kill-check [PLAN_PATH]` | `fno-agent kill-check` (binary; logic folded out of the deleted `kill-criteria.sh` in US1) | plan kill-criteria evaluator |
+| `fno do phase kill-check [PLAN_PATH]` | `fno agent loop kill-check` (binary; logic folded out of the deleted `kill-criteria.sh` in US1) | plan kill-criteria evaluator |
 | `fno notify TITLE MESSAGE` | `notify.sh::notify` (sourceable) | OS notification helper |
 
 Every wrapper command exposes the same return-code contract as the underlying bash. rc=0 is success, rc=1 logical failure, and rc=2 substrate failure or invalid args via Typer. Other codes pass through with `propagate_returncode` applied, so negative signal-derived values land on their shell conventions.

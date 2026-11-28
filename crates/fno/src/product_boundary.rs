@@ -1,8 +1,9 @@
 //! One declaration of what each product surface requires of the others,
 //! plus bounded, read-only observations of the optional components.
 //!
-//! The native workspace (this crate) never links the agent runtime: the
-//! pairing is process and protocol, not a library edge. This module is the
+//! The native workspace (this crate) links the agent runtime behind its
+//! `client` feature; the daemon, worker and graph keeper stay processes over
+//! a protocol. This module is the
 //! SINGLE classifier for "is the optional component there, and what is the
 //! repair when it is not". Callers project these observations into their own
 //! surfaces (mux doctor, refusal messages); none of them re-derive

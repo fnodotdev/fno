@@ -39,7 +39,7 @@ plugins/fno-panels/                         the first-party panels as mods
 
 Mods and layouts, the UI components, have their own page: [mods-and-layouts](mods-and-layouts.md).
 
-`manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno-agent spawn-overlay plugins`.
+`manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno agent admit overlay plugins`.
 
 ## Identity reuse
 

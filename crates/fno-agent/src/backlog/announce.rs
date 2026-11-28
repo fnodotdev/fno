@@ -1346,7 +1346,7 @@ pub(crate) fn run_announce_status(args: &[String], paths: &AnnouncePaths) -> i32
 // Command entry
 // ---------------------------------------------------------------------------
 
-/// Command entrypoint reached from `bin/client.rs`'s direct dispatch. `pub`, not
+/// Command entrypoint reached from `client_cli/mod.rs`'s direct dispatch. `pub`, not
 /// `pub(crate)`: a package's bin target sees its own lib as an external crate,
 /// so `pub(crate)` here fails the publish tarball build.
 pub fn run_announce(args: &[String]) -> i32 {

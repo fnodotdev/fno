@@ -9,7 +9,7 @@ use super::{first_line_or, fno_bin, ResumeOutcome};
 use crate::spawn_journal::{HeldWorker, ReentrySpawnRequest, ReentryVerdict};
 use crate::tree::{Rect, TabId};
 
-/// The reentry refused exit, mirrored (crates/fno never links fno-agent);
+/// The reentry refused exit, mirrored (the app build does not link fno-agent);
 /// twin of `reentry::REENTRY_REFUSED_EXIT`.
 const REENTRY_REFUSED_EXIT: i32 = 3;
 

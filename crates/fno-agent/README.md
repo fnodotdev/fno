@@ -25,7 +25,7 @@ Accordingly, the substrate here is written **worker-side**: `PtySession` is what
 ### Provider layer (added on top of the substrate)
 
 - `provider.rs` — `Provider` + `ProviderWithPty` traits. `as_pty()` returns `Option`, so `ClaudeProvider` (shellout to `claude --bg`, not PTY-managed) is distinguished from `CodexProvider` (JSONL stream) / `GeminiProvider` (single JSON blob) in the type system. `create_argv` / `resume_argv` mirror the validated Python adapters; `reachability` is tri-state and authoritative (codex session-index membership; gemini cwd-pinned short-prefix + full-UUID content check), never reporting a dead session live.
-- `claude_ask.rs` — client-side `claude --bg` ask path. Because `ClaudeProvider::as_pty()` is `None`, the daemon cannot manage claude; the **client** replicates Python's `harnesses/claude.py` ask path directly (create + socket follow-up + reply extraction) with byte-parity. Wired via `bin/client.rs::maybe_run_claude_ask`. See `docs/architecture/fno-agent-claude-ask-rust.md`.
+- `claude_ask.rs` — client-side `claude --bg` ask path. Because `ClaudeProvider::as_pty()` is `None`, the daemon cannot manage claude; the **client** replicates Python's `harnesses/claude.py` ask path directly (create + socket follow-up + reply extraction) with byte-parity. Wired via `client_cli/mod.rs::maybe_run_claude_ask`. See `docs/architecture/fno-agent-claude-ask-rust.md`.
 - `envelope.rs` — structural anti-injection `Envelope`. The user message is JSON-escaped, so the framing cannot be forged by message content (a hostile payload stays inside the `msg` field).
 - `readiness.rs` — per-CLI `CodexReadinessDetector` / `GeminiReadinessDetector` over the `ScreenView` seam. Conservative: ready only on a positive prompt-glyph signal in the bottom status region, never a byte-count guess; rejects the gemini "Waiting for auth" false-ready.
 - `screen.rs` — terminal-grid construction behind the `ScreenView` seam.
@@ -47,7 +47,7 @@ The supervisor layer on top of the substrate. Three binaries compile from this c
 | `paths.rs` | `~/.fno/agents/` layout + 0700/0600 perm helpers + worker-socket discovery scan. |
 | `daemon.rs` | Six-state lifecycle (event on entry); socket bind with 0700/0600 fstat-verify + lazy-start race resolution + flock self-test; 7-step startup recovery (`drive_crashed` before clear, orphan-dir archive, dead-PID reap); `agent.spawn/ask/list/status/stop/rm/reconcile` + `channel.register/unregister/push`; idle lazy-exit; zombie reaping; UUIDv4 from urandom. |
 | `worker.rs` + `bin/worker.rs` | Per-agent PTY shim (**Outcome B**): owns the PTY master, runs in its own process group, ignores SIGHUP, outlives the daemon. Serves `worker.write/snapshot/status/resize/shutdown`; emits an `agent_exited` event and flips the registry to `exited` on exit. |
-| `client.rs` + `bin/client.rs` | Lazy-start the daemon, connect, forward a command; map error code -> exit code. |
+| `client.rs` + `client_cli/mod.rs` | Lazy-start the daemon, connect, forward a command; map error code -> exit code. |
 
 Real-subprocess tests (`tests/daemon_e2e.rs`) prove the load-bearing claims: an agent survives a daemon `SIGKILL` and a restarted daemon reconnects via socket scan; agent exit is observable. `tests/flock_interop.rs` proves cross-language `flock(2)` coordination with Python `fcntl.flock` (the `cross_language_flock_test` kill criterion).
 

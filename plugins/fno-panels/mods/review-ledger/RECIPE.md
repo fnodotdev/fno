@@ -11,7 +11,7 @@ One row per branch, newest first. Each row shows the time, the branch, the revie
 Nothing of its own. It is a feed mod. The host runs one fno read and draws the rows as a table:
 
 ```
-fno-agent review-summary --ledger
+fno agent internal pr review-summary --ledger
 ```
 
 That read prints JSON and changes nothing.

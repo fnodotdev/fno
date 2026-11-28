@@ -4,6 +4,6 @@ This document described the pre-wedge gate-attestation / phase-verifier machiner
 that the control-plane collapse removed (wedge + step 6).
 There are no gate artifacts, no phase verifiers, and no promise-time self-grade.
 Completion authority is exactly three external reads (PR + CI + reviews) plus a
-budget ceiling, decided by `fno-agent loop-check`.
+budget ceiling, decided by `fno agent loop check`.
 
 See `docs/architecture/control-plane-loop.md` for the current model.

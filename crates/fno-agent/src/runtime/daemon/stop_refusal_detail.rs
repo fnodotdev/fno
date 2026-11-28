@@ -91,9 +91,16 @@ pub(crate) fn pane_row_refusal(
     format!(
         "agent {name} is a pane worker; `stop` reaches no pane and would report a \
          stop it did not perform. Kill the pane: \
-         `fno mux pane kill {session}:{pane_id}`. The registry row survives that; \
-         clear it with `fno agent rm {name}`."
+         `{}`. The registry row survives that; \
+         clear it with `fno agent rm {name}`.",
+        pane_kill_command(session, pane_id)
     )
+}
+
+/// The pane kill a refusal prints. The fno crate's twin test feeds it to the
+/// real mux parser.
+pub fn pane_kill_command(session: &str, pane_id: u64) -> String {
+    format!("fno mux pane kill {session}:{pane_id}")
 }
 
 #[cfg(test)]

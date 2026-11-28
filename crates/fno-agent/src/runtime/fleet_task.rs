@@ -13,7 +13,7 @@
 //! this root's duplicate and never closed by this root's reconcile.
 //!
 //! [`run_fleet_task`] is the transport-only arm (`fno-agent fleet-task`,
-//! wired in bin/client.rs): the Python reconcile lanes reach [`reconcile`]
+//! wired in client_cli/mod.rs): the Python reconcile lanes reach [`reconcile`]
 //! through one `command_call`. It registers no client command — the shrink law
 //! allows none.
 

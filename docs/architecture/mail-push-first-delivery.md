@@ -6,14 +6,14 @@ This makes delivery push instead of pull, and closes the matching sender-side ho
 
 ## Two changes, one node
 
-**Receive (push).** The `UserPromptSubmit` hook, `hooks/inject-mail-notify.sh`, gates cheaply (session identity, bus-log stat, binary on PATH, the one load-aware hook budget) and then relays the envelope the native command `fno-agent mail-notify-self --bus-dir <bus> --session <sid>` prints, through fd 3 and byte-for-byte, as `additionalContext`.
+**Receive (push).** The `UserPromptSubmit` hook, `hooks/inject-mail-notify.sh`, gates cheaply (session identity, bus-log stat, binary on PATH, the one load-aware hook budget) and then relays the envelope the native command `fno agent internal mail notify-self --bus-dir <bus> --session <sid>` prints, through fd 3 and byte-for-byte, as `additionalContext`.
 The payload includes each message id and `fno agent mail reply --to <id>` guidance, so the recipient sees the mail without discovering or running a drain command.
 `UserPromptSubmit` already fires every turn, so delivery uses an active boundary that already exists and adds no daemon or poll loop.
 
 **Send (honesty).** The turn-boundary render carries the sent-unclaimed nag again. The first native port dropped it: the cancelled Python run never reached that scan once. The line is back as one scan behind the landed-read budget. An empty outbox returns before any transcript read, so a session that only reads pays nothing for it. `fno agent mail sent [--unclaimed]` prints the same predicate. There is no `mail status` command.
 Before the push boundary existed, `queued (durable)` was the last thing a sender ever heard, so silence read as delivered; the turn-boundary delivery is what closed that, not the nag line.
 
-## `fno-agent mail-notify-self` (native hook-output command)
+## `fno agent internal mail notify-self` (native hook-output command)
 
 The first implementation shelled from the hook to the Python `fno agent mail notify-self`.
 
@@ -34,7 +34,7 @@ There is no notify cursor: `SessionStart` and `UserPromptSubmit` race on the one
 
 A worker busy in one long turn reaches no prompt boundary, so its mail can wait an hour. The Claude `PreToolUse` gate, `hooks/pretool-gate.sh`, lands control mail at the next tool call. With nothing pending, its drain pays two stat calls. Set `inbox.tool_boundary_ordinary = true` and it lands ordinary mail there too. The default is false, so ordinary mail waits for the prompt boundary.
 
-If a control flag exists, or the bus log is newer than the session's stamp (`bus/tool-boundary/<session>.stamp`), the hook runs `fno-agent mail-inject --control-drain`. That check is a bash `-nt` test, so a clean tool call forks nothing. After each pass the command sets the stamp to the bus mtime it read before the scan. A row appended during the scan therefore trips the next call. With the key off, or with a live hold, the command sets the stamp 5 minutes ahead instead. An off session then pays one command run per 5 minutes at most, and it still sees a later key change.
+If a control flag exists, or the bus log is newer than the session's stamp (`bus/tool-boundary/<session>.stamp`), the hook runs `fno agent internal mail inject --control-drain`. That check is a bash `-nt` test, so a clean tool call forks nothing. After each pass the command sets the stamp to the bus mtime it read before the scan. A row appended during the scan therefore trips the next call. With the key off, or with a live hold, the command sets the stamp 5 minutes ahead instead. An off session then pays one command run per 5 minutes at most, and it still sees a later key change.
 
 The ordinary lane uses the same renderer, cursor and transcript dedup as `mail-notify-self`. It writes one `PreToolUse` payload: the bodies go in `additionalContext`, and the person sees one `systemMessage` line, `mail: N message(s) from <senders>`. The cursor moves only after the payload is flushed. A control row that lands in the same pass is not rendered twice. The tool boundary reads a hold without re-arming it, because a tool call is not a prompt. Codex and the other harnesses keep prompt-boundary delivery.
 
@@ -55,7 +55,7 @@ Live injection is a bracketed paste into the recipient's input buffer. For a wor
 The fix is a recipient-level delivery policy, not a heuristic: `delivery_policy: bus-only` on the agents registry row. It is a lane capability with no end. A do-not-disturb hold is a different thing: one record per session in the fno-mail hold store, always with an end. `fno agent mail hold --on|--for|--minutes` sets it, capped at `mail.hold.max_minutes` (default 480).
 
 - **Who sets it:** the session itself, once: `fno agent registry register --delivery-policy bus-only` (in the human-attended session). `--delivery-policy off` clears it. A later flagless re-register preserves the stamp. The re-firing SessionStart hook cannot silently revert the recipient to injectable.
-- **What senders see:** `queued (durable) for <handle> [DND (bus-only): recipient polls the bus at each turn boundary]` on the name, job, and registered-agent lanes. No recovery warning, no send-time escalation. The queue is designed, not stranded, and it drains through this doc's own turn-boundary push (`fno-agent mail-notify-self`).
+- **What senders see:** `queued (durable) for <handle> [DND (bus-only): recipient polls the bus at each turn boundary]` on the name, job, and registered-agent lanes. No recovery warning, no send-time escalation. The queue is designed, not stranded, and it drains through this doc's own turn-boundary push (`fno agent internal mail notify-self`).
 - **What never happens:** a prompt-line paste, on any lane. The gate lives inside the three shared injectors (`_mail_inject_claude`, `_mail_inject_codex`, `_mux_pane_send` in `cli/src/fno/agents/dispatch.py`). Name, reply, job, project, raw, dispatch, ask, and annotate lanes inherit it rather than remembering to check.
 - **The raw lane:** `--raw` never queues durable, so a raw send to a bus-only recipient refuses non-zero (`refused: ... is DND (delivery-policy bus-only)`). `--check` answers `not-injectable` naming the policy.
 - **The naming rule:** bus-only is a DELIVERY-POLICY fact, never a liveness verdict. A bus-only session can be alive and mid-turn. It just belongs on the bus. This is the same distinction that renamed `NOT_INJECTABLE` off "not-live" (see `mail_inject.rs`).

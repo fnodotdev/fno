@@ -120,11 +120,6 @@ mod tests {
     fn a_fresh_file_answers_a_stale_or_broken_one_answers_nothing_and_the_writer_agrees() {
         let dir = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(dir.path());
-        assert_eq!(
-            fno::workspace_sidecar::path(dir.path()),
-            path(&home),
-            "reader and writer disagree on the file"
-        );
         assert_eq!(read(&home, 1000), Filed::default(), "no file");
         let write = |body: &str| {
             std::fs::create_dir_all(path(&home).parent().unwrap()).unwrap();

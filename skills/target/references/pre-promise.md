@@ -2,9 +2,9 @@
 
 **Load when:** the pipeline appears done and target is preparing to emit `<promise>`.
 
-The mechanical session side-effects (the ledger session-record, plan stamp/graduate, and the end-of-session handoff artifact) are NO LONGER part of this sequence. They re-home into `fno-agent finalize`, which the stop-hook shim runs on the terminal-allow boundary so they fire in EVERY mode (attended, autonomous, megawalk worker) even when the agent's context compacted before reaching pre-promise (control-plane step 6). You do not run cost calculation, ledger writes, plan stamping, or handoff generation by hand anymore.
+The mechanical session side-effects (the ledger session-record, plan stamp/graduate, and the end-of-session handoff artifact) are NO LONGER part of this sequence. They re-home into `fno agent loop finalize`, which the stop-hook shim runs on the terminal-allow boundary so they fire in EVERY mode (attended, autonomous, megawalk worker) even when the agent's context compacted before reaching pre-promise (control-plane step 6). You do not run cost calculation, ledger writes, plan stamping, or handoff generation by hand anymore.
 
-What remains here is the advisory judgment work only the agent can decide (memory pass, deferrals capture), plus the cross-project recap, the pre-promise self-check, and the promise output. None of these gate `<promise>`: completion authority is the three external reads (PR + CI + reviews) plus the budget ceiling, decided by `fno-agent loop-check`. A skipped advisory step never blocks the promise and never re-opens the loop.
+What remains here is the advisory judgment work only the agent can decide (memory pass, deferrals capture), plus the cross-project recap, the pre-promise self-check, and the promise output. None of these gate `<promise>`: completion authority is the three external reads (PR + CI + reviews) plus the budget ceiling, decided by `fno agent loop check`. A skipped advisory step never blocks the promise and never re-opens the loop.
 
 ## Cross-Project Ship Recap (recap-only, dedup against earlier sends)
 
@@ -115,7 +115,7 @@ if [[ -n "${NODE_ID:-}" && "$NODE_ID" != "null" && -n "${PR_NUMBER:-}" ]]; then
 fi
 ```
 
-The loop-check command (`fno-agent loop-check`) will verify the world independently: PR exists for HEAD + CI green + reviewed. A premature promise does not close the loop - it blocks with the failing read named, and the session continues until the world catches up or the backstop fires.
+The loop-check command (`fno agent loop check`) will verify the world independently: PR exists for HEAD + CI green + reviewed. A premature promise does not close the loop - it blocks with the failing read named, and the session continues until the world catches up or the backstop fires.
 
 **Required-bot quota early warning (advisory).** When a review gate would wait on a `config.review` required bot, a cached-quota check surfaces a coming wedge now instead of letting the gate hang silently for hours. Run it just before the promise; it is read-only, fail-open, and never gates:
 
@@ -344,7 +344,7 @@ Output the completion promise when the pipeline is done. Choose the variant that
 <promise>MISSION COMPLETE: all tasks done, tests passing, docs generated, PR #42 merged.</promise>
 
 # outcome: held (checks not green yet; retry when green - there is no queued
-# outcome,: only fno-agent finalize arms GitHub's native queue)
+# outcome,: only fno agent loop finalize arms GitHub's native queue)
 <promise>MISSION COMPLETE: all tasks done, tests passing, docs generated, PR #42 green; merge held for checks.</promise>
 
 # outcome: failed

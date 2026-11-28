@@ -3,7 +3,7 @@
 //! `fno.agents.spawn_defaults._substrate_compatible`). Python keeps bridges:
 //! the refusal strings here are printed
 //! verbatim, so an edit here is the one edit. Reached as payload kind
-//! `compat` on the spawn-overlay command; `bin/client.rs` asks it on the
+//! `compat` on the spawn-overlay command; `client_cli/mod.rs` asks it on the
 //! thread/headless lanes.
 
 use crate::harness::{AsHarness, Harness};

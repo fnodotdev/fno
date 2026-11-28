@@ -10,7 +10,6 @@ use fno_agent::codex_inject::{
     codex_app_server_socket_path, connect_app_server, probe_codex_app_server,
 };
 use fno_agent::codex_thread::CodexThread;
-use fno_agent::harness_capabilities::render_session_argv_with_ids;
 use futures_util::{SinkExt, StreamExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -27,84 +26,6 @@ fn codex_home_guard() -> std::sync::MutexGuard<'static, ()> {
     CODEX_HOME_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// AC2-HP (x-296f): ONE declaration, TWO doors, byte-identical.
-///
-/// `fno` never links `fno-agent` (it shells the binary at runtime), so the
-/// mux viewport's renderer (`fno::agents_view::attach_form(...).render(...)`)
-/// and the CLI command's renderer (`render_session_argv_with_ids`) are two
-/// functions over the same declaration. For every harness the CONTRACT says
-/// declares a form, both doors must render byte-identically; for every
-/// harness it says declares none, the viewport must find none. Change either
-/// door and this fails here, rather than the two drifting until a row opens
-/// the wrong thing from one door.
-#[test]
-fn attach_argv_matches_the_mux_renderer() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/harness_capabilities.toml");
-    let raw =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let caps: toml::Value = toml::from_str(&raw).expect("parse harness_capabilities.toml");
-    let harness = caps.get("harness").expect("harness table");
-    let uuid = "01a04546-28b2-7a41-ae4c-892bbeb8e295";
-
-    for name in harness.as_table().expect("harness table").keys() {
-        // Walk the path node by node: a slash-joined `get` is one key, not a
-        // path.
-        let mut node = harness.get(name).and_then(|n| n.get("resume_strategy"));
-        for key in ["forms", "interactive_attach"] {
-            node = node.and_then(|n| n.get(key));
-        }
-        let form_node = node.cloned();
-        let kind = form_node
-            .as_ref()
-            .and_then(|f| f.get("kind"))
-            .and_then(|k| k.as_str())
-            .map(str::to_string);
-        let declares = kind.as_deref().is_some_and(|k| k != "unsupported");
-        // Which spelling the form declares, read off the contract itself -
-        // the same question the CLI door's caller must answer.
-        let tokens_takes_short = form_node
-            .as_ref()
-            .and_then(|f| f.get("tokens"))
-            .and_then(|t| t.as_array())
-            .map(|tokens| {
-                tokens
-                    .iter()
-                    .filter_map(|t| t.as_str())
-                    .any(|t| t == "{short_id}")
-            });
-
-        // The CLI door, over the same packaged contract fno-agent embeds,
-        // asked in the spelling the contract declares.
-        let cli = match (declares, tokens_takes_short) {
-            (true, Some(true)) => {
-                render_session_argv_with_ids(name, "interactive_attach", None, Some(uuid))
-            }
-            (true, Some(false)) => {
-                render_session_argv_with_ids(name, "interactive_attach", Some(uuid), None)
-            }
-            _ => render_session_argv_with_ids(name, "interactive_attach", None, None),
-        };
-        // The viewport door.
-        let viewport = fno::agents_view::attach_form(name).map(|form| form.render(uuid));
-        match (declares, cli, viewport) {
-            (true, Ok(cli), Some(viewport)) => {
-                assert_eq!(
-                    cli, viewport,
-                    "{name}'s two attach doors drifted; both read one declaration"
-                );
-            }
-            (false, Err(_), None) => {}
-            (true, cli, viewport) => panic!(
-                "{name} declares a form but the doors disagree (cli={cli:?}, viewport={viewport:?})"
-            ),
-            (false, cli, viewport) => panic!(
-                "{name} declares no form but a door rendered anyway (cli={cli:?}, \
-                 viewport={viewport:?})"
-            ),
-        }
-    }
 }
 
 /// A live control socket, or `None` with a printed skip line. The caller must

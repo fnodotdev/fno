@@ -6,8 +6,8 @@
 //! read counts only when it is one absolute path. Anything else reads plain
 //! `--git-common-dir` and joins it to `cwd`.
 //!
-//! Twin of `fno::git_paths` (this crate links `fno` as a dev-dependency only);
-//! `tests/git_paths_twin.rs` pins the two to the same answers.
+//! Twin of `fno::git_paths` (this crate never links `fno`);
+//! `crates/fno/tests/git_paths_twin.rs` pins the two to the same answers.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

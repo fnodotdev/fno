@@ -22,7 +22,7 @@ STATE_DIR="$REPO_ROOT/.fno"
 # <repo>/.fno/target-state.md here sent every worktree session's cancel down
 # the orphan branch. When fno-agent is absent entirely, the checkout path
 # is the honest guess.
-MANIFEST="$(fno-agent state path target-state 2>/dev/null || echo "$STATE_DIR/target-state.md")"
+MANIFEST="$(fno agent internal target state path target-state 2>/dev/null || echo "$STATE_DIR/target-state.md")"
 SENTINEL="$STATE_DIR/.target-cancelled"
 TOMBSTONE="$STATE_DIR/.target-cancelled-final"
 

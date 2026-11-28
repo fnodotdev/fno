@@ -140,7 +140,7 @@ fn select_worktree(tail: &[String]) -> Result<(), i32> {
 }
 
 /// Dispatch one `do pr <subcommand> [tail...]` argv in process. Called from
-/// bin/client.rs's main for argv whose first two words are `do pr`, with
+/// client_cli/mod.rs's main for argv whose first two words are `do pr`, with
 /// `args = argv[2..]`.
 pub fn run(args: &[String]) -> i32 {
     let Some(sub) = args.first() else {

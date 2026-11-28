@@ -25,12 +25,12 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 
 const_file() { # $@ = action tokens
-  mkdir -p crates/fno-agent/src/bin
+  mkdir -p crates/fno-agent/src/client_cli
   {
     echo 'const ALL_CLIENT_ACTIONS: &[&str] = &['
     for t in "$@"; do echo "    \"$t\","; done
     echo '];'
-  } >crates/fno-agent/src/bin/client.rs
+  } >crates/fno-agent/src/client_cli/mod.rs
 }
 
 # fresh: a new origin whose main holds the base const, and a feature branch
@@ -95,9 +95,9 @@ check 'a swap refuses as an addition' 1 'added: keep-x'
 
 # --- a renamed or moved const cannot bypass -------------------------------------
 fresh
-mkdir -p crates/fno-agent/src/bin
-sed 's/const ALL_CLIENT_ACTIONS:/const CLIENT_ACTIONS:/' crates/fno-agent/src/bin/client.rs >tmp.rs
-mv tmp.rs crates/fno-agent/src/bin/client.rs
+mkdir -p crates/fno-agent/src/client_cli
+sed 's/const ALL_CLIENT_ACTIONS:/const CLIENT_ACTIONS:/' crates/fno-agent/src/client_cli/mod.rs >tmp.rs
+mv tmp.rs crates/fno-agent/src/client_cli/mod.rs
 commit
 check 'a renamed const in head refuses' 2 'head side lost const ALL_CLIENT_ACTIONS'
 

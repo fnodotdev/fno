@@ -92,7 +92,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `capture-plan-mode.sh` | Claude PostToolUse (`ExitPlanMode`) | Saves the approved native plan-mode artifact. |
 | `target-subagent-guard.sh` | Claude and Codex SubagentStart and SubagentStop | Checks the target's subagent lifecycle contract. |
 | `codex-review-findings.sh` | Codex Stop | Surfaces unaddressed Codex review findings. |
-| `save-session.sh` | Claude and Codex PreCompact; Claude SessionEnd | Hands the transcript save to a detached `fno-agent hook save-session` child and exits at once. |
+| `save-session.sh` | Claude and Codex PreCompact; Claude SessionEnd | Hands the transcript save to a detached `fno agent internal harness hook save-session` child and exits at once. |
 | `precompact-canon-doc.sh` | Claude PreCompact; Codex PreCompact with `FNO_PLATFORM=codex` | Writes the canonical context handoff before compaction. |
 | `worktree-setup.sh` | Claude WorktreeCreate | Creates and prepares a managed worktree. |
 | `worktree-remove.sh` | Claude WorktreeRemove | Removes a managed worktree using its lifecycle contract. |

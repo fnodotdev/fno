@@ -2,7 +2,7 @@
 
 ## Is this page for you?
 
-You run or debug the stop-hook decision command (`fno-agent loop-check`): why a session refused to stop, or stopped too early. This document covers the command that runs INSIDE a session. Misreading it sends you patching session state files that nothing reads. The hook reads the world and holds no state.
+You run or debug the stop-hook decision command (`fno agent loop check`): why a session refused to stop, or stopped too early. This document covers the command that runs INSIDE a session. Misreading it sends you patching session state files that nothing reads. The hook reads the world and holds no state.
 
 Not for: the driver loop that dispatches sessions from outside. See [unified-loop.md](unified-loop.md) (step 5). The target driver is live today. The megawalk and megatron arms were removed.
 
@@ -95,7 +95,7 @@ Three layers of bash control-plane machinery were removed:
 | `fno gate` CLI surface | ~1460 | `cli/src/fno/gates/` package + both `gate_reality_map.yaml` copies; `fno gate ...` now exits unknown-command |
 | Phase verifiers | ~900 | `skills/target/scripts/verifiers/verify-{phase}.sh` + orchestrator (11 files) |
 
-Total deleted: ~9935 LOC. Replaced by: `fno-agent loop-check` Rust command (~1830 LOC including unit tests) + 118-line bash shim.
+Total deleted: ~9935 LOC. Replaced by: `fno agent loop check` Rust command (~1830 LOC including unit tests) + 118-line bash shim.
 
 ## The shim (`hooks/target-stop-hook.sh`)
 
@@ -116,12 +116,12 @@ The shim sources NO `scripts/lib/*.sh` files. Its only writes: the `loop_check_b
 
 A sandboxed worker has no host state inside, so its `hook stop` forwards the final message as a loop stop op. The host exports the container, then runs this same decision once with `hook stop --sandbox <id>` on the bound worktree. Three inputs change under that sandbox origin. The HEAD and tree reads take `refs/sandbox/<id>/head` and the export's dirty reading. The correction gate is skipped, because the sandbox transcript's user turns are forgeable. The self-review floor is off, because a sandbox has no attest op. `review_required` stays true. A green PR with no outside review ends `DoneUnreviewed`, never `DonePRGreen`, and auto-merge never arms. Done probes run inside the container, and one that needs host state blocks by name. The decision's exit and output return to the worker unchanged ([sandbox host](sandbox-host.md#stop)).
 
-## The command (`fno-agent loop-check`)
+## The command (`fno agent loop check`)
 
 CLI contract:
 
 ```bash
-fno-agent loop-check \
+fno agent loop check \
   --state <target-state.md> \
   --transcript <transcript.jsonl> \
   --cwd <project-root> \
@@ -341,16 +341,16 @@ What landed here is the part that is already Rust.
 - **Step 5 group 1**: `run-target-loop.sh` replaced by the Rust loop runtime + target driver + 74-line exec shim. See [unified-loop.md](unified-loop.md).
 - **Step 5 group 2**: megawalk driver added - `MegawalkQueue` / `MegawalkDispatcher` + deletion of the Python walker (~4135 LOC). See [unified-loop.md](unified-loop.md) "The megawalk driver" section.
 - **Step 5 group 3**: megatron driver - `MegatronQueue` over fleet projects, each walked as a megawalk one altitude down; the Python commander poll loop deleted; batch-queue deprecated; the exit-12 `fno loop` stub removed. See [unified-loop.md](unified-loop.md) "The megatron driver" section.
-- **Step 6**: side-effect re-homing - the final step. The mechanical side-effects (ledger session-record, plan stamp/graduate, handoff artifact) move OUT of the skill's pre-promise bash into a new `fno-agent finalize` writer the shim invokes on a terminal-allow decision, so they fire in every mode even when the agent compacted before pre-promise. Goal-verification is deleted (intent rides the CI read), and browser/memory/deferrals/docs are demoted to advisory run-and-log. `config.gates.strict` retires; `config.unattended.enabled` survives as the mode discriminator. See "The finalize writer" below.
+- **Step 6**: side-effect re-homing - the final step. The mechanical side-effects (ledger session-record, plan stamp/graduate, handoff artifact) move OUT of the skill's pre-promise bash into a new `fno agent loop finalize` writer the shim invokes on a terminal-allow decision, so they fire in every mode even when the agent compacted before pre-promise. Goal-verification is deleted (intent rides the CI read), and browser/memory/deferrals/docs are demoted to advisory run-and-log. `config.gates.strict` retires; `config.unattended.enabled` survives as the mode discriminator. See "The finalize writer" below.
 
 ## The finalize writer (step 6)
 
-`loop-check` remains a decision command for legacy paths. The generic-delivery branch performs one durability write before returning the `DoneDelivery` decision: it appends the strict session-bound selected verdict that finalize must consume. `fno-agent finalize` is the separate writer the shim runs after any terminal-allow decision (a non-null `termination_reason`):
+`loop-check` remains a decision command for legacy paths. The generic-delivery branch performs one durability write before returning the `DoneDelivery` decision: it appends the strict session-bound selected verdict that finalize must consume. `fno agent loop finalize` is the separate writer the shim runs after any terminal-allow decision (a non-null `termination_reason`):
 
 ```
-decision = fno-agent loop-check ...        # pure read-only, unchanged
+decision = fno agent loop check ...        # pure read-only, unchanged
 if decision.allow AND decision.is_terminal:
-    fno-agent finalize --reason <termination_reason>   # writer
+    fno agent loop finalize --reason <termination_reason>   # writer
 ```
 
 It splits into two trigger classes:

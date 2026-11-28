@@ -527,7 +527,7 @@ fn should_close(batch: Option<&Value>, next_node: Option<&Value>) -> (bool, Stri
 
 /// Fetch a node dict through the native get door, or None on any failure.
 fn get_node(node_id: &str) -> Option<Value> {
-    let out = std::process::Command::new(std::env::current_exe().ok()?)
+    let out = std::process::Command::new(crate::client_exe::current().ok()?)
         .args(["backlog", "get", node_id])
         .output()
         .ok()?;
@@ -544,7 +544,7 @@ fn get_node(node_id: &str) -> Option<Value> {
 /// `mission` scopes the peek to the same candidate set the daemon dispatches.
 fn peek_next(project: Option<&str>, mission: Option<&str>) -> Result<Option<Value>, String> {
     let mut cmd = std::process::Command::new(
-        std::env::current_exe()
+        crate::client_exe::current()
             .map_err(|_| "fno backlog next failed: no current binary".to_string())?,
     );
     cmd.args(["backlog", "next"]);
@@ -1116,7 +1116,7 @@ fn ship_batch(domain: &str, base: &str, title: Option<&str>, root: &Path) -> Shi
             };
         }
         // The duplicate guard rides the native pr-create check-only door.
-        let dup = std::process::Command::new(std::env::current_exe().unwrap_or_default())
+        let dup = std::process::Command::new(crate::client_exe::current().unwrap_or_default())
             .args([
                 "pr-create",
                 "--check-only",

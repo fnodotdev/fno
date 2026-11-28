@@ -96,7 +96,7 @@ EOF
 # expansion). The closure trailer and the reviewed-at line are appended later,
 # at the create step, since they matter only for a real PR.
 printf '%s\n' "$BODY" > .fno/pr-body.md
-if ! TEST_DELTA=$(fno-agent test-delta --base "$BASE"); then
+if ! TEST_DELTA=$(fno agent internal target test-delta --base "$BASE"); then
   echo "test-delta refused: the delta read failed or net test declarations exceed the repo's configured cap ([test] max_net_new in .fno/config.toml; unset = no cap); see the command's table above, then rerun" >&2
   cat .fno/pr-title.txt .fno/pr-body.md
   echo "RESULT: BLOCKED step=test-delta reason=test cap exceeded or delta read failed draft=.fno/pr-body.md"
@@ -108,7 +108,7 @@ fi
 } >> .fno/pr-body.md
 ```
 
-The test-delta output ends with the owner census. A branch that changed production files but neither cut a test declaration nor touched the owner test files prints `Owner tests unaudited: <files>`. That line is an obligation, not an audit. Before the PR opens, run `/fno:test-audit` prune mode over the named owner files. Then land cuts and regenerate the census with a fresh `fno-agent test-delta --base "$BASE"`. Or replace the line with the authored form `Audited owners: <file> (no cut: <why each owner survives the value bar>)`. An `Audited owners:` line already present means the diff itself carries the audit evidence. pr create refuses (exit 5) a code PR whose body has neither a cut nor the line.
+The test-delta output ends with the owner census. A branch that changed production files but neither cut a test declaration nor touched the owner test files prints `Owner tests unaudited: <files>`. That line is an obligation, not an audit. Before the PR opens, run `/fno:test-audit` prune mode over the named owner files. Then land cuts and regenerate the census with a fresh `fno agent internal target test-delta --base "$BASE"`. Or replace the line with the authored form `Audited owners: <file> (no cut: <why each owner survives the value bar>)`. An `Audited owners:` line already present means the diff itself carries the audit evidence. pr create refuses (exit 5) a code PR whose body has neither a cut nor the line.
 
 `.fno/pr-title.txt` and `.fno/pr-body.md` are the draft of record. Every later step reuses them.
 
@@ -314,7 +314,7 @@ BODY="$(cat .fno/pr-body.md)"
 # a PR that arrives unreviewed opens with no Review section at all - the merge
 # gate reads the journal, never this line. Idempotent like the trailer: a
 # re-run over a body already carrying `## Review` adds no second one.
-REVIEW_LINE="$(fno-agent review-summary \
+REVIEW_LINE="$(fno agent internal pr review-summary \
   --branch "$(git rev-parse --abbrev-ref HEAD)" \
   --head "$(git rev-parse HEAD)" 2>/dev/null || true)"
 if [[ -n "$REVIEW_LINE" && "$BODY" != *"## Review"* ]]; then
@@ -339,7 +339,7 @@ printf '%s\n' "$BODY" > .fno/pr-body.md
 # The body-only CI guards are pure functions of the body, title and branch,
 # so run them here, before the PR exists: a body failure found in CI costs a
 # full workflow round and is indistinguishable from a code failure.
-fno-agent pr-body-check --body-file .fno/pr-body.md --title "$TITLE" --base "$BODY_BASE"; RC=$?
+fno agent internal pr body-check --body-file .fno/pr-body.md --title "$TITLE" --base "$BODY_BASE"; RC=$?
 if [[ $RC -eq 1 ]]; then
   echo "fail: PR body: a CI guard refuses this PR; follow the guard's own fix text above, then rerun the check" >&2
   exit 1
@@ -411,7 +411,7 @@ if [[ -n "${PR_NUMBER:-}" ]]; then
 fi
 ```
 
-This is the *fast path* only: it engages `in_review` mid-session, before the next dispatch selection. `fno-agent finalize` re-runs the same link at every terminal loop decision as a deterministic backstop (`stamp_node_pr` in crates/fno-agent/src/gate/finalize.rs). A skipped step here still gets stamped at session end. Idempotent.
+This is the *fast path* only: it engages `in_review` mid-session, before the next dispatch selection. `fno agent loop finalize` re-runs the same link at every terminal loop decision as a deterministic backstop (`stamp_node_pr` in crates/fno-agent/src/gate/finalize.rs). A skipped step here still gets stamped at session end. Idempotent.
 
 ### 10. Report the result (RESULT contract)
 
@@ -452,7 +452,7 @@ Derive from commits:
 # The body must carry the exact closure trailer when the branch names a node,
 # or check-pr-node-closure reds the PR. Compose it into a file (see the
 # create step above) rather than passing a bare --body.
-fno-agent pr-body-check --body-file .fno/pr-body.md --title "title" --base "$BODY_BASE"
+fno agent internal pr body-check --body-file .fno/pr-body.md --title "title" --base "$BODY_BASE"
 fno do pr create --title "title" --body-file .fno/pr-body.md
 ```
 

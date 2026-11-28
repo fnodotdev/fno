@@ -7,7 +7,7 @@ One fresh-context session reads a track, decides the next wave or two, writes th
 
 Pending work once let the session exit immediately. Setting `config.lead.enabled` now makes `fno agent hq promote` or `fno agent spawn --promote` arm the scope manifest.
 
-The `fno-agent loop-check --driver lead` loop holds the session while `fno inbox board` lists work to shrink. A bare call uses the role manifest. `--state <path>` reads outside it.
+The `fno agent loop check --driver lead` loop holds the session while `fno inbox board` lists work to shrink. A bare call uses the role manifest. `--state <path>` reads outside it.
 
 Exit requires a clean board. This limits departure but does not supervise the tail. The change follows an incident: a lead filed eight nodes, dispatched none, and sat idle for an hour with a full board.
 
@@ -195,7 +195,7 @@ Both "work", but nobody checks their voicemail.
 
 The direct form: `fno agent mail send <session-id> "<msg>"` - the recipient's FULL session id, the same id that keys resume/attach/peek.
 The bare 8-hex prefix is a display handle, and under UUIDv7 minute-siblings share one, so the CLI refuses an ambiguous short form rather than guess. The session's slug also resolves. The retired `<harness>-<short-id>` form (`claude-<short-id>`, ...) does NOT: it is refused, with the bare id named in the error. Nothing generates that form any more, so a caller still producing one is a bug to fix at the source rather than something to translate silently.
-Every session prints its own handle in its startup header; find a peer's with `fno agent internal discovered-json` or `fno agent fleet top`.
+Every session prints its own handle in its startup header; find a peer's with `fno agent internal session discovered-json` or `fno agent fleet top`.
 Add `--from-self` to stamp your own reply handle so the answer comes back to you, and do not trust a sender's advertised `from-name` as an address - it can be stale.
 
 The fallbacks, and why they rank below. `fno agent mail send <session-id>` reaches a registered agent. `--to-project <X>` is anycast to the one live peer on that project. With no live peer it exits 16 and writes nothing. A durable queue is still not a live delivery.
@@ -499,10 +499,10 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 ### Monitor: report first, sweep as backstop
 
 - **Primary signal is the teammate's report mail** (push). The minion clause makes a teammate project its own boundaries - question, block, PR, verdict - so you are woken by events, not hunting.
-- **Backstop sweep at boundaries you can name, never on a repeating clock.** A poll costs a context re-read every pass; `fno agent fleet top` + `peek` on quiet panes, findings landed as node notes. `fno-agent needs --json` is the complementary loop-wedge signal, never a pane-completion report.
-- **Never end a turn with a live teammate and no armed wake.** Arm one bounded wake per live teammate you have not yet reconciled: `fno-agent wait` for one, one `fno-agent subscribe` stream for several. Always `--state done`, never `idle`; a `--state blocked` wait never fires (the push leg covers blocks). Launch it harness-tracked, never with a trailing `&`, and never hand-roll a timed loop - the decoded doctrine, the reconciliation rule, and the specimens: [workflow-routes.md](workflow-routes.md).
+- **Backstop sweep at boundaries you can name, never on a repeating clock.** A poll costs a context re-read every pass; `fno agent fleet top` + `peek` on quiet panes, findings landed as node notes. `fno agent fleet needs --json` is the complementary loop-wedge signal, never a pane-completion report.
+- **Never end a turn with a live teammate and no armed wake.** Arm one bounded wake per live teammate you have not yet reconciled: `fno agent session wait` for one, one `fno agent registry subscribe` stream for several. Always `--state done`, never `idle`; a `--state blocked` wait never fires (the push leg covers blocks). Launch it harness-tracked, never with a trailing `&`, and never hand-roll a timed loop - the decoded doctrine, the reconciliation rule, and the specimens: [workflow-routes.md](workflow-routes.md).
 
-- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle for liveness and to confirm the report did not already land. A busy-but-alive recipient must not get a second copy. On a confirmed miss, re-resolve it from `fno agent internal discovered-json` / `top`. Re-send it before you process the next report. Never park a miss as a "check later" note.
+- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle for liveness and to confirm the report did not already land. A busy-but-alive recipient must not get a second copy. On a confirmed miss, re-resolve it from `fno agent internal session discovered-json` / `top`. Re-send it before you process the next report. Never park a miss as a "check later" note.
 - **Silence is not death.** Before declaring a teammate dead, `peek` the pane and check its node claim and open PRs - a worker once had shipped a PR unregistered, and a reflex respawn built a duplicate. Respawn only from the last graph-encoded artifact, or `<help>` if that artifact is missing.
 
 ### Reconcile on every report, then encode
@@ -573,6 +573,6 @@ One hop from [On titling](../SKILL.md#on-titling).
 
 ## StepDown, the succession steps
 
-One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agent intel --windows --session <predecessor session> --write --read` for every harness.
+One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno agent internal evals intel --windows --session <predecessor session> --write --read` for every harness.
 
 The successor reads the predecessor's SOUL pick with `fno agent hq chart style list` (or from the handoff brief) and can pick again. Lessons from a term go into the canon doc at the retro, never into a SOUL. The SOUL is the style the role plays. The canon is what the territory learned.

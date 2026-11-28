@@ -76,7 +76,7 @@ The `do` lifecycle row is no longer stamped here. The session writes it upon rel
 
 This is the third code choke point. Ship writes `pr_number`. Blueprint writes `plan_path`. Claim release writes `do`. If a direct CLI call or non-Claude worker skips this skill, the row still records.
 
-A session that stops before finishing keeps the claim and has no `do` window yet. This includes an open PR or more work ahead. `fno-agent finalize` remains the ship-terminal backstop.
+A session that stops before finishing keeps the claim and has no `do` window yet. This includes an open PR or more work ahead. `fno agent loop finalize` remains the ship-terminal backstop.
 
 ## Step 2: flat mode (lightweight single-session, default)
 

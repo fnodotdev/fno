@@ -1,6 +1,6 @@
 //! The `fno agent list` table path: fetch the host-local discovered lane,
 //! filter it, and draw the registry and discovered tables. Verbatim move out
-//! of bin/client.rs for the file budget (the same shape as client_render.rs,
+//! of client_cli/mod.rs for the file budget (the same shape as client_render.rs,
 //! which banked the first slice of that shrink). No behavior change.
 
 use crate::client_render::{render_checked, truncate_cell, LAST_MESSAGE_WIDTH};

@@ -42,14 +42,14 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 
 | Site | Verdict | Reason |
 |---|---|---|
-| `bin/client.rs:581` | conforming | process-replacement delegation of the spawn call, whose decision Python owns |
-| `bin/client.rs:602` | conforming | process-replacement delegation so account resolution stays one implementation |
-| `bin/client.rs:2889` | conforming | session discovery read through its Python owner, fail-open on a miss |
-| `bin/client.rs:1346 place_thread_portal_after_spawn` | conforming | post-spawn portal placement through the same mux thread door as `attach.rs:28`; the server owns the thread pane, the fno crate is dev-only here, and a native ThreadPane client would carry a second PROTO_VERSION pin |
-| `bin/client.rs:2164 exec_python_front` | conforming | process-replacement delegation of the spawn call to the Python front door, whose decision Python owns; the account arm calls it only when the seam did not stamp the requested account, and the route arm only for a routed one-shot or a route with an account; the keeper-thread arm names its own refusal and never crosses (the keeper rows route to `keeper_spawn.rs`) |
+| `client_cli/mod.rs:581` | conforming | process-replacement delegation of the spawn call, whose decision Python owns |
+| `client_cli/mod.rs:602` | conforming | process-replacement delegation so account resolution stays one implementation |
+| `client_cli/mod.rs:2889` | conforming | session discovery read through its Python owner, fail-open on a miss |
+| `client_cli/mod.rs:1346 place_thread_portal_after_spawn` | conforming | post-spawn portal placement through the same mux thread door as `attach.rs:28`; the server owns the thread pane, the fno crate is dev-only here, and a native ThreadPane client would carry a second PROTO_VERSION pin |
+| `client_cli/mod.rs:2164 exec_python_front` | conforming | process-replacement delegation of the spawn call to the Python front door, whose decision Python owns; the account arm calls it only when the seam did not stamp the requested account, and the route arm only for a routed one-shot or a route with an account; the keeper-thread arm names its own refusal and never crosses (the keeper rows route to `keeper_spawn.rs`) |
 | `pane_spawn::run_pane_spawn` | conforming | the codex pane arm answers its own spawn, carrying the decision's whole fact set (lease, argv, bind wait, seed, row, receipt) so a pane seat pays no crossing; the Python pane leg stays the python-mode twin and the arms answer every explicit-pane shape, so no decision is split across the boundary |
-| `bin/client.rs:2433 run_mux_sweep` | conforming | the reap sweep executes through the command that owns the buckets and guards |
-| `bin/client.rs:3819 discovered-session read` | conforming | session discovery read through its Python owner, fail-open on a miss |
+| `client_cli/mod.rs:2433 run_mux_sweep` | conforming | the reap sweep executes through the command that owns the buckets and guards |
+| `client_cli/mod.rs:3819 discovered-session read` | conforming | session discovery read through its Python owner, fail-open on a miss |
 | `claude_ask.rs:139` | conforming | transcript truth probe, single implementation kept in Python on purpose |
 | `claude_ask.rs:545` | conforming | batch spelling of the same probe, one interpreter for N handles |
 | `client_commands.rs:1287` | conforming | ask-token mint through the Python resolver, one implementation |
@@ -105,9 +105,9 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `server.rs:10818` | conforming | touch telemetry through the event emit path |
 | `server.rs:10912` | conforming | pane counters through the same emit path |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
-| `doctor/report/ops.rs run_session_cost` | conforming | session cost through `fno-agent context-run --session-cost --json`, one answer per spawn |
+| `doctor/report/ops.rs run_session_cost` | conforming | session cost through `fno agent internal session context-run --session-cost --json`, one answer per spawn |
 | `client/extensions.rs fno_door` | conforming | the Extensions tab reads and switches packs through `fno config plugins`, the plugins owner |
-| `doctor/mod.rs context_audit_run` | conforming | the context census through `fno-agent context-run --audit`, all its inputs in one spawn |
+| `doctor/mod.rs context_audit_run` | conforming | the context census through `fno agent internal session context-run --audit`, all its inputs in one spawn |
 
 The interpreter direction is retired. The doctor rows that once exec'd the wheel's interpreter now exec `fno-agent`, and the installed-package probe is gone with the wheel.
 

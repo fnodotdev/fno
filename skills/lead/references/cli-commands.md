@@ -39,7 +39,7 @@ Commands that exist only for a titled session. One lead ran a whole territory wi
 | You are trying to | Command | The gotcha |
 |---|---|---|
 | Run one check-in beat | `fno agent hq checkin` | Runs the whole check-in body and emits the `lead_checkin` journal row itself. The row carries the numbers it just printed. A failed reader gets its own `READER FAILED` line and the beat continues. `--change "<sentence>"` records your finding on the same row. `--no-emit` prints and diffs without appending. |
-| Join nodes to PRs, sessions and workers | `fno agent hq -n` | Returns the node, PR, session and worker join in one call. Replaces a hand-built join over `fno do pr list`, `fno agent internal registry-json` and a raw graph read. Implies JSON output. |
+| Join nodes to PRs, sessions and workers | `fno agent hq -n` | Returns the node, PR, session and worker join in one call. Replaces a hand-built join over `fno do pr list`, `fno agent internal registry json` and a raw graph read. Implies JSON output. |
 | Count what is left to deliver | `fno agent hq chart drain <scope>` | Answers delivery, not assignment: undelivered as one number. An unreadable graph exits non-zero on purpose, so the count can never read as drained. |
 | Leave an answer for the next lead | `fno agent hq faq add` | The only role command aimed at a successor. Refuses without `--exit`, the change that retires the entry. |
 | Read the lead back | `fno agent hq history` | This role's recorded check-ins, newest first, verbatim. Legacy alias rows count as rejected evidence and are never silently accepted. It never generates a summary. |
@@ -118,7 +118,7 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 ## Delivery to a parked or live session
 
-`fno-agent resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agent session resume <full-harness-session-id> --cwd <existing-checkout>`.
+`fno agent session resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agent session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
 A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands.
 
@@ -170,11 +170,11 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 | `fno do pr status <n>` | `ready` means green AND no counted unresolved optional finding (an unreadable count warns and holds nothing). Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
 | `fno do pr merge <n>` | Gates on the `review_coverage` event read from local `events.jsonl`. Never reads threads. |
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
-| `fno-agent review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
+| `fno agent loop review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
 
 ## Merge holds
 
-A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agent authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agent authorized-merge`.
+A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno agent internal pr authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno agent internal pr authorized-merge`.
 
 Read decision D3173 before setting any hold (the ruling and its surfaces: docs/architecture/pr-status-verdict.md). Queued CI never reads ready:false: pending checks are a warning, never a blocker. A hold set to block a merge on still-running checks contradicts the ruling. A hold states a real condition with a `release_when` proof.
 

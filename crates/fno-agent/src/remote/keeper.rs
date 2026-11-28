@@ -136,7 +136,7 @@ pub fn tailscale_serve_line(port: u16) -> String {
 
 /// Write the plist and load it. Returns the receipt line, or the failure.
 pub fn install(home: &AgentsHome, port: u16) -> Result<String, KeeperError> {
-    let exe = std::env::current_exe().map_err(KeeperError::Exe)?;
+    let exe = crate::client_exe::current().map_err(KeeperError::Exe)?;
     let dir = launch_agents_dir();
     std::fs::create_dir_all(&dir).map_err(io_at(&dir))?;
     let remote = home.remote_dir();

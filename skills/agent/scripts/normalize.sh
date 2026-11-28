@@ -374,7 +374,7 @@ set +f
 # describe-it fuzzy tier (tier 4) is whatever is left - free prose - and lives
 # entirely in the SKILL body behind a confirm.
 # Family membership is answered by the owner's one
-# shell-readable surface, `fno agent internal target-family` - a pure, side-effect-free
+# shell-readable surface, `fno agent internal target family` - a pure, side-effect-free
 # command (no daemon, no config read) whose answer comes from the canonical
 # merge_posture table. This file carries NO hand-copied spelling list: the
 # old regex mirror and its Python parity test are gone (writing the parity
@@ -393,12 +393,12 @@ _normalize_is_family() {
   if [[ -n "${FAMILY_RESOLVER:-}" ]]; then
     _answer="$("$FAMILY_RESOLVER" "$1" 2>/dev/null </dev/null)" || _answer=""
   else
-    _answer="$(fno agent internal target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
+    _answer="$(fno agent internal target family --message "$1" 2>/dev/null </dev/null)" || _answer=""
   fi
   case "$_answer" in
     family) return 0 ;;
     other)  return 1 ;;
-    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agent internal target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
+    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agent internal target family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
   esac
 }
 

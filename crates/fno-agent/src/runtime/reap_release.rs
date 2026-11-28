@@ -88,7 +88,7 @@ pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
 }
 
 /// The `--release <row>` arm, parsed beside the sweep. Moved out of
-/// `bin/client.rs` byte for byte (file budget: client.rs is shrink-only):
+/// `client_cli/mod.rs` byte for byte (file budget: client.rs is shrink-only):
 /// same refusals, same exit codes, `None` when no `--release` is present.
 pub fn from_args(rest: &[String]) -> Option<i32> {
     let pos = rest.iter().position(|a| a == "--release")?;

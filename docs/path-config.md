@@ -125,11 +125,11 @@ The daemon runs the mover at start. You can run it yourself.
 
 | Command | Effect |
 |---------|--------|
-| `fno-agent state migrate` | Dry run. It prints the moves and writes nothing. |
-| `fno-agent state migrate --apply` | Move what is ready. |
-| `fno-agent state migrate --reverse <stamp>` | Dry run of a reverse. |
-| `fno-agent state migrate --reverse <stamp> --apply` | Put back the moves of that stamp and hold those names. |
-| `fno-agent state migrate <name> --apply` | Clear the hold on a name, then run a full pass. |
+| `fno agent internal target state migrate` | Dry run. It prints the moves and writes nothing. |
+| `fno agent internal target state migrate --apply` | Move what is ready. |
+| `fno agent internal target state migrate --reverse <stamp>` | Dry run of a reverse. |
+| `fno agent internal target state migrate --reverse <stamp> --apply` | Put back the moves of that stamp and hold those names. |
+| `fno agent internal target state migrate <name> --apply` | Clear the hold on a name, then run a full pass. |
 
 Each run that changes a file gets a stamp under `~/.fno/backups/state-root-migration/`. Its `manifest.json` lists every step. A reverse reads that list from the last step to the first. It refuses to overwrite a file, and it names both paths. It also refuses a published SQLite store, because you must roll a store back by hand.
 

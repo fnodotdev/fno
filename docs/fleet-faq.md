@@ -40,7 +40,7 @@ The list shrinking is the point. A workaround that survives here for months is a
 
 ## The registry lost rows or names
 
-Restore the newest `~/.fno/agents/registry-snapshots/registry.json.*` and run `fno-agent rename --from-journal` to bring the labels back from the journal. When the newest snapshots collapsed, restore a `pre-shrink.*` pin there instead. Without the snapshots a recovery reads whatever backup is oldest on disk, which is how a month-old copy once replaced 20 live rows.
+Restore the newest `~/.fno/agents/registry-snapshots/registry.json.*` and run `fno agent registry rename --from-journal` to bring the labels back from the journal. When the newest snapshots collapsed, restore a `pre-shrink.*` pin there instead. Without the snapshots a recovery reads whatever backup is oldest on disk, which is how a month-old copy once replaced 20 live rows.
 
 ## A worker looks dead. Is it?
 
@@ -168,7 +168,7 @@ The shapes, each measured:
 
 **A guard that lists a wrong value as legal lets it pass.** A lead wrote this arm for one session. It is not shipped machinery, so do not go looking for the file. That arm read the commit status API and printed `main:pending` every tick. Its guard allowed `success|pending|failure|error` and made anything else UNREADABLE, so a permanently wrong value passed as a legal one. This repo publishes check-runs, not commit statuses, and the status API returns `state` pending with zero statuses forever. Measured directly it read `{"state":"pending","total":0}` while the check-runs API read 21 success and 6 skipped, none failing and none running. Zero statuses is the tell: a ref with no statuses is not pending, it is unmeasured by that API. Every caller of that endpoint found in the tree reads `.statuses[]` rather than the top-level `state`, which is the correct read. The hand-rolled arm was the only thing that got it wrong.
 
-**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno-agent claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the command then gave the ordinary refusal the crash had hidden.
+**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno agent claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the command then gave the ordinary refusal the crash had hidden.
 
 **A peer's zero is still a zero.** A control can also validate the wrong thing. A lead proposed widening a lint's scope to the code tree, calling it free that day. The stated grounds were zero hits repo-wide, with controls passing. Measured before acting, the code tree held thousands of hits across more than a thousand files. Most are synthetic test fixtures, and real ids sit among them. The change turns those files red.
 
@@ -363,7 +363,7 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 **Answer.** The reader can omit the field. A null then means the reader did not select it, not that the row has no value. Read the same fact through a second reader before you act on it.
 
-**Specimen.** `fno agent internal registry-json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agent session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
+**Specimen.** `fno agent internal registry json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agent session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
 
 *Graduates to:* a projection that drops the key for any field it does not select, so a null can only ever mean no value.
 

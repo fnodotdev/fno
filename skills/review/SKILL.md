@@ -31,7 +31,7 @@ This is a **router**, not a monolith. It parses the first argument as a mode, an
 
 ## Review-cap gate
 
-The round budget is `review.max_rounds` (default 2), counted across the whole life of the PR. One reviewed head is one round, pass or fail. Read it with `fno do pr status <n>`. When it reads `rounds_exhausted: true`, the review phase is complete. Request no review and emit no attestation. Decline what you do not fix with a recorded reason, and merge on green CI. Open findings stay in the PR conversation. When it reads null, the gate has no row at this head yet: run `fno-agent review-coverage --cwd . --pr <n>` and read again.
+The round budget is `review.max_rounds` (default 2), counted across the whole life of the PR. One reviewed head is one round, pass or fail. Read it with `fno do pr status <n>`. When it reads `rounds_exhausted: true`, the review phase is complete. Request no review and emit no attestation. Decline what you do not fix with a recorded reason, and merge on green CI. Open findings stay in the PR conversation. When it reads null, the gate has no row at this head yet: run `fno agent loop review-coverage --cwd . --pr <n>` and read again.
 
 A moved head does not by itself owe a round. A rebase whose code delta is unchanged carries the attestation. A fix commit, or a rebase that resolved conflicts, can leave coverage uncovered. Then the stop gate or `fno do pr status` names the owed round, inside the budget. Never copy an earlier verdict onto a new head. An attestation certifies a review that ran, and each new head it lands on spends a round.
 
@@ -159,7 +159,7 @@ The second thing you run after a code review: a different CLASS of evidence, wit
 bash "${SKILL_DIR}/scripts/validate-prove-it.sh" <report-file>
 ```
 
-The validator REFUSES a PASS whose Steps list carries no marked probe. A happy-path replay is not a verification. It also REFUSES a PASS whose `### Claims` section is missing or carries a claim row with no `CMD:`, an unproven claim nobody checked. FAIL, BLOCKED, and SKIP pass through untouched, because they carry no verdict on the change. prove-it is the Done section of `fno:verify-footnotes` in runtime form: a claim with no command is a claim nobody checked. prove-it emits no attestation of its own. A PASS satisfies a declared `done_probe`, a FAIL is a blocking finding, and BLOCKED/SKIP read as unanswered. An ad-hoc report saved under the audited plan's `.artifacts/` gets a reader through `fno-agent prove-it-verdicts`. It notes an open FAIL on the node and holds its close.
+The validator REFUSES a PASS whose Steps list carries no marked probe. A happy-path replay is not a verification. It also REFUSES a PASS whose `### Claims` section is missing or carries a claim row with no `CMD:`, an unproven claim nobody checked. FAIL, BLOCKED, and SKIP pass through untouched, because they carry no verdict on the change. prove-it is the Done section of `fno:verify-footnotes` in runtime form: a claim with no command is a claim nobody checked. prove-it emits no attestation of its own. A PASS satisfies a declared `done_probe`, a FAIL is a blocking finding, and BLOCKED/SKIP read as unanswered. An ad-hoc report saved under the audited plan's `.artifacts/` gets a reader through `fno agent loop prove-it`. It notes an open FAIL on the node and holds its close.
 
 ## Step 2c: cleanup mode (apply-or-skip terminus)
 

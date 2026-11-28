@@ -14,7 +14,7 @@ use std::fs::OpenOptions;
 use std::io::{self, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "client")))]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 
@@ -821,7 +821,7 @@ pub(crate) fn bootstrap_status(
     command.status()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "client")))]
 pub(crate) fn bootstrap_exec(command: &mut std::process::Command) -> io::Error {
     command.exec()
 }

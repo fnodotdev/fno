@@ -76,7 +76,7 @@ Three validation scripts enforce structural and process rules:
 
 | Script | Purpose |
 |--------|---------|
-| `crates/fno-agent/src/backlog/wave_ready.rs` | Wave commands behind `fno-agent wave` |
+| `crates/fno-agent/src/backlog/wave_ready.rs` | Wave commands behind `fno agent internal target wave` |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
 
@@ -114,10 +114,10 @@ bash scripts/lib/test_config.sh
 
 ```bash
 # Print the dispatchable tasks of a plan as JSON
-fno-agent wave ready path/to/plan.md
+fno agent internal target wave ready path/to/plan.md
 
 # Print the dispatchable tasks against a STATE.md
-fno-agent wave ready path/to/plan.md --state path/to/STATE.md
+fno agent internal target wave ready path/to/plan.md --state path/to/STATE.md
 ```
 
 ### Reading a gate's result (assert a positive marker)
@@ -256,7 +256,7 @@ Where `AC<N>` = acceptance criterion number, `HP` = happy path (or `EP` for erro
 
 ## Completion (external truth)
 
-The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno-agent loop-check` command:
+The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno agent loop check` command:
 
 | Read | What it checks |
 |------|----------------|
@@ -423,13 +423,13 @@ The target pipeline runs as a persistent loop until the feature is complete.
 
 **In-session loop:**
 
-- `hooks/target-stop-hook.sh` is a thin read-only shim over `fno-agent loop-check` (the bash detector machinery was deleted in the control-plane collapse)
+- `hooks/target-stop-hook.sh` is a thin read-only shim over `fno agent loop check` (the bash detector machinery was deleted in the control-plane collapse)
 - On a `<promise>`, `loop-check` reads the world (PR + CI + required-bot review); it allows exit only when those reads agree, otherwise it blocks and names the failing read
 - The session manifest is inputs-only and immutable - there is no `status: IN_PROGRESS` boolean for the hook to read
 
 **Cross-session loop:**
 
-- One Rust runtime drives the loop: `fno-agent loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` command is gone too
+- One Rust runtime drives the loop: `fno agent loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` command is gone too
 - The walk stops on a `TerminationReason` event (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted, Aborted) or the iteration ceiling
 
 **External review polling:**

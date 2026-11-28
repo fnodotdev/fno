@@ -15,7 +15,7 @@ The prior cutover that routed codex `ask` to the daemon (Task 4.1, commit c54c6d
 
 ## Architecture
 
-The Rust binary's entry point sequence (`crates/fno-agent/src/bin/client.rs::run`) is:
+The Rust binary's entry point sequence (`crates/fno-agent/src/client_cli/mod.rs::run`) is:
 
 1. Parse the agents-namespace arg list.
 2. Try `maybe_run_claude_ask(home, &params, &name)` — returns `Some(exit_code)` if the target resolves to a claude agent, else `None`.

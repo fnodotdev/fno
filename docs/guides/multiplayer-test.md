@@ -102,7 +102,7 @@ Last, write to home A's store with a plain `sqlite3` shell, which stands in for 
 Remove the `[store]` table on both machines, and restart each daemon. Then copy the primary into a local file:
 
 ```bash
-fno-agent claim export --url http://linux1:18080 --out ~/fno-primary-export.db
+fno agent claim export --url http://linux1:18080 --out ~/fno-primary-export.db
 ```
 
 The export copies what the primary serves, while it is up. If the primary is down, take a cold copy instead: stop the container, then copy the data directory while it is stopped. The copy is complete and consistent, because nothing writes during it.

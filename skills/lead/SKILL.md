@@ -52,7 +52,7 @@ With `--once` the role rules one wave and expires. Run Who runs this and On titl
 
 ## Arm the beat
 
-Read the beat before arming anything: `fno-agent harness-beat` prints `beat: <beat> (<source>)`. The key `agents.<harness>.beat` defaults to `auto`, which reads this harness's capability row. A user sets the key only to override the row. Arm what the line names, and never branch on the harness name:
+Read the beat before arming anything: `fno agent internal harness beat` prints `beat: <beat> (<source>)`. The key `agents.<harness>.beat` defaults to `auto`, which reads this harness's capability row. A user sets the key only to override the row. Arm what the line names, and never branch on the harness name:
 
 - `loop`: inject the native `/loop` as the cheap heartbeat (below).
 - `goal`: use provider-backed goal actions, never raw prompt-line `/goal` or `/loop`. Read effective readiness and require a positive `provider_goal` receipt plus a separate positive `stop` receipt. The verified provider goal is the primary continuation state, and Stop proves a different boundary. Every goal wake runs the check-in body below.

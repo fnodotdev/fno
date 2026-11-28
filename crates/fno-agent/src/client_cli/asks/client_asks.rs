@@ -1,4 +1,4 @@
-//! The client-side `ask` provider hooks, split out of `bin/client.rs` for
+//! The client-side `ask` provider hooks, split out of `client_cli/mod.rs` for
 //! the file budget: same functions, one `mod` line at the entrypoint.
 //! `use super::*` sees the entrypoint's imports, so the bodies moved
 //! verbatim and the call sites did not change.

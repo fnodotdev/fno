@@ -1883,7 +1883,7 @@ pub fn gemini_session_id_from_blob(blob: &str) -> Option<String> {
 }
 
 /// The provider roster: every provider name the Rust side can DISPATCH/host —
-/// the spawn gates in `bin/client.rs` and [`for_name`] ride THIS list (
+/// the spawn gates in `client_cli/mod.rs` and [`for_name`] ride THIS list (
 /// US1: one source of truth, no per-site `matches!` copies).
 ///
 /// grok provider, roster parity like cursor's: the lanes fno dispatches on

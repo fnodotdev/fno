@@ -252,7 +252,7 @@ pub fn html_escape_quote(s: &str) -> String {
 /// with `\n`/`\r`/`\t`/`\\` and non-printable escapes. Used only in error text,
 /// so this targets the common cases the parity tests exercise.
 ///
-/// Public so the client's unresolvable-`ask` exit-2 surface (bin/client.rs) can
+/// Public so the client's unresolvable-`ask` exit-2 surface (client_cli/mod.rs) can
 /// reproduce Python's `{name!r}` in `select_provider`'s error text byte-for-byte.
 pub fn py_repr(s: &str) -> String {
     let use_double = s.contains('\'') && !s.contains('"');

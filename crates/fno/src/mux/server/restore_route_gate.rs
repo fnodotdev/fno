@@ -1,8 +1,8 @@
 //! The workspace-restore gate for a routed codex member: the row's
 //! `route_provider_id` names a route (set, non-empty, not the `openai`
 //! sentinel), so the pane door refuses by name and the member is marked
-//! refused in the restore receipt. `crates/fno` never links fno-agent, so
-//! the routed predicate is spelled a second time here - one small fn, whose
+//! refused in the restore receipt. The app build of `crates/fno` does not
+//! link fno-agent, so the routed predicate is spelled a second time here - one small fn, whose
 //! twin is `codex_route::row_route_identity`. Shared vocabulary, not a
 //! second builder.
 

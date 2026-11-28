@@ -21,7 +21,7 @@ The fragment is one org read behind the board that splices it. A graph mutation 
 
 ## The fold lives in the native binary
 
-`fno-agent org-fold` reads the graph, the claims dir, and the registry. It compiles each role's scope with the rules `lead_board/scope.rs` applies. Workers are named through the same native claim verdicts `claim sweep` uses, so a fold and the claims surface cannot disagree about who holds a node. Python passes the roles `gather_team` already adjudicated and reads the answer back. A fold that cannot run - stale binary, unreadable graph, timeout - marks the role `unresolved` with the reason rather than rendering an empty table.
+`fno agent hq chart fold` reads the graph, the claims dir, and the registry. It compiles each role's scope with the rules `lead_board/scope.rs` applies. Workers are named through the same native claim verdicts `claim sweep` uses, so a fold and the claims surface cannot disagree about who holds a node. Python passes the roles `gather_team` already adjudicated and reads the answer back. A fold that cannot run - stale binary, unreadable graph, timeout - marks the role `unresolved` with the reason rather than rendering an empty table.
 
 The fold resolves its own claims directory. Every key it asks after is a `node:` key. Those route to the global claims root on both the Rust and the Python side. One resolver answers, and no caller passes a path. `--claims-dir` stays as an override for tests.
 

@@ -11,6 +11,6 @@ Two data paths, tried in order:
 1. Status stream (fast-path, opportunistic). The normalized `task_started` / `task_done` / `blocked` / `run_summary` events a worker emits to `events.jsonl`. Cheap and cross-harness. Not shipped by every worker yet, so absent falls through with no error.
 2. Transcript tail (fallback, ships now). Resolve the handle to the harness's on-disk transcript and tail the last N records. Works for every worker today.
 
-The per-harness on-disk shape differs: claude and codex write one JSONL. opencode writes a per-message dir joined against a per-message parts dir. The extensible seam is `record_parser` in `crates/fno-agent/src/runtime/session_truth.rs`, dispatching on `agent`. The command itself is `crates/fno-agent/src/runtime/peek.rs`, behind `fno-agent status --peek`.
+The per-harness on-disk shape differs: claude and codex write one JSONL. opencode writes a per-message dir joined against a per-message parts dir. The extensible seam is `record_parser` in `crates/fno-agent/src/runtime/session_truth.rs`, dispatching on `agent`. The command itself is `crates/fno-agent/src/runtime/peek.rs`, behind `fno agent session status --peek`.
 
 Read-only invariant: peek opens files for read and polls stat for `--follow`. It never writes `events.jsonl`, the peer transcript, the registry, or a mailbox. Observing must not perturb the observed.

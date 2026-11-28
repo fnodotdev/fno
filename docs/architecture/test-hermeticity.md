@@ -28,7 +28,7 @@ A sixth entry on an allowlist facing a surface that size is the same defect with
 
 ## Move 1: deny by default
 
-`crates/fno-agent/src/gate/test_env.rs` owns the surface and two operations over it (`neutralise` and `poison`). `fno-agent test-run env` serves them to the shell and pytest trees.
+`crates/fno-agent/src/gate/test_env.rs` owns the surface and two operations over it (`neutralise` and `poison`). `fno agent audit test-run env` serves them to the shell and pytest trees.
 
 `FNO_*` and `TARGET_*` are swept as **classes**. A 125th `FNO_*` var added to source neutralises without editing the module.
 `TARGET_*` earns the same treatment because a live `/target` session exports `TARGET_INPUT`, `TARGET_PLAN_PATH`, `TARGET_SIZE` and more, so a suite run inside one inherits that session's parameters.
@@ -77,7 +77,7 @@ The same rule covers the operator's screen. The notify dispatch owner (`crates/f
 
 One `neutralise` call there covers all three. No shell mirror and no Rust mirror exist, so none can drift: a guard placed on one of N reachable paths is decorative.
 
-`tests/py/conftest.py` additionally applies the `fno-agent test-run env` answer **at module load**, which covers a developer running a bare `pytest tests/py`. Module load rather than a fixture, because a helper can freeze a path at import time, and a fixture is already too late.
+`tests/py/conftest.py` additionally applies the `fno agent audit test-run env` answer **at module load**, which covers a developer running a bare `pytest tests/py`. Module load rather than a fixture, because a helper can freeze a path at import time, and a fixture is already too late.
 
 ## Move 3: the dirty lane
 
@@ -154,7 +154,7 @@ The fno porcelain follows the same rule. Under `cfg!(test)`, `scrape::fno_bin` a
 
 Two resolvers, not every resolver. `claims::global_claims_root` carries the same `$HOME` fallback and is unfenced, so a bare `cargo test --lib` still creates `$HOME/.fno/claims`. That was measured on 2026-09-07. The poisoned-HOME canary is what catches it, so this page names the gap instead of claiming it closed.
 
-`cfg!(test)` is the stated limit, not an oversight. Integration targets under `crates/fno-agent/tests/` link the lib compiled WITHOUT `cfg(test)`. They get no fence. To them the crate is a dependency, which is the shape production sees. To reach them, the fence must become a runtime check. A runtime check fires in production, where an ambient `$HOME` resolution is the correct answer. So the cargo run door closes it outside the binary instead. On a macOS host every test binary and doctest starts through `scripts/lib/cargo-rustc-wrapper.sh --run`. For each unset root among `FNO_CLAIMS_ROOT`, `FNO_STATE_DIR`, `FNO_AGENT_HOME` and `FNO_SPACES_DIR`, its `fno-agent test-run run-admit` call names a pin in a fresh temp tree. The wrapper exports the pins before it execs the binary. The binary's own children inherit them. A root pinned into the live `~/.fno`, or a claims root at `$HOME`, is refused with exit 86. `FNO_TEST_HERMETIC=0` gets no pins, because it runs against live state on purpose. `FNO_TEST_HERMETIC=1` is a claim. If `HOME` sits under the temp dir, the claim holds and the run gets no pins. The runner lines are macOS only, so a bare `cargo test` on a Linux dev box still gets no pins. CI has no live state to reach.
+`cfg!(test)` is the stated limit, not an oversight. Integration targets under `crates/fno-agent/tests/` link the lib compiled WITHOUT `cfg(test)`. They get no fence. To them the crate is a dependency, which is the shape production sees. To reach them, the fence must become a runtime check. A runtime check fires in production, where an ambient `$HOME` resolution is the correct answer. So the cargo run door closes it outside the binary instead. On a macOS host every test binary and doctest starts through `scripts/lib/cargo-rustc-wrapper.sh --run`. For each unset root among `FNO_CLAIMS_ROOT`, `FNO_STATE_DIR`, `FNO_AGENT_HOME` and `FNO_SPACES_DIR`, its `fno agent audit test-run run-admit` call names a pin in a fresh temp tree. The wrapper exports the pins before it execs the binary. The binary's own children inherit them. A root pinned into the live `~/.fno`, or a claims root at `$HOME`, is refused with exit 86. `FNO_TEST_HERMETIC=0` gets no pins, because it runs against live state on purpose. `FNO_TEST_HERMETIC=1` is a claim. If `HOME` sits under the temp dir, the claim holds and the run gets no pins. The runner lines are macOS only, so a bare `cargo test` on a Linux dev box still gets no pins. CI has no live state to reach.
 
 The rule needs an instrument, and the instrument needs a control. `scripts/ci/check-state-canary.sh` is both.
 

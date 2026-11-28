@@ -63,7 +63,7 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 # Missing or empty means no injection, never a partial one.
 [[ -r "$BRIEF" && -s "$BRIEF" ]] || exit 0
 
-# Read the team from the registry, not from a guess. `fno agent internal registry-json`
+# Read the team from the registry, not from a guess. `fno agent internal registry json`
 # is a daemon-free file read; `fno agent session list` is Rust-routed and would
 # lazy-start the daemon (see hooks/context-nudge.sh for the same choice). This
 # session's row matches session_id OR harness_session_id - the registry stores
@@ -71,10 +71,10 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 command -v fno >/dev/null 2>&1 || exit 0
 command -v jq  >/dev/null 2>&1 || exit 0
 # Keep the exit code, so a broken read never reads silently as "no row".
-AGENTS_JSON="$(fno agent internal registry-json 2>/dev/null)"
+AGENTS_JSON="$(fno agent internal registry json 2>/dev/null)"
 REG_RC=$?
 [[ "$REG_RC" -ne 0 ]] \
-  && echo "lead-postcompact-reinject.sh: fno agent internal registry-json exited $REG_RC; team treated as unknown" >&2
+  && echo "lead-postcompact-reinject.sh: fno agent internal registry json exited $REG_RC; team treated as unknown" >&2
 MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SID" \
     '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
 [[ -n "$MY_ROW" ]] || exit 0

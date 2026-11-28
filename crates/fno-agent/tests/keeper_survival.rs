@@ -5,7 +5,7 @@
 //! the CHILD's pid, and a keeper whose child exits unlinks its socket and
 //! exits. Every assertion names a pid; a survivor count proves nothing.
 
-use fno::pty::KEEPER_PROTOCOL_VERSION;
+use fno_agent::pane_keeper::PROTOCOL_VERSION as KEEPER_PROTOCOL_VERSION;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

@@ -530,12 +530,12 @@ jobs:
             [ "$code" = "404" ] || echo "::warning::crates.io probe for ${name} ${ver} answered ${code}; publishing anyway"
             if [ "$DRY_RUN" = "true" ]; then
               extra=()
-              # A new fno-mail or fno-proto version is not on crates.io until
-              # the upload above lands, so the dry runs of the crates that
-              # depend on them resolve them through the tree. A dry run uploads
-              # nothing; the real publish needs no patch, because cargo waits
-              # for the index after that upload.
-              for sib in fno-mail fno-proto; do
+              # A new fno-mail, fno-proto or fno-agent version is not on
+              # crates.io until the upload above lands, so the dry runs of the
+              # crates that depend on them resolve them through the tree. A dry
+              # run uploads nothing; the real publish needs no patch, because
+              # cargo waits for the index after that upload.
+              for sib in fno-mail fno-proto fno-agent; do
                 # Only what this crate depends on: an unused patch rewrites
                 # the lockfile and the dry run refuses a dirty tree.
                 grep -qE "^${sib} *=" "${dir}/Cargo.toml" || continue

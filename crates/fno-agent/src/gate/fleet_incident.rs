@@ -35,7 +35,7 @@
 //! fresh generation.
 //!
 //! Binary command `fno-agent fleet-incident stop|clear|status|check|claim`, matched
-//! in `bin/client.rs` next to `test-run` (direct dispatch, no daemon RPC).
+//! in `client_cli/mod.rs` next to `test-run` (direct dispatch, no daemon RPC).
 //! The public surface is the thin Python adapter `fno agent incident`,
 //! which relays exit/stdout/stderr and decides nothing.
 
@@ -1967,7 +1967,7 @@ mod tests {
 }
 
 /// The `fleet-incident` client action's routing: the family body that used
-/// to live inline in bin/client.rs. gh-budget and cutover ride this action
+/// to live inline in client_cli/mod.rs. gh-budget and cutover ride this action
 /// as its subcommands (law d-fe66560a allows no new client action), so the
 /// dispatch answers before every gh call even when the daemon is the thing
 /// wedged; the stdin door catches a bare admit.

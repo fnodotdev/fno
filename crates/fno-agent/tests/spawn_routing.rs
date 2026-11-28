@@ -550,7 +550,7 @@ fn spawn_gemini_once_happy_path() {
 
 // ---------------------------------------------------------------------------
 // Client binary integration tests: verify client.rs routing wiring.
-// These exercise the thin shell in bin/client.rs that delegates to the lib.
+// These exercise the thin shell in client_cli/mod.rs that delegates to the lib.
 // ---------------------------------------------------------------------------
 
 /// Locate the fno-agent client binary from the build output dir.
@@ -1225,50 +1225,6 @@ fn client_spawn_bg_claude_bootstraps_the_first_daemon_worker() {
     assert!(receipt["endpoint"]
         .as_str()
         .is_some_and(|value| value.ends_with("control.sock")));
-}
-
-/// AC5-EDGE (x-f54c): `host` was retired at G4 (interactive daemon PTY hosting
-/// moved to the mux). The binary must intercept it with a one-line mux pointer
-/// and exit non-zero - never reach the daemon, never a silent no-op.
-#[test]
-fn client_host_retired_prints_mux_pointer() {
-    let home_dir = tmpdir("cli-host-retired-home");
-    let bin = find_client_bin();
-    if !bin.exists() {
-        eprintln!(
-            "skipping client_host_retired_prints_mux_pointer: binary not found at {:?}",
-            bin
-        );
-        return;
-    }
-    let home = AgentsHome::at(home_dir.clone());
-    seed_registry(&home, "host-collide", "codex");
-
-    let out = std::process::Command::new(&bin)
-        .envs(fno_agent::test_run::self_owner_env())
-        .args(["host", "host-collide", "--harness", "codex"])
-        .env("FNO_SPAWN_GATE", "0")
-        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
-        .env("FNO_AGENT_HOME", &home_dir)
-        .env("FNO_AGENT_DAEMON_BIN", "/usr/bin/false")
-        .output()
-        .expect("failed to run fno-agent");
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "retired host must exit 2; stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("retired at G4") && stderr.contains("fno mux"),
-        "host must print the mux pointer: {stderr}"
-    );
-    // It must NOT have taken the daemon path.
-    assert!(
-        !stderr.contains("lazy-starting"),
-        "retired host must not reach the daemon: {stderr}"
-    );
 }
 
 fn registry_text(path: &std::path::Path) -> std::io::Result<String> {

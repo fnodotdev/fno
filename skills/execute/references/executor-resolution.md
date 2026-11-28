@@ -30,7 +30,7 @@ decision #2). Changing the list requires plan revision. The list is
 implemented once in the native executor-route door
 `crates/fno-agent/src/spawn/executor_route.rs`, which exposes
 `is_frontend_surface_path()` and `any_frontend_surface()` plus the stdin
-CLI (`fno-agent executor-route surface` echoes `impeccable`/`do`;
+CLI (`fno agent internal target executor-route surface` echoes `impeccable`/`do`;
 `--has-ui` echoes `true`/`false`). The `has_ui` changeset inference
 (`scripts/lib/infer-has-ui.sh`) delegates to that door's `--has-ui` mode,
 so executor routing and `has_ui` can never drift from one copy of the

@@ -408,7 +408,7 @@ pub(crate) fn deliver_command_to_session_detached(
 ) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = crate::client_exe::current().map_err(|error| error.to_string())?;
     let args = mail_inject_argv(session, harness, self_send);
     let mut child = Command::new(executable)
         .args(&args)
@@ -439,7 +439,7 @@ pub(crate) fn deliver_command_to_session(
 ) -> Result<(), String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable = crate::client_exe::current().map_err(|error| error.to_string())?;
     let args = mail_inject_argv(session, harness, self_send);
     let mut child = Command::new(executable)
         .args(&args)

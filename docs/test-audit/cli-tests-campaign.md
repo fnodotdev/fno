@@ -15,7 +15,7 @@ The keep rule in [README.md](README.md) decided every cut. A kept test names one
 ## Whole files deleted
 
 - `relay/test_roundtrip.py`: no `cli/src` caller reaches `fno.relay.roundtrip`.
-- `integration/test_claims_cross_impl.py`: `fno.claims.core` runs every claim operation through `fno-agent claim`, so the matrix compared Rust with Rust. Its runner `tests/test-claims-compat-matrix.sh` went with it.
+- `integration/test_claims_cross_impl.py`: `fno.claims.core` runs every claim operation through `fno agent claim`, so the matrix compared Rust with Rust. Its runner `tests/test-claims-compat-matrix.sh` went with it.
 - Six more went whole. Each tested a Python copy with no caller, a retired surface, or a kept twin. They are `integration/test_verify_child_promise.py`, `test_reconcile_session_satisfied.py`, `test_migrate_source_field.py`, `test_graph_hygiene.py`, `test_target_claim_integration.py` and `test_v2_paths.py`.
 - `integration/test_selection_score.py` keeps two of seven. `undispatched.py` still sorts through the Python key, so its vote term keeps a guard.
 - `test_no_stale_deleted_capture_refs.py`: a retired-name guard.

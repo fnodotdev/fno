@@ -150,7 +150,7 @@ pub fn spawn_receipt_identity(proc_stdout: &str) -> String {
 /// missing key stamps null and any read failure degrades to nulls with one
 /// warning.
 pub fn territory_stamp(node_id: &str) -> (Option<Value>, Option<Value>) {
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         eprintln!("advance: WARNING: territory verdict unreadable for {node_id}: no binary");
         return (None, None);
     };
@@ -237,7 +237,7 @@ pub fn node_model(
         "plan_difficulty": Value::Null,
         "provider": provider.unwrap_or("claude"),
     });
-    let Ok(exe) = std::env::current_exe() else {
+    let Ok(exe) = crate::client_exe::current() else {
         return explicit
             .map(str::to_string)
             .or_else(|| task_model.map(str::to_string));
@@ -1123,7 +1123,7 @@ fn reuse_planner(
         "--json",
     ]
     .map(str::to_string);
-    let self_bin = std::env::current_exe()
+    let self_bin = crate::client_exe::current()
         .ok()
         .filter(|exe| exe.file_stem().is_some_and(|stem| stem == "fno-agent"))
         .map(|exe| exe.to_string_lossy().into_owned())

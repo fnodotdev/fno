@@ -5,7 +5,7 @@
 backlog	54	retire the legacy flat spellings once their window ends; split the admin junk drawer
 config	16	nest under typed groups
 do pr	31	nest the pr commands under typed groups
-fno-agent	137	nest the binary commands under typed groups (spawn-remote joins mail-remote/org-remote)
+fno-agent	208	nest the binary commands under typed groups (spawn-remote joins mail-remote/org-remote)
 mux	21	nest under typed groups
 config accounts	15	the native accounts door; nest the window, combos and benchmark reads under one group
 agent loop	13	the consult action is a 13th loop row; fold a retired loop row out when one ages off. The doctor lint counts this group at 12 and orders the row deleted, the crates/fno cap test counts 13 and fails without it; reconcile the two walks before deleting

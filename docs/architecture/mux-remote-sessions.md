@@ -40,7 +40,7 @@ The far door, `fno mux serve --link <key>`, resolves the key on the host: sessio
 | The row | What runs on the host | Effect on the host |
 |---|---|---|
 | Hosted in a pane | A passive client tagged to that one pane | None. It births no workspace and is not counted in the tab's size |
-| A paneless thread | `fno-agent attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
+| A paneless thread | `fno agent session attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
 
 The server gate is `crates/fno/src/mux/server/links.rs`. A tagged client can send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
 
@@ -48,7 +48,7 @@ Keys carry no author on the wire. Both ends are the same person, so the far door
 
 ## A dropped connection
 
-`fno-agent attach --dial <host> <key>` supervises ssh on the pane's own terminal. It copies no bytes. It reads the far door's exit code.
+`fno agent session attach --dial <host> <key>` supervises ssh on the pane's own terminal. It copies no bytes. It reads the far door's exit code.
 
 | Exit | Meaning | The pane does |
 |---|---|---|

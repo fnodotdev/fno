@@ -31,7 +31,7 @@ CLI primitives (`fno <command>`) are atomic, lock-protected, schema-validated. U
 | `fno do phase kill-check` | Plan kill-criteria evaluation. |
 | `fno inbox notify TITLE BODY` | OS notification. |
 | `fno do state` | State files. The target manifest is write-once after init; AGENTS.md carries the one legal exception. |
-| `fno-agent loop run --driver target` | The unified Rust loop; front door `scripts/run-target-loop.sh`. |
+| `fno agent loop run --driver target` | The unified Rust loop; front door `scripts/run-target-loop.sh`. |
 | `fno whoami\|status` | Self-introspection; run when confused after compaction. |
 | `fno agent mail send\|reply\|unread\|ack\|hold` | Cross-project jsonl messaging; live-inject-first, durable fallback. |
 | `fno agent spawn\|ask\|peek\|attach\|resume\|wait` | Cross-CLI agent lifecycle; per-harness support in `docs/harness-command-matrix.md`. |
@@ -112,4 +112,4 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 
 ## fno-app
 
-fno-app is the desktop app, built from `crates/fno-app` and shipped through the desktop release workflow. Drive it with `fno mux app` (open, show, focus, answer, shot, state, close). Capture shots offscreen and tear the app down on every exit path. `fno-agent visual shot-save <node> <png...>` saves each shot into the vault keyed by the head it shows. The name is `{vault}/mux/<node>-<head12>-<view>-<role>-<theme>.png`. The next round reads its before pair from the vault instead of regenerating an old head.
+fno-app is the desktop app, built from `crates/fno-app` and shipped through the desktop release workflow. Drive it with `fno mux app` (open, show, focus, answer, shot, state, close). Capture shots offscreen and tear the app down on every exit path. `fno agent internal target visual shot-save <node> <png...>` saves each shot into the vault keyed by the head it shows. The name is `{vault}/mux/<node>-<head12>-<view>-<role>-<theme>.png`. The next round reads its before pair from the vault instead of regenerating an old head.

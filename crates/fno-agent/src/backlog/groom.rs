@@ -323,7 +323,7 @@ fn reconcile_leg_outcome(stdout: &str) -> String {
 /// the receipt must stay one JSON document, and one wedged leg must not cost
 /// the night the other three.
 fn run_leg(name: &str, args: &[String]) -> String {
-    let exe = match std::env::current_exe() {
+    let exe = match crate::client_exe::current() {
         Ok(exe) => exe,
         Err(err) => return format!("failed: OSError: {}", clip(&err.to_string(), 120)),
     };

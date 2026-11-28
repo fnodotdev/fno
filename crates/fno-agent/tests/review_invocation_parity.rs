@@ -344,7 +344,7 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         .map(|row| fixture_envelope(row, now))
         .collect();
     for envelope in &envelopes {
-        fno::event_store::append_envelope(&runtime.journal, envelope, None)
+        fno_agent::event_store::append_envelope(&runtime.journal, envelope, None)
             .expect("the fixture envelope commits");
     }
     let run = |runtime: &Runtime| {
@@ -428,7 +428,7 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
         case["detached"].as_bool().unwrap_or(false),
     );
     for envelope in &envelopes {
-        fno::event_store::append_envelope(&runtime3.journal, envelope, None)
+        fno_agent::event_store::append_envelope(&runtime3.journal, envelope, None)
             .expect("the fixture envelope commits");
     }
     let out3 = scrubbed()
@@ -454,9 +454,9 @@ fn compare_settle(runtime_base: &Path, case: &Value, problems: &mut Vec<String>)
 /// committed `review_attestation` rows whose `session_id` is `settle`, data
 /// only, sorted by invocation id, head normalized.
 fn settled_rows(journal: &Path) -> Value {
-    let rows = fno::event_store::query_events(
+    let rows = fno_agent::event_store::query_events(
         journal,
-        &fno::event_store::EventQuery::of_types(&["review_attestation"]),
+        &fno_agent::event_store::EventQuery::of_types(&["review_attestation"]),
     )
     .unwrap_or_default();
     let mut out: Vec<Value> = rows

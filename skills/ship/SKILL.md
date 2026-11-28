@@ -31,7 +31,7 @@ A thing is a ship type only with a definable **green** - a finish line readable 
 
 `/fno:ship` (this command) = drive a deliverable to its finish line. It is distinct from the *ship phase* and *ship gate* inside `/target`, and from the `DonePRGreen`/`DoneAdvisory` termination reasons. It is also distinct from `fno do pr merge` and from `/fno:ship-docs`, which generates documentation and is NOT a ship type. When the overlap is confusing, read the canonical disambiguation in `AGENTS.md` -> "Ship vocabulary".
 
-One owner decides every merge. `fno do pr merge` asks it, and so do `fno do pr verify --kind merged` and the `fno-agent finalize` queue arm. It answers merge or arm for one exact head, and it never emits an unpinned request. See [authorized-merge](../../docs/architecture/authorized-merge.md).
+One owner decides every merge. `fno do pr merge` asks it, and so do `fno do pr verify --kind merged` and the `fno agent loop finalize` queue arm. It answers merge or arm for one exact head, and it never emits an unpinned request. See [authorized-merge](../../docs/architecture/authorized-merge.md).
 
 ## Self-contained
 
