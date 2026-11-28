@@ -98,9 +98,19 @@ pub(crate) fn acquire_run_slot() -> RunSlot {
 
 fn stamp_run_slot(file: &mut std::fs::File) {
     use std::io::Write as _;
-    let _ = file.set_len(0);
-    let _ = std::io::Write::write_all(&mut *file, format!("{}\n", std::process::id()).as_bytes());
-    let _ = std::io::Write::flush(file);
+    // A failed stamp never blocks the run: the pid line only feeds the queue
+    // message, so every failure degrades to one visible cause line.
+    if let Err(e) = file.set_len(0) {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+        return;
+    }
+    if let Err(e) = writeln!(file, "{}", std::process::id()) {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+        return;
+    }
+    if let Err(e) = file.flush() {
+        eprintln!("machine evals slot: pid stamp failed ({e})");
+    }
 }
 
 impl RunSlot {
