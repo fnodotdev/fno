@@ -24,6 +24,14 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// The one lift door a hold refusal teaches. One string, three refusal
+/// sites: when the payload shape changes, every refusal changes with it.
+pub fn release_hint(node_id: &str) -> String {
+    format!(
+        "printf '{{\"op\":\"hold-release\",\"node\":\"{node_id}\",\"evidence\":\"<proof>\"}}' | fno-agent authorized-merge"
+    )
+}
+
 /// Run one hold op from an `authorized-merge` payload. Always answers with a
 /// JSON receipt (`outcome`, `exit_code` inside); the command's exit status
 /// answers only whether the op RAN.
@@ -525,7 +533,8 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
             "refused",
             3,
             format!(
-                "node {node_id} is already held: reason={r} release_when={w}; lift it with `fno do pr hold release {node_id} --evidence <proof>`"
+                "node {node_id} is already held: reason={r} release_when={w}; lift it with `{}`",
+                release_hint(node_id)
             ),
         )
         .to_string();
@@ -617,9 +626,10 @@ fn set_node_hold(
             3,
             format!(
                 "node {node_id} is already held: reason={} release_when={}; \
-                 lift it with `fno do pr hold release {node_id} --evidence <proof>`",
+                 lift it with `{}`",
                 say("reason"),
-                say("release_when")
+                say("release_when"),
+                release_hint(node_id)
             ),
         )
         .to_string();
