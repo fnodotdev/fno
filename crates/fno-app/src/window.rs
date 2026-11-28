@@ -416,7 +416,7 @@ fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
 }
 
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - px(ui::TITLE_H);
+    let height = viewport.height - px(ui::TITLE_H) - px(super::statusbar::BAR_H);
     let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
@@ -445,6 +445,8 @@ impl Root {
     /// The shot path's constructor: `prewarmed` hands a link already
     /// connected and drained to the world's first layout, so the one
     /// frame gpui paints synchronously at open carries the world's data.
+    // One struct literal; shorter means regrouping Root's fields.
+    #[allow(clippy::too_many_lines)]
     fn new_with_link(
         session: String,
         main: MainView,
@@ -699,8 +701,35 @@ impl Root {
         }));
     }
 
+    /// The usage poll: the provider windows the status bar shows, read once
+    /// a minute off the UI thread.
+    fn start_usage_poll(cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| loop {
+            let usage = cx
+                .background_executor()
+                .spawn(async { super::statusbar::read_usage() })
+                .await;
+            let live = this
+                .update(cx, |_, cx| {
+                    if let Some(usage) = usage {
+                        super::statusbar::set_usage(usage);
+                        cx.notify();
+                    }
+                })
+                .is_ok();
+            if !live {
+                break;
+            }
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(60))
+                .await;
+        })
+        .detach();
+    }
+
     /// The board poll: fleet, questions and seats arrive here.
     fn start_board_poll(&mut self, cx: &mut Context<Self>) {
+        Self::start_usage_poll(cx);
         match Poller::start() {
             Ok((poller, mut rx)) => {
                 self.poller = Some(poller);
@@ -4315,36 +4344,7 @@ impl Render for Root {
         let strip = tabs::render(self, cx)
             .font_family(ui::MONO)
             .text_size(px(ui::BODY));
-        // A closed link and a failed notice use the error color; a notice
-        // is muted and expires. Neither takes a row: the toast floats over the corner.
-        // In chat mode a closed stream's bar already carries the exit
-        // reason, so the corner toast would repeat it - unless a sheet
-        // covers that bar, where the toast is the only visible signal.
-        let bar_shows_reason =
-            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
-        let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
-            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
-            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (_, n) => (n.clone(), self.palette.muted),
-        };
-        let toast = status.map(|text| {
-            div()
-                .absolute()
-                .right(px(12.0))
-                // Stacked above the chat status row (the empty-state line sits
-                // in the bottom 40px); a corner pin cut that line off.
-                .bottom(px(44.0))
-                .max_w(px(520.0))
-                .px_3()
-                .py_1()
-                .rounded(px(4.0))
-                .bg(rgb(self.palette.raised))
-                .text_color(rgb(status_color))
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .child(text)
-        });
+        let toast = self.corner_toast();
         let qtoast = self.question_toast_card(cx);
         let utoast = self.update_card_view(cx);
         let page = div()
@@ -4362,30 +4362,72 @@ impl Render for Root {
             .relative()
             .size_full()
             .flex()
-            .flex_row()
+            .flex_col()
             .bg(rgb(self.palette.bg))
             .text_color(rgb(self.palette.fg))
             .font_family(self.metrics.font.family.clone())
             .text_size(self.metrics.font_size)
-            .child(left)
+            .child(strip)
             .child(
                 div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
                     .flex()
-                    .flex_col()
-                    .child(strip)
-                    .child(main)
-                    .children(toast)
-                    .children(qtoast)
-                    .children(utoast),
-            );
+                    .flex_row()
+                    .flex_1()
+                    .min_h_0()
+                    .child(left)
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(main)
+                            .children(toast)
+                            .children(qtoast)
+                            .children(utoast),
+                    ),
+            )
+            .child(super::statusbar::render(self));
         self.overlays(page, window, cx)
     }
 }
 
 impl Root {
+    /// The corner toast for a closed link or a notice, if either is set.
+    fn corner_toast(&self) -> Option<gpui::Div> {
+        // A closed link and a failed notice use the error color; a notice
+        // is muted and expires. Neither takes a row: the toast floats over the corner.
+        // In chat mode a closed stream's bar already carries the exit
+        // reason, so the corner toast would repeat it - unless a sheet
+        // covers that bar, where the toast is the only visible signal.
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
+        };
+        status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
+                .text_color(rgb(status_color))
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
+                .child(text)
+        })
+    }
+
     /// The overlays over the window, in draw order: the launch composer,
     /// the key sheet, the go-to palette, the Settings panel.
     fn overlays(

@@ -117,6 +117,8 @@ crossing	crates/fno-agent/src/spawn/spawn_gate.rs	let _ = std::process::Command:
 crossing	crates/fno-agent/src/spawn/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agent/src/spawn/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agent/src/spawn/stale_lane.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
+crossing	crates/fno-app/src/statusbar.rs	fn fno_bin() -> std::path::PathBuf {
+crossing	crates/fno-app/src/statusbar.rs	let mut child = Command::new(fno_bin())
 crossing	crates/fno/src/backlog/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
 crossing	crates/fno/src/mux/server.rs	pub(crate) fn fno_bin() -> PathBuf {
 crossing	crates/fno/src/mux/server.rs	let mut command = crate::process_admission::tokio_command(fno_bin());

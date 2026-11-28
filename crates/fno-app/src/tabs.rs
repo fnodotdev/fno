@@ -1,8 +1,9 @@
-//! The title bar above the main area: where you are on the left (session,
-//! view and the focused agent), the Terminal view's session tabs after it,
-//! and the four views on the right as one quiet group. It is
-//! rebuilt from every `Layout`, so a rename from another client shows on the
-//! next one.
+//! The title bar above the main area (layout D6): the F[no] mark and the
+//! Chat and Terminal switch on the left (the lit one is the active view),
+//! where you are after them (session, view and the focused agent), the
+//! Terminal view's session tabs, and on the right Search, Questions with
+//! its count, HQ and Mods. It is rebuilt from every `Layout`, so a rename
+//! from another client shows on the next one.
 
 use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Stateful};
 
@@ -66,6 +67,13 @@ pub(super) const VIEWS: [(&str, MainView); 5] = [
     ("Terminal", MainView::Terminal),
     ("Inbox", MainView::Inbox),
 ];
+
+/// The Chat and Terminal switch at the bar's left edge.
+const SWITCH: [(&str, MainView); 2] = [("Chat", MainView::Chat), ("Terminal", MainView::Terminal)];
+
+/// The views on the bar's right, after Search. Questions follows them as
+/// the Inbox view, with its open count.
+const PANELS: [(&str, MainView); 2] = [("HQ", MainView::Orchestration), ("Mods", MainView::Mods)];
 
 /// Where the window is: the session, the view and the agent the view
 /// shows. Chat names the agent whose session `chat` streams, which a
@@ -181,7 +189,8 @@ fn tab(
 /// the others are quiet text. Each acts on click.
 fn mode(
     i: usize,
-    (name, view): (&'static str, MainView),
+    name: String,
+    view: MainView,
     root: &Root,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
@@ -229,9 +238,38 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             tabs = tabs.child(tab(id, t, key, root, cx));
         }
     }
+    let mark = ui::role(div(), Role::Heading, &p)
+        .flex_none()
+        .child("F[no]");
+    let mut switch = div().flex().flex_row().flex_none().items_center().gap_1();
+    for (i, (name, view)) in SWITCH.into_iter().enumerate() {
+        switch = switch.child(mode(i, name.into(), view, root, cx));
+    }
+    let open = root.board.questions().len();
+    let questions = match open {
+        0 => "Questions".to_string(),
+        n => format!("Questions {n}"),
+    };
+    let search =
+        div()
+            .id("search")
+            .h(px(22.0))
+            .px_2()
+            .flex()
+            .items_center()
+            .rounded(px(4.0))
+            .text_color(rgb(p.muted))
+            .cursor_pointer()
+            .hover(move |s| s.text_color(rgb(p.fg)))
+            .on_click(cx.listener(|_, _, window, cx| {
+                window.dispatch_action(Box::new(super::window::GoTo), cx)
+            }))
+            .child("Search");
     let mut modes = div().flex().flex_row().flex_none().items_center().gap_1();
-    for (i, v) in VIEWS.into_iter().enumerate() {
-        modes = modes.child(mode(i, v, root, cx));
+    modes = modes.child(search);
+    modes = modes.child(mode(2, questions, MainView::Inbox, root, cx));
+    for (i, (name, view)) in PANELS.into_iter().enumerate() {
+        modes = modes.child(mode(3 + i, name.into(), view, root, cx));
     }
     let waiting = mux_modes::waiting_count(
         &root.layout.agents,
@@ -244,9 +282,13 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .items_center()
         .gap_4()
         .h(px(ui::TITLE_H))
-        .px_3()
+        // The left inset clears the traffic lights the transparent title bar draws.
+        .pl(px(78.0))
+        .pr_3()
         .border_b_1()
         .border_color(rgb(p.border))
+        .child(mark)
+        .child(switch)
         .child(here)
         .child(tabs)
         .child(div().flex_1())

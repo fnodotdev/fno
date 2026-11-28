@@ -38,7 +38,7 @@ fn base_name(path: &str) -> String {
 /// title optionally first). The tail is always last when the cwd exists, so
 /// the branch is the segment before it. A segment with a space is a title,
 /// never a branch: git refs hold no spaces.
-fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
+pub(super) fn branch_of<'a>(a: &'a AgentRow, base: &str) -> Option<&'a str> {
     // Walked from the right: the tail (the cwd basename) is always last
     // when the cwd exists, and the branch is the segment before it. A
     // segment with a space is a title, never a branch: git refs hold no
@@ -111,6 +111,14 @@ struct HeaderFacts {
     machine: Option<String>,
 }
 
+/// This machine's name in the fleet fold, once the board has read it.
+pub(super) fn local_machine(root: &Root) -> Option<String> {
+    root.board
+        .fleet()
+        .and_then(|f| f.machines.iter().find(|m| m.local))
+        .map(|m| m.display_name.clone().unwrap_or_else(|| m.host.clone()))
+}
+
 fn header_facts(root: &Root) -> HeaderFacts {
     let l = &root.launch.state;
     let project = base_name(l.project());
@@ -122,11 +130,7 @@ fn header_facts(root: &Root) -> HeaderFacts {
         .min_by_key(|a| a.last_activity_age_s.unwrap_or(u64::MAX))
         .and_then(|a| branch_of(a, &project))
         .map(str::to_string);
-    let machine = root
-        .board
-        .fleet()
-        .and_then(|f| f.machines.iter().find(|m| m.local))
-        .map(|m| m.display_name.clone().unwrap_or_else(|| m.host.clone()));
+    let machine = local_machine(root);
     HeaderFacts {
         path: launch::short_project(l.project()),
         project,
