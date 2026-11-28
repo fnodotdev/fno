@@ -67,8 +67,6 @@ pub fn evals_enabled() -> bool {
 /// dies, so no TTL applies.
 pub struct RunSlot {
     file: std::fs::File,
-    #[allow(dead_code)]
-    path: std::path::PathBuf,
 }
 
 pub(crate) fn run_slot_path() -> std::path::PathBuf {
@@ -122,10 +120,7 @@ impl RunSlot {
             return None;
         }
         stamp_run_slot(&mut file);
-        Some(RunSlot {
-            file,
-            path: path.to_path_buf(),
-        })
+        Some(RunSlot { file })
     }
 
     /// Block until the holder exits, naming it first so a queued run reads
@@ -150,10 +145,7 @@ impl RunSlot {
         }
         stamp_run_slot(&mut file);
         eprintln!("machine evals slot acquired");
-        RunSlot {
-            file,
-            path: path.to_path_buf(),
-        }
+        RunSlot { file }
     }
 }
 
