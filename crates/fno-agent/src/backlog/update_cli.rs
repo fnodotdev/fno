@@ -1434,8 +1434,8 @@ fn hold_names_blockers(
             "Error: cannot remove blocker(s) {named} from {node_id}: an active \
              dispatch hold at {owner} names it: reason={reason} \
              release_when={release_when}; release the hold first with \
-             `fno do pr hold release {owner} --evidence <proof>`, then rerun \
-             the removal.",
+             `printf '{{\"op\":\"hold-release\",\"node\":\"{owner}\",\"evidence\":\"<proof>\"}}' | fno-agent authorized-merge`, \
+             then rerun the removal.",
             named = named.join(", "),
             node_id = node_id,
             owner = receipt.owner,

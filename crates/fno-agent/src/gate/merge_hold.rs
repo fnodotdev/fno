@@ -525,7 +525,7 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
             "refused",
             3,
             format!(
-                "node {node_id} is already held: reason={r} release_when={w}; lift it with `fno do pr hold release {node_id} --evidence <proof>`"
+                "node {node_id} is already held: reason={r} release_when={w}; lift it with `printf '{{\"op\":\"hold-release\",\"node\":\"{node_id}\",\"evidence\":\"<proof>\"}}' | fno-agent authorized-merge`"
             ),
         )
         .to_string();
@@ -617,7 +617,7 @@ fn set_node_hold(
             3,
             format!(
                 "node {node_id} is already held: reason={} release_when={}; \
-                 lift it with `fno do pr hold release {node_id} --evidence <proof>`",
+                 lift it with `printf '{{\"op\":\"hold-release\",\"node\":\"{node_id}\",\"evidence\":\"<proof>\"}}' | fno-agent authorized-merge`",
                 say("reason"),
                 say("release_when")
             ),
