@@ -1312,8 +1312,8 @@ pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
          certificate proves who records it. Where the user key lives, run \
          `fno-agent mail-remote key certify <user-key-file> <user> <this machine's key>` \
          (`fno-agent mail-remote key show` prints the key), then install the line \
-         here with `fno-agent mail-remote key cert <line>`. A project decision, a bare \
-         --machine and a bare --user need no certificate"
+         here with `fno-agent mail-remote key cert <line>`. A project scope, this \
+         machine's own id and your own user name need no certificate"
     ))
 }
 

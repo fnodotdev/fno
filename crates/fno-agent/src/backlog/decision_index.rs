@@ -1020,22 +1020,28 @@ pub fn row_audience(row: &Value) -> Option<&str> {
     stamps.scope.filter(|v| !is_reach_value(v))
 }
 
-/// The reach a row reads as: the `reach` stamp, else a legacy `scope` stamp
-/// that names a reach, else `global` for a fleet subject, else the pre-scope
-/// legacy value. Every other row recorded before the field existed was
-/// recorded in fno.
+/// The reach a row reads as: the reach the row carries (`reach_stamp`),
+/// else `global` for a fleet subject, else the pre-scope legacy value.
+/// Every other row recorded before the field existed was recorded in fno.
 pub fn row_scope(row: &Value) -> &str {
+    if let Some(stamp) = reach_stamp(row) {
+        return stamp;
+    }
     let stamps: ScopeStamps = serde::Deserialize::deserialize(row).unwrap_or_default();
-    if let Some(stamp) = stamps.reach {
-        return stamp;
-    }
-    if let Some(stamp) = stamps.scope.filter(|v| is_reach_value(v)) {
-        return stamp;
-    }
     match stamps.subject {
         Some(subject) if is_fleet_subject(subject) => "global",
         _ => "project:fno",
     }
+}
+
+/// The reach the row carries: the `reach` stamp, else a legacy `scope`
+/// stamp that names a reach. None for a row recorded without a stamp, so
+/// a reader can tell a stamped reach from the unstamped fallback.
+pub fn reach_stamp(row: &Value) -> Option<&str> {
+    let stamps: ScopeStamps = serde::Deserialize::deserialize(row).unwrap_or_default();
+    stamps
+        .reach
+        .or_else(|| stamps.scope.filter(|v| is_reach_value(v)))
 }
 
 /// The session-scope test: `global` always governs; a
