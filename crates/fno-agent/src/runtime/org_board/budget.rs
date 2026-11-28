@@ -36,6 +36,15 @@ impl Budget {
             .checked_sub(Duration::from_millis(SERIALIZE_RESERVE_MS))?;
         (dl > Instant::now()).then_some(dl)
     }
+    /// The deadline the SEQUENTIAL phase bounds against: the source deadline
+    /// minus the concurrent floor. The concurrent sources read the full
+    /// source deadline; this only caps what the inline sequential reads may
+    /// spend before those spawn.
+    pub(crate) fn sequential_deadline(&self) -> Option<Instant> {
+        let dl = self.source_deadline()?;
+        let capped = dl.checked_sub(Duration::from_millis(CONCURRENT_FLOOR_MS))?;
+        (capped > Instant::now()).then_some(capped)
+    }
     /// Claim the budget for `name`; returns its deadline or None once spent.
     pub(crate) fn start(&mut self, name: &'static str) -> Option<Instant> {
         let dl = self.source_deadline();
@@ -215,20 +224,33 @@ pub(crate) fn run_with_timeout_accepting(
     }
 }
 
-/// Run one in-process read and await it until `deadline`. In-process work
-/// cannot be killed, so the deadline bounds the WAIT: a read still running
-/// then is abandoned on its thread, its answer drops, and the source reads
-/// as the budget kill it is. A read that panics hands its panic back to the
-/// caller, so the join keeps reading it as a failure. A joined read let one
-/// slow source hold the whole board past its budget.
-pub(crate) fn run_in_process_until(
+/// What one bounded in-process wait produced. The generic core of
+/// [`run_in_process_until`]; the sequential phase reads the same four arms
+/// through its own wrapper (`org_board::run_sequential_read`).
+pub(crate) enum Bounded<T> {
+    /// The read answered inside the bound.
+    Answer(T),
+    /// The wait hit the deadline (or had none left) and the read was
+    /// abandoned on its thread.
+    TimedOut,
+    /// The reader thread could not spawn.
+    SpawnFailed,
+    /// A reader that ended without an answer.
+    Disconnected,
+}
+
+/// Run one closure on a detached thread and await it until `deadline`; the
+/// wait gives up at the deadline and the read is abandoned there. A read
+/// that panics hands its panic back to the caller, so the join keeps
+/// reading it as a failure. A joined read let one slow source hold the
+/// whole board past its budget.
+pub(crate) fn run_bounded_until<T: Send + 'static>(
     deadline: Instant,
-    spent_err: &str,
-    read: impl FnOnce() -> SourceRead + Send + 'static,
-) -> SourceRead {
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Bounded<T> {
     let bound = Budget::spawn_bound(deadline);
     if bound.is_zero() {
-        return SourceRead::over_budget(spent_err.to_string());
+        return Bounded::TimedOut;
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new()
@@ -241,18 +263,33 @@ pub(crate) fn run_in_process_until(
         })
         .is_ok();
     if !spawned {
-        return SourceRead::err("reader thread failed to spawn");
+        return Bounded::SpawnFailed;
     }
     match rx.recv_timeout(bound) {
-        Ok(Ok(answer)) => answer,
+        Ok(Ok(answer)) => Bounded::Answer(answer),
         Ok(Err(panic)) => std::panic::resume_unwind(panic),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            SourceRead::over_budget(spent_err.to_string())
-        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Bounded::TimedOut,
         // Only a reader that ended without an answer gets here.
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            SourceRead::err("reader ended without an answer")
-        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Bounded::Disconnected,
+    }
+}
+
+/// Run one in-process read and await it until `deadline`. In-process work
+/// cannot be killed, so the deadline bounds the WAIT: a read still running
+/// then is abandoned on its thread, its answer drops, and the source reads
+/// as the budget kill it is. A read that panics hands its panic back to the
+/// caller, so the join keeps reading it as a failure. A joined read let one
+/// slow source hold the whole board past its budget.
+pub(crate) fn run_in_process_until(
+    deadline: Instant,
+    spent_err: &str,
+    read: impl FnOnce() -> SourceRead + Send + 'static,
+) -> SourceRead {
+    match run_bounded_until(deadline, read) {
+        Bounded::Answer(answer) => answer,
+        Bounded::TimedOut => SourceRead::over_budget(spent_err.to_string()),
+        Bounded::SpawnFailed => SourceRead::err("reader thread failed to spawn"),
+        Bounded::Disconnected => SourceRead::err("reader ended without an answer"),
     }
 }
 
@@ -276,6 +313,16 @@ pub(crate) fn run_json(cmd: Vec<String>, cwd: &Path, timeout: Duration) -> Sourc
 /// payload before the caller's outer timer fires.
 pub const SERIALIZE_RESERVE_MS: u64 = 1_000;
 
+/// Held back from the SEQUENTIAL phase so the concurrent section always has
+/// wall: the claims scan and the registry read ran inline with no deadline
+/// enforcement past their slice claim, so under wake contention they spent
+/// the whole pot before the concurrent sources spawned (measured 2026-11-28:
+/// four beats at once left every board ok at 28.8s with the distress sweep
+/// dead as "exhausted after registry::load_registry", the last source to
+/// claim a still-future deadline). Like SERIALIZE_RESERVE_MS this derives
+/// from the ONE board budget; it is never a second timeout.
+pub(crate) const CONCURRENT_FLOOR_MS: u64 = 20_000;
+
 /// Whole-board budget when a human runs the board by hand and passes no
 /// `--budget-ms`. This budgets the ENTIRE board, never a per-source read: an
 /// independent per-source default is exactly what must not exist here (the old
@@ -294,6 +341,28 @@ pub(crate) fn now_secs_board() -> u64 {
 mod tests {
     use super::*;
     use crate::org_board::SRC_READY;
+
+    /// The sequential phase derives its bound from the ONE board deadline
+    /// minus the concurrent floor, and a budget too small to fund both phases
+    /// spends the sequential phase outright while the concurrent section
+    /// keeps what is left.
+    #[test]
+    fn sequential_deadline_funds_the_concurrent_floor_or_spends_the_phase() {
+        let b = Budget::new(45_000);
+        let source = b.source_deadline().expect("a 45s budget funds sources");
+        let seq = b
+            .sequential_deadline()
+            .expect("a 45s budget funds the floor too");
+        assert_eq!(
+            source.duration_since(seq),
+            Duration::from_millis(CONCURRENT_FLOOR_MS)
+        );
+        let b = Budget::new(10_000);
+        assert!(b.sequential_deadline().is_none());
+        assert!(b.source_deadline().is_some());
+        let b = Budget::new(0);
+        assert!(b.sequential_deadline().is_none());
+    }
 
     #[test]
     fn sources_derive_from_one_deadline_and_exhaustion_names_the_last_source() {

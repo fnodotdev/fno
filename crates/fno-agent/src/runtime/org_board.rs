@@ -51,8 +51,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) use crate::territory::compile_scope_ids;
-use budget::run_in_process_until;
 pub(crate) use budget::{now_secs_board, Budget, HAND_RUN_BUDGET_MS};
+use budget::{run_bounded_until, run_in_process_until, Bounded};
 pub(crate) use claims::read_claims;
 pub(crate) use classify::{entry_by_id, node_has_pr, read_claimed_nodes};
 pub(crate) use prs::{read_pr_gates, read_prs};
@@ -806,6 +806,30 @@ fn read_graph_entries(
     (entries, graph_error)
 }
 
+/// One sequential in-process read bounded by the sequential deadline: the
+/// claims scan and the registry load used to run inline with no deadline
+/// enforcement past their slice claim, so under wake contention they could
+/// spend the whole board budget before the concurrent section spawned and
+/// every queue behind them died as over_budget (measured 2026-11-28). An
+/// abandoned read carries the same spent wording the join-side gates use,
+/// so a sequential overrun can never render as a clean source.
+fn run_sequential_read<T: Send + 'static>(
+    budget: &Budget,
+    read: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, SourceRead> {
+    let spent_err = budget.spent_error();
+    let bounded = match budget.sequential_deadline() {
+        Some(dl) => run_bounded_until(dl, read),
+        None => Bounded::TimedOut,
+    };
+    match bounded {
+        Bounded::Answer(t) => Ok(t),
+        Bounded::TimedOut => Err(SourceRead::over_budget(spent_err)),
+        Bounded::SpawnFailed => Err(SourceRead::err("reader thread failed to spawn")),
+        Bounded::Disconnected => Err(SourceRead::err("reader ended without an answer")),
+    }
+}
+
 fn read_claims_slice(
     dl: Option<std::time::Instant>,
     cwd: &Path,
@@ -818,7 +842,14 @@ fn read_claims_slice(
             budget.spent_read()
         }
         Some(_) => {
-            let read = read_claims(cwd);
+            // The scan runs bounded by the sequential deadline (see
+            // run_sequential_read); the closure owns the dirs because an
+            // abandoned read's thread outlives this scope.
+            let dirs = cwd.to_path_buf();
+            let read = match run_sequential_read(budget, move || read_claims(&dirs)) {
+                Ok(read) => read,
+                Err(read) => read,
+            };
             mark(sources, "claims", &read, false);
             read
         }
@@ -871,7 +902,23 @@ fn read_drivers_slice(
     let (drivers, roster_tokens, driver_name_tokens) = match dl {
         None => (budget.spent_read(), Vec::new(), HashMap::new()),
         Some(_) => {
-            let (mut read, name_to_token) = read_driver_rows(entries, registry);
+            // The registry load is this slice's only store I/O, and it runs
+            // bounded by the sequential deadline (load_driver_registry). A
+            // supplied registry folds inline over data the caller holds, so
+            // the stop-gate boards keep their in-memory path.
+            let loaded = if registry.is_some() {
+                None
+            } else {
+                match load_driver_registry(budget) {
+                    Ok(loaded) => loaded,
+                    Err(spent) => {
+                        mark(sources, "drivers", &spent, false);
+                        push_new_holders(holders, Vec::new());
+                        return (spent, HashMap::new());
+                    }
+                }
+            };
+            let (mut read, name_to_token) = read_driver_rows(entries, registry.or(loaded.as_ref()));
             let mut tokens: Vec<String> = Vec::new();
             if let Some(rows) = read.payload.as_mut().and_then(Value::as_array_mut) {
                 // PR-bound non-terminal nodes ride first: the cap spends the
@@ -1882,7 +1929,7 @@ fn read_fleet_tasks() -> SourceRead {
 /// for no second store read.
 fn read_driver_rows(
     entries: Option<&[Value]>,
-    supplied: Option<&crate::state::Registry>,
+    registry: Option<&crate::state::Registry>,
 ) -> (SourceRead, HashMap<String, String>) {
     let fold = |registry: &crate::state::Registry| -> (SourceRead, HashMap<String, String>) {
         let session_nodes = graph_session_nodes(entries);
@@ -1914,19 +1961,29 @@ fn read_driver_rows(
             .collect();
         (SourceRead::ok(Value::Array(rows)), name_to_token)
     };
-    if let Some(registry) = supplied {
+    if let Some(registry) = registry {
         return fold(registry);
     }
+    // None means the caller's bounded load found no agents home: the
+    // positive empty roster. A load error or an abandonment never reaches
+    // here; both return through load_driver_registry's Err arm.
+    (SourceRead::ok(json!([])), HashMap::new())
+}
+
+/// Load the registry for the driver feed, bounded by the sequential
+/// deadline: the load is the store I/O in the drivers slice, and it used to
+/// run inline past its claim (measured 2026-11-28). A missing file is the
+/// caller's empty-roster case; a failed or abandoned load returns the loud
+/// read the queue renders.
+fn load_driver_registry(budget: &Budget) -> Result<Option<crate::state::Registry>, SourceRead> {
     let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
-        return (SourceRead::ok(json!([])), HashMap::new());
+        return Ok(None);
     };
     let path = home.registry_json();
-    match crate::state::load_registry(&path) {
-        Ok(registry) => fold(&registry),
-        Err(e) => (
-            SourceRead::err(format!("registry unreadable: {e}")),
-            HashMap::new(),
-        ),
+    match run_sequential_read(budget, move || crate::state::load_registry(&path)) {
+        Ok(Ok(registry)) => Ok(Some(registry)),
+        Ok(Err(e)) => Err(SourceRead::err(format!("registry unreadable: {e}"))),
+        Err(spent) => Err(spent),
     }
 }
 
@@ -2107,6 +2164,43 @@ mod tests {
 
     fn ok_read(payload: Value) -> SourceRead {
         SourceRead::ok(payload)
+    }
+
+    /// A sequential read that outlasts its sequential deadline abandons with
+    /// the same spent wording a concurrent kill carries, and a read inside
+    /// it lands. The 22s budget funds exactly 1s of sequential wall
+    /// (source deadline 21s minus the 20s concurrent floor).
+    #[test]
+    fn a_sequential_read_abandons_at_the_sequential_deadline_and_a_fast_one_lands() {
+        let budget = Budget::new(22_000);
+        let started = std::time::Instant::now();
+        let slow = run_sequential_read(&budget, || {
+            std::thread::sleep(std::time::Duration::from_millis(2_000));
+            "slow"
+        });
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1_900),
+            "{:?}",
+            started.elapsed()
+        );
+        match slow {
+            Err(read) => {
+                assert!(read.over_budget, "{read:?}");
+                assert_eq!(
+                    read.error.as_deref(),
+                    Some("not-read: board budget exhausted before any source")
+                );
+            }
+            Ok(v) => panic!("a slow sequential read landed: {v:?}"),
+        }
+        let fast = {
+            // A fresh budget funds its own sequential phase: the 22s budget
+            // above spent its 1s of sequential wall on the slow read, and a
+            // second read on it must read spent, never land.
+            let budget = Budget::new(45_000);
+            run_sequential_read(&budget, || "fast")
+        };
+        assert_eq!(fast.ok(), Some("fast"));
     }
 
     #[test]
