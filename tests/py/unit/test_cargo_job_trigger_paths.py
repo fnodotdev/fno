@@ -68,7 +68,13 @@ def _cargo_job_step_inputs() -> set[str]:
             if "generated-artifacts.tsv" in run:
                 inputs.add("generated-artifacts.tsv")
                 inputs.update(_manifest_paths_diffed_by(run))
-            inputs.update(re.findall(r"bash ([^\s;&|]+)", run))
+            # An expression-prefixed target (bash ${{ github.workspace }}/...)
+            # resolves at run time to a repo-root path; record the resolved
+            # path, not the expression, so the trigger check reads a real file.
+            inputs.update(
+                re.findall(r"bash \$\{\{\s*github\.workspace\s*\}\}/([^\s;&|]+)", run)
+            )
+            inputs.update(re.findall(r"bash (?!\$\{\{)([^\s;&|]+)", run))
     return inputs
 
 
@@ -87,6 +93,7 @@ def test_every_cargo_job_input_is_a_pull_request_trigger() -> None:
     assert "schemas/spawn-brevity.json" in rust_inputs
     assert "hooks/footnote-agy-target-stop-hook.sh" in rust_inputs
     assert "docs/harnesses/capability-matrix.md" in step_inputs
+    assert "scripts/ci/cargo-test-retry.sh" in step_inputs
 
     untriggered = _untriggered(rust_inputs | step_inputs, triggers)
     assert not untriggered, f"cargo job inputs are not pull_request triggers: {untriggered}"
