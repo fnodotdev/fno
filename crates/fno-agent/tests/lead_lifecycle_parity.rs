@@ -9,8 +9,8 @@
 //! The check-in's board lines are the exception: the capture host refused the
 //! board's GraphQL read, so those lines follow this world's `gh` stub instead.
 //! A later hand edit added the check-in's `boot_revival` line and its coverage
-//! bump when that reading joined the render, after the old leg was gone. A
-//! 2026-11-28 hand edit added the check-in's `pick:` line when a failed
+//! bump when that reading joined the render, after the old leg was gone.
+//! Another hand edit added the check-in's `pick:` line when a failed
 //! blueprint reading stopped dropping it.
 //!
 //! The temp root folds to `<ROOT>` (raw and canonical spellings) and its slug
