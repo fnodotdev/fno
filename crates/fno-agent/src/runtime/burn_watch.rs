@@ -1926,7 +1926,7 @@ mod tests {
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
             calls.push(argv.to_vec());
-            if argv[2] == "mail" {
+            if argv.get(2).is_some_and(|step| step == "mail") {
                 (0, stdout.clone(), String::new())
             } else {
                 (
@@ -1939,11 +1939,13 @@ mod tests {
         let (landed, via) = wake_with_text("s-1", false, "body", "fno/notice-router", &mut runner);
         assert_eq!((landed, via), (false, "durable"));
         assert_eq!(calls.len(), 2, "held send: one mail leg, one wake resume");
-        assert!(calls[1].contains(&"--message-already-queued".to_string()));
+        assert!(calls
+            .last()
+            .is_some_and(|argv| argv.iter().any(|a| a == "--message-already-queued")));
 
         // The idle arm: the same held stdout, the resume wakes the session.
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
-            if argv[2] == "mail" {
+            if argv.get(2).is_some_and(|step| step == "mail") {
                 (0, stdout.clone(), String::new())
             } else {
                 (0, String::new(), String::new())

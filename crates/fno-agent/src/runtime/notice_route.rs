@@ -1691,7 +1691,7 @@ mod tests {
         let mail_sends = std::cell::Cell::new(0usize);
         let resume_calls = std::cell::Cell::new(0usize);
         let mut runner: crate::burn_watch::Runner = &mut |argv: &[String], _cwd: &str| {
-            if argv[2] == "mail" {
+            if argv.get(2).is_some_and(|step| step == "mail") {
                 mail_sends.set(mail_sends.get() + 1);
                 let stdout = format!(
                     "{}\n{}",
