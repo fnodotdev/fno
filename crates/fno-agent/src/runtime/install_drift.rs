@@ -156,17 +156,13 @@ fn unknown(
 
 /// The deployed set only: sibling of the running exe, then PATH. The cargo
 /// dev target and `$FNO_AGENT_BIN` are deliberately absent, matching the
-/// doctor resolver's installed-first contract. A sibling under a `target/`
-/// dir is a dev build, not the deployed set, so it never qualifies: a beat
-/// running from a dev-built binary still probes the installed one.
+/// doctor resolver's installed-first contract.
 fn resolve_installed_binary() -> Option<String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if is_deployed_dir(dir) {
-                let sibling = dir.join("fno-agent");
-                if sibling.is_file() {
-                    return Some(sibling.to_string_lossy().into_owned());
-                }
+            let sibling = dir.join("fno-agent");
+            if sibling.is_file() {
+                return Some(sibling.to_string_lossy().into_owned());
             }
         }
     }
@@ -249,12 +245,6 @@ fn revless_detail(binary: &str) -> String {
         None => parts.push("--version: unreadable".to_string()),
     }
     parts.join("; ")
-}
-
-/// True when `dir` is not inside a cargo build tree (`*/target/*`), the one
-/// layout the deployed set never uses.
-fn is_deployed_dir(dir: &Path) -> bool {
-    !dir.components().any(|c| c.as_os_str() == "target")
 }
 
 /// The source checkout through the same ladder an update installs from:
@@ -695,11 +685,5 @@ mod tests {
             detail.contains("banner line") && !detail.contains('\n'),
             "the detail stays one line: {detail}"
         );
-    }
-
-    #[test]
-    fn deployed_dir_predicate_splits_target_trees_from_installed_dirs() {
-        assert!(!is_deployed_dir(Path::new("/repo/target/debug")));
-        assert!(is_deployed_dir(Path::new("/Users/x/.local/bin")));
     }
 }

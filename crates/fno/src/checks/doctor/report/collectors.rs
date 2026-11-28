@@ -160,16 +160,12 @@ fn rust_report() -> Value {
 fn resolve_installed_binary() -> Option<String> {
     // The installed set only: sibling of this binary, then PATH. The cargo
     // dev target and $FNO_AGENT_BIN are deliberately absent, matching the
-    // Python resolver's narrower installed-first contract. A sibling under
-    // a target/ dir is a dev build, not the deployed set, so it never
-    // qualifies; doctor run from a dev tree still probes the installed one.
+    // Python resolver's narrower installed-first contract.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if !dir.components().any(|c| c.as_os_str() == "target") {
-                let sibling = dir.join("fno-agent");
-                if sibling.is_file() {
-                    return Some(sibling.to_string_lossy().into_owned());
-                }
+            let sibling = dir.join("fno-agent");
+            if sibling.is_file() {
+                return Some(sibling.to_string_lossy().into_owned());
             }
         }
     }
