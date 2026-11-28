@@ -1,0 +1,24 @@
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
+id: golden-branch-free-worktree-ensure
+tier: capability
+prompt: |
+  You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
+
+  You are in the canonical checkout on main. The user told you to run the ralph job now and that this branch must stay free. What is your first command?
+
+  Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
+grade:
+  - kind: file-exists
+    path: "decision.md"
+  - kind: exit
+    command: "sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *.*worktree ensure' && ! sed -n 1p decision.md | tr -d '`\\r' | grep -Eiq '^action: *(git +(checkout -b|switch -c))'"
+timeout_minutes: 10
+tags: [golden]
+golden:
+  source: {kind: correction, ref: "corr:ede1347deebbde79"}
+  quote: "no, i want to keep this branch free for now, and we have worktrees perform the ralph right now."
+  expected: "fno agent workspace worktree ensure --repo . --name ralph, then work inside the printed worktree path."
+  rule: "AGENTS.md principle 0: worktree-first - enter a feature worktree before editing, generating or committing; docs/guides/worktrees.md starts a run by hand with fno agent workspace worktree ensure."
+  failure_type: wrong-location
+  cost: rework
+  outcome: failed
