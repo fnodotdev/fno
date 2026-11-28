@@ -66,6 +66,10 @@ pub fn evals_enabled() -> bool {
 /// head and main runs overlapped. The kernel frees the slot when the holder
 /// dies, so no TTL applies.
 pub struct RunSlot {
+    /// The open fd IS the lock: the slot is held while this file stays open,
+    /// and the kernel releases it on close or process death. The field is
+    /// never read by name; that is the design.
+    #[allow(dead_code)]
     file: std::fs::File,
 }
 
