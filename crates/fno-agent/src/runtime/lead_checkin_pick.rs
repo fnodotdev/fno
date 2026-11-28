@@ -84,8 +84,25 @@ pub(crate) fn annotate(
     bp: Option<&Value>,
     previous: Option<&Value>,
     pick: Option<&str>,
+    blueprint_error: Option<&str>,
 ) {
     let Some(bp) = bp else {
+        // A failed blueprint reading measured nothing, but the pick line
+        // must still print: a silent drop read as "nothing to start" and
+        // the lead started no work (measured 2026-11-28). The beat never
+        // decides, so the line names the failure and offers nothing. With
+        // no blueprint reading at all (a drained beat) no key claims it,
+        // as before.
+        let Some(error) = blueprint_error else {
+            return;
+        };
+        data.insert("pick_offered".into(), Value::Null);
+        data.insert("pick_node".into(), Value::Null);
+        data.insert("pick".into(), json!(pick));
+        data.insert(
+            PICK_LINE.into(),
+            json!(format!("pick: blueprint reader failed ({error})")),
+        );
         return;
     };
     let now = offers(bp);
@@ -155,7 +172,7 @@ mod tests {
             "skips": [],
         });
         let mut data = Map::new();
-        annotate(&mut data, Some(&bp), None, None);
+        annotate(&mut data, Some(&bp), None, None, None);
         assert_eq!(
             *at(&data, "pick_offered"),
             "fno agent spawn --as thread --promote x-eSeat \"/fno:lead\""
@@ -169,7 +186,7 @@ mod tests {
     #[test]
     fn an_offer_is_reactive_until_taken_or_answered() {
         let mut data = Map::new();
-        annotate(&mut data, Some(&bp(&["x-aaaa"])), None, None);
+        annotate(&mut data, Some(&bp(&["x-aaaa"])), None, None, None);
         assert_eq!(
             *at(&data, "pick_offered"),
             "fno agent spawn \"/fno:target x-aaaa\""
@@ -178,12 +195,12 @@ mod tests {
 
         let prior = json!({"pick_offered": "c", "pick_node": "x-aaaa"});
         let mut open = Map::new();
-        annotate(&mut open, Some(&bp(&["x-aaaa"])), Some(&prior), None);
+        annotate(&mut open, Some(&bp(&["x-aaaa"])), Some(&prior), None, None);
         assert_eq!(*at(&open, "reactive"), true);
         assert!(lines(&open).concat().contains("went untaken"));
 
         let mut gone = Map::new();
-        annotate(&mut gone, Some(&bp(&["x-bbbb"])), Some(&prior), None);
+        annotate(&mut gone, Some(&bp(&["x-bbbb"])), Some(&prior), None, None);
         assert_eq!(*at(&gone, "reactive"), false);
         let mut answered = Map::new();
         annotate(
@@ -191,11 +208,38 @@ mod tests {
             Some(&bp(&["x-aaaa"])),
             Some(&prior),
             Some("planned it"),
+            None,
         );
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
         a_seat_entry_offers_the_seat_command_first();
         a_drained_beats_offer_is_the_pick();
+        a_failed_blueprint_reading_names_the_failure_instead_of_dropping_the_line();
+    }
+
+    /// A failed blueprint reading renders its failure instead of dropping
+    /// the pick line silently: the beat measured nothing, so the line names
+    /// why and offers nothing, and a beat with no blueprint reading at all
+    /// still claims no keys (measured 2026-11-28).
+    fn a_failed_blueprint_reading_names_the_failure_instead_of_dropping_the_line() {
+        let mut failed = Map::new();
+        annotate(
+            &mut failed,
+            None,
+            None,
+            None,
+            Some("unplanned queue over_budget: boom"),
+        );
+        assert_eq!(
+            lines(&failed),
+            vec!["pick: blueprint reader failed (unplanned queue over_budget: boom)".to_string()]
+        );
+        assert!(at(&failed, "pick_offered").is_null());
+        assert!(at(&failed, "pick_node").is_null());
+        let mut unmeasured = Map::new();
+        annotate(&mut unmeasured, None, None, None, None);
+        assert!(lines(&unmeasured).is_empty());
+        assert!(!unmeasured.contains_key("pick_offered"));
     }
 
     /// A drained beat's offer is the pick: the pick names the offered node
@@ -209,7 +253,7 @@ mod tests {
             "skips": [],
         });
         let mut data = Map::new();
-        annotate(&mut data, Some(&reading), None, None);
+        annotate(&mut data, Some(&reading), None, None, None);
         assert_eq!(
             *at(&data, "pick_offered"),
             "fno agent spawn \"/fno:target x-out\""
@@ -219,14 +263,14 @@ mod tests {
         // A blueprint offer keeps the `start` word the pick line prints.
         let mut plan = Map::new();
         let reading = json!({"offers": [{"id": "x-plan", "command": "/blueprint"}]});
-        annotate(&mut plan, Some(&reading), None, None);
+        annotate(&mut plan, Some(&reading), None, None, None);
         assert_eq!(
             *at(&plan, "pick_offered"),
             "start /fno:blueprint subagent x-plan"
         );
 
         let mut none = Map::new();
-        annotate(&mut none, Some(&bp(&[])), None, None);
+        annotate(&mut none, Some(&bp(&[])), None, None, None);
         assert!(at(&none, "pick_offered").is_null());
         assert_eq!(
             lines(&none),

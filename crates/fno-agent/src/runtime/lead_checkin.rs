@@ -3334,11 +3334,16 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     }
     let previous_data = prev_view.as_ref().and_then(|p| p.data.as_ref());
     let blueprint = readings.iter().find(|r| r.name == "blueprint" && r.ok);
+    let blueprint_error = readings
+        .iter()
+        .find(|r| r.name == "blueprint" && !r.ok)
+        .map(|r| r.error.as_str());
     crate::lead_checkin_pick::annotate(
         &mut data,
         blueprint.map(|r| &r.value),
         previous_data,
         pick.as_deref(),
+        blueprint_error,
     );
     let trend_dir = home.refusal_trend_dir();
     let trend_key = holder.as_deref().unwrap_or(&ctx.scope);
