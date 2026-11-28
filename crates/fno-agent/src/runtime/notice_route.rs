@@ -390,10 +390,10 @@ fn route_groups(
     now: i64,
     detail: &mut Vec<String>,
     sent: &BTreeMap<String, Value>,
+    runner: crate::burn_watch::Runner,
 ) -> (u64, std::collections::BTreeSet<String>) {
     let mut acted = 0u64;
     let mut terminal = std::collections::BTreeSet::new();
-    let runner: crate::burn_watch::Runner = &mut crate::burn_watch::run_command;
     for (key, group) in groups {
         let unsent = unsent_of(&group, sent, now);
         if unsent.is_empty() {
@@ -706,7 +706,13 @@ pub(crate) fn run_pass(
             consumed.push((path, fed, identity));
         }
     }
-    let (acted, terminal) = route_groups(groups, now, &mut detail, &sent);
+    let (acted, terminal) = route_groups(
+        groups,
+        now,
+        &mut detail,
+        &sent,
+        &mut crate::burn_watch::run_command,
+    );
     // A result file is consumed when every owner group it fed is terminal
     // (nothing unsent left, delivered now, or inside the dedupe window),
     // or when the file is older than one reconcile period: one
@@ -1653,6 +1659,85 @@ pub(crate) fn fold_tick(w: &crate::owner_ladder::World) -> (u64, Option<String>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// done_means: an unchanged warning set reaches a lead once per
+    /// window. Sweep 1 rides the held lane (mail queued durably, the
+    /// already-queued resume not delivered live) and records; sweep 2
+    /// runs 20s later against the same store and must send nothing.
+    #[test]
+    fn two_sweeps_of_an_unchanged_set_send_once() {
+        let _root = crate::paths::DeclaredRoot::declare("notice_two_sweeps");
+        let raw = serde_json::json!({
+            "promise_unmet": [
+                {"node_id": "n-1", "error": "gate exit 6"},
+                {"node_id": "n-2", "error": "gate exit 6"},
+                {"node_id": "n-3", "error": "route up"},
+                {"node_id": "node-x-9f2", "error": "gate exit 6"}
+            ]
+        });
+        let warnings = read_reconcile(&raw.to_string());
+        assert_eq!(warnings.len(), 4);
+        let group = || OwnerGroup {
+            owner: crate::owner_ladder::Owner {
+                rung: crate::owner_ladder::Rung::NodeLead,
+                scope: Some("fno".to_string()),
+                holder: None,
+                session: Some("s-lead".to_string()),
+            },
+            warnings: warnings.clone(),
+        };
+        // Cell counters: the runner must stay borrowed across both sweeps,
+        // so the asserts between them read through shared captures.
+        let mail_sends = std::cell::Cell::new(0usize);
+        let resume_calls = std::cell::Cell::new(0usize);
+        let mut runner: crate::burn_watch::Runner = &mut |argv: &[String], _cwd: &str| {
+            if argv.get(2).is_some_and(|step| step == "mail") {
+                mail_sends.set(mail_sends.get() + 1);
+                let stdout = format!(
+                    "{}\n{}",
+                    crate::mail_receipt::demotion(
+                        "fmail-x",
+                        Some("not-confirmed"),
+                        6.0,
+                        Some("s-lead"),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    crate::mail_receipt::held_for_turn("fmail-x", "s-lead"),
+                );
+                (0, stdout, String::new())
+            } else {
+                resume_calls.set(resume_calls.get() + 1);
+                (16, String::new(), String::new())
+            }
+        };
+        let now = 1_796_000_000_i64;
+        // Sweep 1: one mail leg and one already-queued resume; the
+        // record lands in the sent store, so sweep 2 sends nothing.
+        let mut groups = BTreeMap::new();
+        groups.insert("g".to_string(), group());
+        let mut detail: Vec<String> = Vec::new();
+        let (acted, terminal) = route_groups(groups, now, &mut detail, &read_sent(), &mut runner);
+        assert_eq!(acted, 1);
+        assert_eq!(mail_sends.get(), 1);
+        assert_eq!(resume_calls.get(), 1);
+        // Sweep 2, 20s later, same warnings, same store: nothing sends.
+        let mut groups2 = BTreeMap::new();
+        groups2.insert("g".to_string(), group());
+        let mut detail2: Vec<String> = Vec::new();
+        let (acted2, _t2) =
+            route_groups(groups2, now + 20, &mut detail2, &read_sent(), &mut runner);
+        assert_eq!(acted2, 0);
+        assert_eq!(mail_sends.get(), 1, "the unchanged set must not send again");
+        assert_eq!(
+            resume_calls.get(),
+            1,
+            "the unchanged set must not resume again"
+        );
+        assert!(terminal.contains("g"));
+    }
 
     /// AC10-AC17 over the pure pieces: the result-file readers, the
     /// fingerprint dedupe against the sent store, and the fold's

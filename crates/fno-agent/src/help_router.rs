@@ -1329,9 +1329,11 @@ mod tests {
         );
     }
 
-    /// A wake that does not land retires the timer after one try, with the
-    /// leg that did not take. A session that cannot be woken is not asked a
-    /// second time.
+    /// A wake whose live hop fails retires the timer after one try, with
+    /// the leg that took it. Here the mail leg queued durably and the
+    /// resume hop failed, so the row names the durable leg: the bytes land
+    /// at the session's next drain, and a session that cannot be woken is
+    /// not asked a second time.
     #[test]
     fn a_failed_timer_wake_retires_after_one_try() {
         let _lock = crate::claims::test_env_lock()
@@ -1358,8 +1360,8 @@ mod tests {
             "one fired row for one timer: {rows}"
         );
         assert!(
-            rows.contains("\"delivery\":\"queued\"") && rows.contains("\"leg\":\"resume\""),
-            "the fired row names the leg that did not take: {rows}"
+            rows.contains("\"delivery\":\"queued\"") && rows.contains("\"leg\":\"durable\""),
+            "the fired row names the leg that took the wake: {rows}"
         );
         assert_eq!(
             calls_mentioning("run-timer-lost"),
